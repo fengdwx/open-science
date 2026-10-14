@@ -1550,7 +1550,8 @@ const ConversationPanel = ({
         </header>
         <PackageOperationIndicator />
 
-        {isNewConversation ? null : activeSession?.contentLoaded === false ? (
+        {isNewConversation ? null : activeSession?.contentLoaded === false &&
+          !activeSession.historyPage ? (
           <SessionSwitchSkeleton />
         ) : (
           <WorkspaceMessageEditStateProvider canEditMessage={canEditMessage}>

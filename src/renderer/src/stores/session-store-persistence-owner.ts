@@ -11,7 +11,12 @@ export type {
   ToolActivityStatus
 } from './session-store-contract'
 
-import { activateConversationBranch } from '../../../shared/conversation-graph'
+import {
+  activateConversationBranch,
+  projectConversationMessage,
+  resolveActiveConversationActivities,
+  resolveActiveConversationMessages
+} from '../../../shared/conversation-graph'
 import { DEFAULT_PERMISSION_PROFILE } from '../../../shared/permission-profiles'
 import { applySessionConversationCommands } from '../../../shared/session-conversation-command'
 import {
@@ -295,6 +300,7 @@ export const toPersistedSession = (
     interactionState,
     activePlanProjection,
     contentLoaded,
+    historyPage,
     activeMessageCount,
     artifactCount,
     presentedActivityAt,
@@ -328,6 +334,7 @@ export const toPersistedSession = (
   void interactionState
   void activePlanProjection
   void contentLoaded
+  void historyPage
   void activeMessageCount
   void artifactCount
   void presentedActivityAt
@@ -495,6 +502,32 @@ const withTransientSessionState = (
   session: PersistedChatSession,
   source: ChatSession
 ): ChatSession => {
+  if (source.historyPage && session.conversationGraph) {
+    const displayedBranch = session.conversationGraph.branches.find(
+      ({ id }) => id === source.historyPage!.messageBranchId
+    )
+    // Pages carry only the selected Branch identity. Keep that window-local selection when the
+    // first complete snapshot arrives. If it no longer exists, adopt the authority's selection;
+    // in either case, never union messages from different Branches.
+    let graph = session.conversationGraph
+    if (displayedBranch) {
+      try {
+        graph = activateConversationBranch(
+          { ...session.conversationGraph, activeFrameId: displayedBranch.agentFrameId },
+          displayedBranch.id
+        )
+      } catch {
+        // A remote parent Branch change may hide this page's child Frame. Its complete snapshot
+        // still has a valid active selection, which is the fallback when the local scope is gone.
+      }
+    }
+    session = {
+      ...session,
+      conversationGraph: graph,
+      messages: resolveActiveConversationMessages(graph).map(projectConversationMessage),
+      ...resolveActiveConversationActivities(graph)
+    }
+  }
   const sourceMessages = new Map(source.messages.map((message) => [message.id, message]))
   const hydrated = hydrateSession(session)
   return {

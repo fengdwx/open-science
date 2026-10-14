@@ -1,0 +1,43 @@
+Starting probe original-json 1: same three official histories.
+Finished probe original-json 1: full history, SQL and pages verified.
+Starting probe current-legacy-json 1: same three official histories.
+Finished probe current-legacy-json 1: full history, SQL and pages verified.
+Starting probe current-jsonl 1: same three official histories.
+Finished probe current-jsonl 1: full history, SQL and pages verified.
+Starting write original-json 1: same three official histories.
+Finished write original-json 1: full history, SQL and pages verified.
+Starting write current-legacy-json 1: same three official histories.
+Finished write current-legacy-json 1: full history, SQL and pages verified.
+Starting write current-jsonl 1: same three official histories.
+Finished write current-jsonl 1: full history, SQL and pages verified.
+Starting write current-legacy-json 2: same three official histories.
+Finished write current-legacy-json 2: full history, SQL and pages verified.
+Starting write current-jsonl 2: same three official histories.
+Finished write current-jsonl 2: full history, SQL and pages verified.
+Starting write original-json 2: same three official histories.
+Finished write original-json 2: full history, SQL and pages verified.
+Starting write current-jsonl 3: same three official histories.
+Finished write current-jsonl 3: full history, SQL and pages verified.
+Starting write original-json 3: same three official histories.
+Finished write original-json 3: full history, SQL and pages verified.
+Starting write current-legacy-json 3: same three official histories.
+Finished write current-legacy-json 3: full history, SQL and pages verified.
+Starting write original-json 4: same three official histories.
+Finished write original-json 4: full history, SQL and pages verified.
+Starting write current-legacy-json 4: same three official histories.
+Finished write current-legacy-json 4: full history, SQL and pages verified.
+Starting write current-jsonl 4: same three official histories.
+Finished write current-jsonl 4: full history, SQL and pages verified.
+Starting write current-legacy-json 5: same three official histories.
+Finished write current-legacy-json 5: full history, SQL and pages verified.
+Starting write current-jsonl 5: same three official histories.
+Finished write current-jsonl 5: full history, SQL and pages verified.
+Starting write original-json 5: same three official histories.
+Finished write original-json 5: full history, SQL and pages verified.
+Starting write current-jsonl 6: same three official histories.
+Finished write current-jsonl 6: full history, SQL and pages verified.
+Starting write original-json 6: same three official histories.
+Finished write original-json 6: full history, SQL and pages verified.
+Starting write current-legacy-json 6: same three official histories.
+Finished write current-legacy-json 6: full history, SQL and pages verified.
+Runtime and pagination evidence: /var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-ten-turn-udvbe591/ten-turn.json

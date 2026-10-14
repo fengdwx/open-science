@@ -1,3 +1,4 @@
+import { sessionMetadataReceipt } from '../../shared/session-persistence'
 import { createSessionRecoveryFolderCommand } from '../session-persistence/ipc'
 import { createCompletionHandoffCommands } from '../agents/completion-handoff-ipc'
 import type { composeAgentCompletion } from './agent-completion'
@@ -24,6 +25,7 @@ import { ManagedFileVersionService } from '../managed-file-versions/service'
 import { createRuntimeWorkflows } from '../notebook/runtime-workflows'
 import { TaskNotificationService } from '../notifications/task-notifications'
 import { broadcastToRenderers } from '../renderer-broadcast'
+import { LIFECYCLE_CHANNELS } from '../../shared/lifecycle-events'
 import { linkPdfContextWithCapability } from '../session-persistence/pdf-context-link-workflow'
 import { SETTINGS_INSTALL_LOG_CHANNEL } from '../settings/ipc'
 import { withDataRootWrite } from '../storage/migration-state'
@@ -357,6 +359,21 @@ export function composeCommandDependencies({
           return context
         },
         editDetails: (request) => sessionSurfaces.sessionDetailsOwner.edit(request),
+        rename: async (request) =>
+          sessionMetadataReceipt(await sessionSurfaces.sessionDetailsOwner.rename(request)),
+        setPinned: async (request) => {
+          const session =
+            await sessionAuthority.sessionPersistenceCoordinator.setSessionPinned(request)
+          try {
+            applicationEvents.publish(LIFECYCLE_CHANNELS.sessionUpdated, {
+              session,
+              originClientId: 'main:session-pin'
+            })
+          } catch {
+            // A derived notification cannot turn a durable metadata commit into a failed write.
+          }
+          return sessionMetadataReceipt(session)
+        },
         bindTaskSession: (request) =>
           sessionAuthority.sessionPersistenceCoordinator.bindTaskSession(request),
         admitTaskTurn: (request) =>

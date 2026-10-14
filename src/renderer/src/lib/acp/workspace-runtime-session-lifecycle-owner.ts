@@ -29,6 +29,7 @@ import {
   loadPersistedSession
 } from '../session-persistence/session-persistence'
 import type { useAcpRuntime } from './useAcpRuntime'
+import { ensureSessionContentLoaded } from '../session-persistence/session-history'
 import { resolveHistoryReplayTarget, type HistoryReplayDescriptor } from './history-preamble'
 import { getResumeFailureMessage } from './workspace-runtime-prompt-preparation-owner'
 import {
@@ -86,6 +87,9 @@ const ensureWorkspaceSessionReady = async (
   sessionId: string,
   agentTarget?: AcpSessionAgentTarget
 ): Promise<boolean> => {
+  const source = workspaceSession(sessionId)
+  if (source?.contentLoaded === false)
+    await ensureSessionContentLoaded({ projectId: source.projectId, sessionId })
   if (runtime.state.sessionIds.includes(sessionId) && !agentTarget) return false
   clearWorkspaceOperationError(sessionId)
   const session = workspaceSession(sessionId)

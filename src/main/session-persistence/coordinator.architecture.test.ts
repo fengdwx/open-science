@@ -491,6 +491,7 @@ describe('Session persistence coordinator architecture', () => {
         'setSessionDelegationPolicy',
         'setSessionDeletionHandlers',
         'setSessionEnabledComputeHosts',
+        'setSessionPinned',
         'settleMessage',
         'settleTaskCompletion',
         'bindTaskSession',
@@ -830,6 +831,31 @@ describe('Session persistence coordinator architecture', () => {
         }
         visit(method)
         expect(calls).toEqual(['this.operationScheduler.runSession'])
+        continue
+      }
+      if (name === 'setSessionPinned') {
+        // Pin delegates to the metadata authority method, which is independently required below
+        // to own the Session lane. Keep the exact scope forwarding and forbid a second write path.
+        expect(method.body?.statements, name).toHaveLength(1)
+        const authorityCalls = walk(method, isCallExpression)
+          .filter(isCallExpression)
+          .filter(
+            (call) =>
+              isPropertyAccessExpression(call.expression) &&
+              call.expression.expression.kind === SyntaxKind.ThisKeyword
+          )
+        expect(authorityCalls.map((call) => call.expression.getText(facadeFile))).toEqual([
+          'this.mutateSessionDetailsAuthority'
+        ])
+        expect(
+          authorityCalls[0].arguments.slice(0, 2).map((arg) => arg.getText(facadeFile))
+        ).toEqual(['request.projectId', 'request.sessionId'])
+        expect(authorityCalls[0].arguments).toHaveLength(3)
+        expect(isArrowFunction(authorityCalls[0].arguments[2])).toBe(true)
+        expect(calledOwnerMethods(method)).toEqual([])
+        expect(method.getText(facadeFile)).not.toContain('this.repository.')
+        expect(method.getText(facadeFile)).not.toContain('this.operationScheduler.')
+        expect(expectedSchedulerRoute.get('mutateSessionDetailsAuthority')).toBe('runSession')
         continue
       }
       const statements = method.body?.statements

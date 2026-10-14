@@ -97,8 +97,15 @@ export type ChatSession = Omit<
   // Transient independent facts for the blocking lane. Plan remains owned by its durable
   // projection, while Side chat remains an overlay that never settles these facts.
   interactionState?: SessionInteractionState
-  // False only for a SQLite-backed startup row whose transcript JSON has not been opened yet.
+  // False for a catalog row or a display-only history page. Neither is a save authority.
   contentLoaded?: false
+  historyPage?: {
+    revision: number
+    beforeCursor?: string
+    hasMore: boolean
+    totalItems: number
+    messageBranchId?: string
+  }
   activeMessageCount?: number
   artifactCount?: number
   presentedActivityAt?: number

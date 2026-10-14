@@ -3,6 +3,7 @@ export const APPLICATION_COMMAND_ERROR_CODES = [
   'invalid-command-result',
   'command-unavailable',
   'command-failed',
+  'SESSION_HISTORY_CURSOR_STALE',
   'settings-storage-unavailable',
   'settings-invalid',
   'settings-credential-unavailable',

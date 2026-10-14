@@ -112,6 +112,8 @@ import {
 import { parseGeneratePlanDocument } from './generate-plan-activity-projection'
 import { useNotebookRunsById } from './use-notebook-runs-by-id'
 import { useTranscriptWindow } from './use-transcript-window'
+import { SessionHistoryLoadButton } from './SessionHistoryLoadButton'
+import { ensureSessionContentLoaded } from '@/lib/session-persistence/session-history'
 import { useHandoffLifecycleEvents } from './useHandoffLifecycleEvents'
 import {
   createConversationItems,
@@ -695,7 +697,12 @@ const WorkspaceMessageScrollerImpl = ({
     (frame) => frame.id === conversationGraph.activeFrameId
   )
   const currentPresentationScopeId = currentSessionId
-    ? JSON.stringify([currentSessionId, activeConversationFrame?.activeBranchId ?? 'legacy'])
+    ? JSON.stringify([
+        currentSessionId,
+        activeConversationFrame?.activeBranchId ??
+          activeSession?.historyPage?.messageBranchId ??
+          'legacy'
+      ])
     : undefined
   const artifactVisibility = useWorkspaceArtifactVisibility(activeSession)
   const handoffEvents = useHandoffLifecycleEvents(handoffLifecycleSource, currentSessionId)
@@ -889,6 +896,35 @@ const WorkspaceMessageScrollerImpl = ({
     messageScrollerViewportRef
   )
   const revealTranscriptItem = transcriptWindow.revealMessage
+  const partialHistory = activeSession?.contentLoaded === false
+  const [historyLoadFailedSessionId, setHistoryLoadFailedSessionId] = useState<string>()
+  const ensureFullHistory = useCallback(async (): Promise<void> => {
+    if (!partialHistory || !currentProjectId || !currentSessionId) return
+    try {
+      await ensureSessionContentLoaded({ projectId: currentProjectId, sessionId: currentSessionId })
+      setHistoryLoadFailedSessionId((failed) => (failed === currentSessionId ? undefined : failed))
+    } catch {
+      setHistoryLoadFailedSessionId(currentSessionId)
+    }
+  }, [currentProjectId, currentSessionId, partialHistory])
+  const previousHistoryPageRef = useRef({
+    sessionId: currentSessionId,
+    page: activeSession?.historyPage
+  })
+  const revealEarlier = transcriptWindow.revealEarlier
+  useLayoutEffect(() => {
+    const previous = previousHistoryPageRef.current
+    const next = activeSession?.historyPage
+    previousHistoryPageRef.current = { sessionId: currentSessionId, page: next }
+    if (
+      previous.sessionId === currentSessionId &&
+      previous.page &&
+      next &&
+      previous.page !== next &&
+      previous.page.revision === next.revision
+    )
+      revealEarlier()
+  }, [activeSession?.historyPage, currentSessionId, revealEarlier])
   const searchFocus = useSearchMessageFocusStore((state) => state.pending)
   const navigationRevision = useNavigationStore((state) => state.userNavigationRevision)
   useEffect(() => {
@@ -902,6 +938,10 @@ const WorkspaceMessageScrollerImpl = ({
     const index = conversationItems.findIndex(
       (item) => item.type === 'message' && item.message.id === searchFocus.messageId
     )
+    if (index < 0 && partialHistory) {
+      void Promise.resolve().then(ensureFullHistory)
+      return
+    }
     if (index < 0 || (presentationBarrierIndex >= 0 && index > presentationBarrierIndex)) return
     revealTranscriptItem(searchFocus.messageId)
   }, [
@@ -911,6 +951,8 @@ const WorkspaceMessageScrollerImpl = ({
     currentSessionId,
     conversationItems,
     presentationBarrierIndex,
+    partialHistory,
+    ensureFullHistory,
     revealTranscriptItem
   ])
   const [annotationScrollTarget, setAnnotationScrollTarget] = useState<{
@@ -1006,10 +1048,12 @@ const WorkspaceMessageScrollerImpl = ({
     undefined
   )
   const showWindowFind = useCallback((): void => {
+    if (partialHistory) void ensureFullHistory()
     const acknowledgedScope = windowFindAcknowledgedScopeRef.current
     if (
       acknowledgedScope &&
       acknowledgedScope.scopeId === currentPresentationScopeId &&
+      !partialHistory &&
       presentationBarrierIndex < 0 &&
       transcriptWindow.entries.length === conversationItems.length
     ) {
@@ -1024,7 +1068,9 @@ const WorkspaceMessageScrollerImpl = ({
     currentPresentationScopeId,
     presentationBarrierIndex,
     revealFullTranscript,
-    transcriptWindow.entries.length
+    transcriptWindow.entries.length,
+    partialHistory,
+    ensureFullHistory
   ])
   useEffect(() => {
     return window.api?.window?.onShowWindowFind?.(showWindowFind)
@@ -1044,6 +1090,7 @@ const WorkspaceMessageScrollerImpl = ({
   useLayoutEffect(() => {
     if (
       !windowFindOpen ||
+      partialHistory ||
       presentationBarrierIndex >= 0 ||
       transcriptWindow.entries.length !== conversationItems.length
     ) {
@@ -1058,6 +1105,7 @@ const WorkspaceMessageScrollerImpl = ({
     currentPresentationScopeId,
     presentationBarrierIndex,
     transcriptWindow.entries.length,
+    partialHistory,
     windowFindOpen
   ])
   // Brand-new conversation (nothing presented, no resume in flight): invite the first prompt with
@@ -1677,6 +1725,25 @@ const WorkspaceMessageScrollerImpl = ({
                 windowFindOpen && '[&>[data-message-id]]:[content-visibility:visible]'
               )}
             >
+              {historyLoadFailedSessionId && historyLoadFailedSessionId === currentSessionId ? (
+                <MessageScrollerItem
+                  messageId={`history-error-${currentSessionId}`}
+                  className="min-w-0"
+                >
+                  <ErrorNotice
+                    description={t('Could not load conversation history.')}
+                    primaryButton={{ label: t('Retry'), onClick: () => void ensureFullHistory() }}
+                  />
+                </MessageScrollerItem>
+              ) : null}
+              {activeSession?.historyPage ? (
+                <MessageScrollerItem
+                  messageId={`history-load-${activeSession.id}`}
+                  className="min-w-0"
+                >
+                  <SessionHistoryLoadButton key={activeSession.id} session={activeSession} />
+                </MessageScrollerItem>
+              ) : null}
               {reviewLoadError ? (
                 <MessageScrollerItem
                   messageId={`review-load-error-${currentSessionId ?? 'unknown'}`}

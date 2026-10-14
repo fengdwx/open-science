@@ -6,7 +6,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import JSZip from 'jszip'
 import { utils as spreadsheetUtils, write as writeSpreadsheet } from 'styled-exceljs'
 import { randomUUID } from 'node:crypto'
-import { appendFile, chmod, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { appendFile, chmod, lstat, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import { researchPrompt, runResearchAnalysis } from './research-analysis.mjs'
@@ -161,13 +161,78 @@ const waitForReleaseFile = async (releaseFile, timeout = 30_000) => {
 }
 
 const suspendSessionWrites = async () => {
-  const sessionsRoot = join(process.env.OPEN_SCIENCE_STORAGE_ROOT ?? '', 'sessions')
+  const storageRoot = process.env.OPEN_SCIENCE_STORAGE_ROOT
+  if (
+    !storageRoot ||
+    storageRoot !== process.env.OPEN_SCIENCE_E2E_STORAGE_ROOT ||
+    !storageRoot.includes('open-science-electron-e2e-')
+  )
+    throw new Error('Session write faults require isolated E2E storage.')
+  const sessionsRoot = join(storageRoot, 'sessions')
+  for (const path of [storageRoot, sessionsRoot]) {
+    const stat = await lstat(path)
+    if (!stat.isDirectory() || stat.isSymbolicLink())
+      throw new Error('Session write faults require real E2E storage directories.')
+  }
   const projects = await readdir(sessionsRoot, { withFileTypes: true })
-  const directories = projects
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => join(sessionsRoot, entry.name))
-  await Promise.all(directories.map((directory) => chmod(directory, 0o500)))
-  return async () => Promise.all(directories.map((directory) => chmod(directory, 0o700)))
+  const directories = []
+  const files = []
+  for (const project of projects) {
+    if (project.isSymbolicLink()) throw new Error('Session write faults cannot follow symlinks.')
+    if (!project.isDirectory()) continue
+    const directory = join(sessionsRoot, project.name)
+    const stat = await lstat(directory)
+    if (!stat.isDirectory() || stat.isSymbolicLink())
+      throw new Error('Session write faults cannot follow symlinks.')
+    directories.push({ path: directory, mode: stat.mode & 0o7777, dev: stat.dev, ino: stat.ino })
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (entry.isSymbolicLink()) throw new Error('Session write faults cannot follow symlinks.')
+      if (!entry.isFile()) continue
+      const path = join(directory, entry.name)
+      const stat = await lstat(path)
+      if (!stat.isFile() || stat.isSymbolicLink())
+        throw new Error('Session write faults require regular Session files.')
+      files.push({ path, mode: stat.mode & 0o7777, dev: stat.dev, ino: stat.ino })
+    }
+  }
+  const changed = []
+  let restored = false
+  const restore = async () => {
+    if (restored) return
+    const errors = []
+    for (const original of [...changed].reverse()) {
+      try {
+        const current = await lstat(original.path)
+        // Never apply an old file's permissions to a replacement or a symlink target.
+        if (
+          !current.isSymbolicLink() &&
+          current.dev === original.dev &&
+          current.ino === original.ino
+        )
+          await chmod(original.path, original.mode)
+      } catch (error) {
+        if (error.code !== 'ENOENT') errors.push(error)
+      }
+    }
+    if (errors.length) throw new AggregateError(errors, 'Failed to restore E2E Session modes.')
+    restored = true
+  }
+  try {
+    // Directory permissions block replacement/new generations. Existing JSONL files must also
+    // lose their write bits, because append does not require a writable parent directory.
+    for (const target of [...directories, ...files]) {
+      await chmod(target.path, target.mode & ~0o222)
+      changed.push(target)
+    }
+  } catch (error) {
+    try {
+      await restore()
+    } catch (restoreError) {
+      throw new AggregateError([error, restoreError], 'E2E Session write fault setup failed.')
+    }
+    throw error
+  }
+  return restore
 }
 
 const stringEnvironment = (overrides = []) => {

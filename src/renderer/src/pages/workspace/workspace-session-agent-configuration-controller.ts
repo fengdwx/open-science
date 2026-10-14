@@ -14,6 +14,8 @@ import {
   useSettingsStore
 } from '@/stores/settings-store'
 import { useSessionStore, type ChatSession } from '@/stores/session-store'
+import { ensureSessionContentLoaded } from '@/lib/session-persistence/session-history'
+import { reportWorkspaceOperationError } from '@/lib/acp/workspace-operation-error'
 
 const useWorkspaceSessionAgentConfiguration = (
   activeSession: ChatSession | undefined
@@ -127,7 +129,21 @@ const useWorkspaceSessionAgentConfiguration = (
     (configuration: SessionAgentConfiguration): void => {
       if (activeSession?.packageOrigin) return
       if (activeSession) {
-        setAgentConfiguration(activeSession.id, configuration)
+        if (activeSession.contentLoaded === false) {
+          void ensureSessionContentLoaded({
+            projectId: activeSession.projectId,
+            sessionId: activeSession.id
+          })
+            .then((loaded) => {
+              if (loaded && !loaded.packageOrigin) setAgentConfiguration(loaded.id, configuration)
+            })
+            .catch((error: unknown) =>
+              reportWorkspaceOperationError(
+                activeSession.id,
+                error instanceof Error ? error.message : String(error)
+              )
+            )
+        } else setAgentConfiguration(activeSession.id, configuration)
         return
       }
       setNewConversationAgentConfiguration(configuration)

@@ -48,6 +48,9 @@ import {
   type PersistedChatMessage,
   type PersistedChatSession,
   type SaveSessionOptions,
+  type RenameSessionRequest,
+  type SetSessionPinnedRequest,
+  type SessionMetadataReceipt,
   type SessionConflictRebaseField,
   type SessionLoadDiagnostics,
   type SaveSessionManifestRequest,
@@ -73,15 +76,25 @@ import {
   pendingSessionConversationCommands,
   retainActivePreparationCommands
 } from '../../stores/session-conversation-intents'
+import { loadSessionHistoryPage } from './session-history'
+import type {
+  LoadSessionHistoryPageRequest,
+  SessionHistoryPage
+} from '../../../../shared/session-history'
 
 type SessionPersistenceApi = {
   list?: () => Promise<ListSessionSummariesResult>
   loadAll: () => Promise<LoadAllSessionsResult>
   loadOne: (request: LoadSessionRequest) => Promise<PersistedChatSession | undefined>
+  loadHistoryPage?: (
+    request: LoadSessionHistoryPageRequest
+  ) => Promise<SessionHistoryPage | undefined>
   saveSession: (
     session: PersistedChatSession,
     options?: SaveSessionOptions
   ) => Promise<PersistedChatSession>
+  rename?: (request: RenameSessionRequest) => Promise<SessionMetadataReceipt>
+  setPinned?: (request: SetSessionPinnedRequest) => Promise<SessionMetadataReceipt>
   deleteSession: (request: DeleteSessionRequest) => Promise<SessionDeletionResult>
   saveManifest: (request: SaveSessionManifestRequest) => Promise<void>
 }
@@ -98,6 +111,48 @@ const loadPersistedSession = async (
   return result.sessions.find(
     (session) => session.id === request.sessionId && session.projectId === request.projectId
   )
+}
+
+// A metadata receipt acknowledges only the requested display fields. It never proves that a
+// loaded transcript has caught up to the receipt's revision, and never hydrates a history body.
+const metadataReceiptProjections = new WeakMap<
+  ChatSession,
+  {
+    source: ChatSession
+    receipt: SessionMetadataReceipt
+    fields: readonly ('title' | 'pinned')[]
+  }
+>()
+const applySessionMetadataReceipt = (
+  source: ChatSession,
+  receipt: SessionMetadataReceipt,
+  fields: readonly ('title' | 'pinned')[]
+): void => {
+  useSessionStore.setState((state) => ({
+    sessions: state.sessions.map((current) => {
+      if (
+        current.id !== receipt.id ||
+        current.projectId !== receipt.projectId ||
+        sessionRevision(current) > receipt.revision
+      )
+        return current
+      const projected = { ...current }
+      for (const field of fields) {
+        if (current[field] !== source[field] && current[field] !== receipt[field]) continue
+        if (field === 'title') {
+          projected.title = receipt.title
+          projected.unsavedTitle = undefined
+          projected.sessionDetailsSource = 'manual'
+          if (current.description === source.description)
+            projected.description = receipt.description
+        } else projected.pinned = receipt.pinned
+      }
+      projected.updatedAt = Math.max(current.updatedAt, receipt.updatedAt)
+      if (current.contentLoaded === false) projected.revision = receipt.revision
+      metadataReceiptProjections.set(projected, { source: current, receipt, fields })
+      return projected
+    })
+  }))
 }
 
 const hydratePersistedSessionIfPresent = (
@@ -174,6 +229,10 @@ type OrderedSessionSaveRecovery = (
 ) => Promise<PersistedChatSession>
 
 type OrderedSessionPersistence = Pick<SessionPersistenceApi, 'saveSession' | 'saveManifest'> & {
+  saveMetadata: (
+    target: string,
+    task: () => Promise<SessionMetadataReceipt>
+  ) => Promise<SessionMetadataReceipt>
   saveLatestSession: (
     target: string,
     task: LatestSessionSaveTask,
@@ -1122,6 +1181,7 @@ const createOrderedSessionPersistence = (
 
   return {
     saveLatestSession,
+    saveMetadata: (target, task) => enqueue(target, task),
     seedAcknowledgedSessions: (sessions) => {
       // A newly hydrated store invalidates delayed snapshots from the previous store generation.
       // The shared queue still preserves barriers, but stale local state can no longer write later.
@@ -1704,7 +1764,8 @@ const loadPersistedSessions = async (
     if (!shouldHydrate()) return undefined
     const retrySessionId = currentSelection()?.sessionId
     const summariesToHydrate = result.sessions.filter(
-      (session) => session.needsStartupRecovery || session.id === retrySessionId
+      (session) =>
+        session.needsStartupRecovery || (!api.loadHistoryPage && session.id === retrySessionId)
     )
     const hydratedSessions = new Map(
       await Promise.all(
@@ -1805,6 +1866,15 @@ const createStoreSaver = (
   let previousSessions = initial.sessions
   let previousSelection = initial.selectedSessionId
   let previousStreamingMessages = initial.streamingMessages ?? {}
+  const acknowledgedMetadata = new Map(
+    initial.sessions.map((session) => [
+      session.id,
+      {
+        title: session.title,
+        pinned: session.pinned === true
+      }
+    ])
+  )
   const acknowledgedRevisions = new Map(
     initial.sessions
       .filter((session) => session.contentLoaded !== false)
@@ -1886,6 +1956,22 @@ const createStoreSaver = (
       const target = `session:${session.id}`
       const isForced = options?.forceTargets?.has(target) === true
       const previousSession = previousById.get(session.id)
+      const metadataProjection = metadataReceiptProjections.get(session)
+      if (previousSession && metadataProjection?.source === previousSession && !isForced) {
+        const baseline = acknowledgedMetadata.get(session.id) ?? {
+          title: previousSession.title,
+          pinned: previousSession.pinned === true
+        }
+        acknowledgedMetadata.set(session.id, {
+          title: metadataProjection.fields.includes('title')
+            ? metadataProjection.receipt.title
+            : baseline.title,
+          pinned: metadataProjection.fields.includes('pinned')
+            ? metadataProjection.receipt.pinned
+            : baseline.pinned
+        })
+        continue
+      }
       if (session.contentLoaded === false) {
         if (previousSession === session && !isForced) continue
         const conflictRebaseFields = [
@@ -1900,6 +1986,50 @@ const createStoreSaver = (
         ].filter((field): field is 'title' | 'pinned' => field === 'title' || field === 'pinned')
         // Catalog hydration changes object identity without introducing a local metadata edit.
         if (!isForced && conflictRebaseFields.length === 0) continue
+        if (
+          conflictRebaseFields.length > 0 &&
+          api.rename &&
+          api.setPinned &&
+          pendingSessionConversationCommands(session.id).length === 0
+        ) {
+          tasks.push({
+            target,
+            failureContext: { conflictRebaseFields },
+            run: () =>
+              persistence.saveMetadata(target, async () => {
+                let receipt: SessionMetadataReceipt | undefined
+                let baseline = acknowledgedMetadata.get(session.id) ?? {
+                  title: previousSession?.title ?? session.title,
+                  pinned: previousSession?.pinned === true
+                }
+                if (conflictRebaseFields.includes('title')) {
+                  receipt = await api.rename!({
+                    projectId: session.projectId,
+                    sessionId: session.id,
+                    title: session.title,
+                    expectedTitle: baseline.title
+                  })
+                  baseline = { ...baseline, title: receipt.title }
+                  acknowledgedMetadata.set(session.id, baseline)
+                  applySessionMetadataReceipt(session, receipt, ['title'])
+                }
+                if (conflictRebaseFields.includes('pinned')) {
+                  receipt = await api.setPinned!({
+                    projectId: session.projectId,
+                    sessionId: session.id,
+                    pinned: session.pinned === true,
+                    expectedPinned: baseline.pinned
+                  })
+                  baseline = { ...baseline, pinned: receipt.pinned }
+                  acknowledgedMetadata.set(session.id, baseline)
+                  applySessionMetadataReceipt(session, receipt, ['pinned'])
+                }
+                if (!receipt) throw new Error('Session metadata update has no fields.')
+                return receipt
+              })
+          })
+          continue
+        }
         const conversationCommands = pendingSessionConversationCommands(session.id)
         const saveOptions =
           conflictRebaseFields.length > 0 || conversationCommands.length > 0
@@ -2821,6 +2951,12 @@ const useSessionPersistence = (): SessionPersistenceState => {
       activeSaver = save
       saverRef.current = save
       const loadingSessionContent = new Set<string>()
+      const historySummaries = new Map(
+        useSessionStore
+          .getState()
+          .sessions.filter((session) => session.contentLoaded === false)
+          .map((session) => [session.id, session])
+      )
       // ponytail: only unchanged, passively loaded history is reclaimable. Edited/runtime-owned
       // sessions stay resident; extend this policy only with a proven save-acknowledgement contract.
       const readOnlyHistory = new Map<
@@ -2854,6 +2990,34 @@ const useSessionPersistence = (): SessionPersistenceState => {
       }
 
       const onStoreChange = (state: ReturnType<typeof useSessionStore.getState>): void => {
+        for (const session of state.sessions) {
+          const summary = historySummaries.get(session.id)
+          if (
+            session.contentLoaded === false &&
+            session.historyPage &&
+            summary &&
+            !session.unsavedTitle &&
+            session.status === 'idle' &&
+            !session.activeRun &&
+            !hasStagedUploads(session) &&
+            pendingArtifactRequests(session, true).length === 0 &&
+            readOnlyHistory.get(session.id)?.loaded !== session
+          ) {
+            readOnlyHistory.set(session.id, {
+              loaded: session,
+              bytes: estimateHistoryBodyBytes(session),
+              summary: {
+                ...summary,
+                title: session.title,
+                pinned: session.pinned,
+                archivedAt: session.archivedAt,
+                revision: session.revision,
+                updatedAt: session.updatedAt,
+                filesRevision: session.filesRevision
+              }
+            })
+          }
+        }
         const failedTargetCount = failedWriteTargets.current.size
         const sizeLimitTargetCount = sizeLimitTargets.current.size
         pruneRemovedSessionWriteTargets(
@@ -2874,12 +3038,24 @@ const useSessionPersistence = (): SessionPersistenceState => {
           presentOutstandingWriteFailures()
         }
         const selected = state.sessions.find(
-          (session) => session.id === state.selectedSessionId && session.contentLoaded === false
+          (session) =>
+            session.id === state.selectedSessionId &&
+            session.contentLoaded === false &&
+            !session.historyPage
         )
         if (selected && !loadingSessionContent.has(selected.id)) {
           loadingSessionContent.add(selected.id)
-          void loadPersistedSession({ projectId: selected.projectId, sessionId: selected.id })
+          const supportsPages = typeof window.api.sessions.loadHistoryPage === 'function'
+          void (
+            supportsPages
+              ? loadSessionHistoryPage({
+                  projectId: selected.projectId,
+                  sessionId: selected.id
+                }).then(() => undefined)
+              : loadPersistedSession({ projectId: selected.projectId, sessionId: selected.id })
+          )
             .then((session) => {
+              if (supportsPages) return
               if (!session) throw new Error('Selected Session JSON is missing.')
               if (!isMounted) return
               const unchangedSummary =
@@ -2999,6 +3175,7 @@ export {
   resetSessionPersistenceWriteFailuresForTests,
   deriveSessionCatalogRecovery,
   deleteSession,
+  applySessionMetadataReceipt,
   saveSessionInOrder,
   saveSessionFieldsInOrder,
   setDelegationPolicyAuthority,

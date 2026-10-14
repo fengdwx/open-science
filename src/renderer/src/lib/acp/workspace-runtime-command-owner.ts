@@ -41,6 +41,7 @@ import { validateImageAnnotationSourcesBeforeSend } from '../../pages/workspace/
 import { prepareDiscussionSendAnnotations } from '../../pages/workspace/discussion-send-context'
 import type { SessionDiscussionCapture } from '../../pages/workspace/replay/replay-context'
 import { toPersistedSession, useSessionStore, type ChatMessage } from '../../stores/session-store'
+import { ensureSessionContentLoaded } from '../session-persistence/session-history'
 import {
   confirmPendingDelegationPolicyAuthority,
   deleteSession,
@@ -1649,6 +1650,15 @@ const sendWorkspaceMessage = async (
   if (sessionId && preparingSessionIds.has(sessionId)) return undefined
   if (sessionId) preparingSessionIds.add(sessionId)
   try {
+    const sourceId = sessionId ?? input.branchSourceSessionId
+    const source = useSessionStore.getState().sessions.find(({ id }) => id === sourceId)
+    if (source?.contentLoaded === false) {
+      const loaded = await ensureSessionContentLoaded({
+        projectId: source.projectId,
+        sessionId: source.id
+      })
+      if (!loaded || loaded.contentLoaded === false) return undefined
+    }
     return await performSendWorkspaceMessage(runtime, input, lifecycle)
   } finally {
     if (sessionId) preparingSessionIds.delete(sessionId)
@@ -1660,6 +1670,9 @@ const resendEditedWorkspaceMessage = async (
   input: ResendEditedMessageInput & { sessionId: string; messageId: string },
   options: ResendEditedWorkspaceMessageOptions = {}
 ): Promise<boolean> => {
+  const source = useSessionStore.getState().sessions.find((item) => item.id === input.sessionId)
+  if (source?.contentLoaded === false)
+    await ensureSessionContentLoaded({ projectId: source.projectId, sessionId: source.id })
   const session = useSessionStore.getState().sessions.find((item) => item.id === input.sessionId)
   if (!session) return false
   const sourceMessage = session.messages.find((message) => message.id === input.messageId)

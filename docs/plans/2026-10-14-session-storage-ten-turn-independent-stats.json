@@ -1,0 +1,6402 @@
+{
+  "status": "verified",
+  "at": "2026-10-14T08:37:26.926216+00:00",
+  "report": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-ten-turn-udvbe591/ten-turn.json",
+  "summary": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-ten-turn-udvbe591/ten-turn.summary.json",
+  "method": "Independent Python statistics median, mean and nearest-rank p95 from raw run samples; floating-point comparisons rel_tol=1e-11 abs_tol=1e-8. No driver summary implementation imported.",
+  "numericStatisticsChecked": 756,
+  "differences": [],
+  "counts": {
+    "measuredSaveCount": 8676,
+    "measuredFreshFullReadCount": 108,
+    "measuredPageOperationCount": 162,
+    "measuredDisplayPageOperationCount": 72,
+    "measuredCompleteLegacyReadCount": 90,
+    "untimedProbeCases": 9
+  },
+  "cases": [
+    {
+      "id": "investment",
+      "variants": {
+        "original-json": {
+          "messageOwnerMs": {
+            "count": 330,
+            "median": 21.733291500000064,
+            "mean": 23.688950381818195,
+            "p95": 39.19787499999984,
+            "min": 18.982124999999996,
+            "max": 47.45733400000063
+          },
+          "messageRepositorySaveMs": {
+            "count": 330,
+            "median": 16.229562500000043,
+            "mean": 17.539939015151514,
+            "p95": 27.233666000000085,
+            "min": 14.04537500000015,
+            "max": 34.26324999999997
+          },
+          "allForkCommitOwnerMs": {
+            "count": 810,
+            "median": 27.618832999999995,
+            "mean": 30.055395503703707,
+            "p95": 46.00116600000001,
+            "min": 18.678457999999864,
+            "max": 57.56233299999985
+          },
+          "promptOwnerMs": {
+            "count": 48,
+            "median": 24.26741650000008,
+            "mean": 24.737976541666644,
+            "p95": 34.39925000000039,
+            "min": 18.678457999999864,
+            "max": 35.32549999999992
+          },
+          "admissionOwnerMs": {
+            "count": 48,
+            "median": 37.30829149999977,
+            "mean": 38.6169027083333,
+            "p95": 52.40912500000013,
+            "min": 25.732124999999996,
+            "max": 57.56233299999985
+          },
+          "terminalOwnerMs": {
+            "count": 48,
+            "median": 35.984499499999856,
+            "mean": 35.226006041666615,
+            "p95": 47.58675000000039,
+            "min": 22.496999999999844,
+            "max": 47.76291599999968
+          },
+          "importedTitleOwnerMs": {
+            "count": 6,
+            "median": 29.747187499999995,
+            "mean": 29.68133316666668,
+            "p95": 33.64045799999997,
+            "min": 25.774166000000037,
+            "max": 33.64045799999997
+          },
+          "allForkBytesPerRun": {
+            "count": 6,
+            "median": 79356619.0,
+            "mean": 79356619,
+            "p95": 79356619,
+            "min": 79356619,
+            "max": 79356619
+          },
+          "messageBytesPerRun": {
+            "count": 6,
+            "median": 20881985.0,
+            "mean": 20881985,
+            "p95": 20881985,
+            "min": 20881985,
+            "max": 20881985
+          },
+          "fullReadMs": {
+            "count": 6,
+            "median": 25.65258349999999,
+            "mean": 26.09779850000001,
+            "p95": 27.356958000000077,
+            "min": 25.299582999999984,
+            "max": 27.356958000000077
+          },
+          "recentPageMs": {
+            "count": 6,
+            "median": 25.343249999999955,
+            "mean": 26.406229166666645,
+            "p95": 31.473416999999927,
+            "min": 24.029833000000053,
+            "max": 31.473416999999927
+          },
+          "allPagesMs": {
+            "count": 6,
+            "median": 28.671479000000033,
+            "mean": 30.830875166666676,
+            "p95": 42.30058400000007,
+            "min": 27.876916999999935,
+            "max": 42.30058400000007
+          },
+          "legacyFirstPageMs": {
+            "count": 6,
+            "median": 14.270291500000042,
+            "mean": 14.421971999999982,
+            "p95": 15.798499999999876,
+            "min": 12.855833000000075,
+            "max": 15.798499999999876
+          }
+        },
+        "current-legacy-json": {
+          "messageOwnerMs": {
+            "count": 330,
+            "median": 20.942416999999978,
+            "mean": 22.452392048484857,
+            "p95": 34.64375000000018,
+            "min": 18.02108300000009,
+            "max": 47.37525000000005
+          },
+          "messageRepositorySaveMs": {
+            "count": 330,
+            "median": 16.32106250000004,
+            "mean": 17.27850084545455,
+            "p95": 24.8706659999998,
+            "min": 13.588624999999865,
+            "max": 35.24341600000025
+          },
+          "allForkCommitOwnerMs": {
+            "count": 810,
+            "median": 26.280771000000186,
+            "mean": 28.14774670740741,
+            "p95": 41.521999999999935,
+            "min": 17.449541999999838,
+            "max": 54.535499999999956
+          },
+          "promptOwnerMs": {
+            "count": 48,
+            "median": 23.315395500000022,
+            "mean": 24.377667479166643,
+            "p95": 31.476584000000003,
+            "min": 17.449541999999838,
+            "max": 48.36212500000056
+          },
+          "admissionOwnerMs": {
+            "count": 48,
+            "median": 37.75847899999985,
+            "mean": 38.546694437500044,
+            "p95": 53.3310419999998,
+            "min": 25.33725000000004,
+            "max": 54.535499999999956
+          },
+          "terminalOwnerMs": {
+            "count": 48,
+            "median": 32.80358299999989,
+            "mean": 32.84015622916663,
+            "p95": 42.79933299999993,
+            "min": 21.18229099999985,
+            "max": 46.27466699999968
+          },
+          "importedTitleOwnerMs": {
+            "count": 6,
+            "median": 31.002875000000017,
+            "mean": 30.646395833333354,
+            "p95": 33.28733399999999,
+            "min": 27.256875000000036,
+            "max": 33.28733399999999
+          },
+          "allForkBytesPerRun": {
+            "count": 6,
+            "median": 79356619.0,
+            "mean": 79356619,
+            "p95": 79356619,
+            "min": 79356619,
+            "max": 79356619
+          },
+          "messageBytesPerRun": {
+            "count": 6,
+            "median": 20881985.0,
+            "mean": 20881985,
+            "p95": 20881985,
+            "min": 20881985,
+            "max": 20881985
+          },
+          "fullReadMs": {
+            "count": 6,
+            "median": 26.16691700000007,
+            "mean": 26.680729333333357,
+            "p95": 30.188125000000014,
+            "min": 24.57725000000005,
+            "max": 30.188125000000014
+          },
+          "recentPageMs": {
+            "count": 6,
+            "median": 25.49199950000002,
+            "mean": 25.781965000000014,
+            "p95": 28.431166000000076,
+            "min": 24.501708000000008,
+            "max": 28.431166000000076
+          },
+          "allPagesMs": {
+            "count": 6,
+            "median": 26.048395500000026,
+            "mean": 26.52885416666665,
+            "p95": 29.855500000000006,
+            "min": 24.481457999999975,
+            "max": 29.855500000000006
+          },
+          "legacyFirstPageMs": {
+            "count": 6,
+            "median": 14.698249499999918,
+            "mean": 14.99350649999993,
+            "p95": 17.82095800000002,
+            "min": 13.142582999999945,
+            "max": 17.82095800000002
+          }
+        },
+        "current-jsonl": {
+          "messageOwnerMs": {
+            "count": 330,
+            "median": 15.948792000000026,
+            "mean": 16.829320848484844,
+            "p95": 25.642499999999927,
+            "min": 13.545374999999922,
+            "max": 32.167207999999846
+          },
+          "messageRepositorySaveMs": {
+            "count": 330,
+            "median": 11.849458499999969,
+            "mean": 12.459495566666673,
+            "p95": 17.111707999999908,
+            "min": 10.237290999999914,
+            "max": 21.632958000000144
+          },
+          "allForkCommitOwnerMs": {
+            "count": 810,
+            "median": 19.20122900000024,
+            "mean": 21.415263777777792,
+            "p95": 34.387416999999914,
+            "min": 13.545374999999922,
+            "max": 47.18754100000024
+          },
+          "promptOwnerMs": {
+            "count": 48,
+            "median": 22.632708500000035,
+            "mean": 23.134401895833395,
+            "p95": 29.738042000000405,
+            "min": 16.847999999999956,
+            "max": 30.39783299999999
+          },
+          "admissionOwnerMs": {
+            "count": 48,
+            "median": 32.20897900000023,
+            "mean": 33.16249470833332,
+            "p95": 46.51104200000009,
+            "min": 21.033166000000165,
+            "max": 47.18754100000024
+          },
+          "terminalOwnerMs": {
+            "count": 48,
+            "median": 31.287395500000002,
+            "mean": 30.899715250000114,
+            "p95": 41.767125000000306,
+            "min": 20.085665999999947,
+            "max": 42.426290999999765
+          },
+          "importedTitleOwnerMs": {
+            "count": 6,
+            "median": 29.28791650000005,
+            "mean": 29.714180500000055,
+            "p95": 33.55150000000003,
+            "min": 26.170042000000194,
+            "max": 33.55150000000003
+          },
+          "allForkBytesPerRun": {
+            "count": 6,
+            "median": 2820275.0,
+            "mean": 2820275,
+            "p95": 2820275,
+            "min": 2820275,
+            "max": 2820275
+          },
+          "messageBytesPerRun": {
+            "count": 6,
+            "median": 674278.0,
+            "mean": 674278,
+            "p95": 674278,
+            "min": 674278,
+            "max": 674278
+          },
+          "fullReadMs": {
+            "count": 6,
+            "median": 51.06174999999996,
+            "mean": 50.26188183333335,
+            "p95": 51.530125,
+            "min": 48.095541000000026,
+            "max": 51.530125
+          },
+          "recentPageMs": {
+            "count": 6,
+            "median": 3.7198960000000056,
+            "mean": 3.7273890000000165,
+            "p95": 3.8084170000000768,
+            "min": 3.6656249999999773,
+            "max": 3.8084170000000768
+          },
+          "allPagesMs": {
+            "count": 6,
+            "median": 5.758958500000006,
+            "mean": 5.743194499999959,
+            "p95": 5.8537919999999986,
+            "min": 5.643499999999904,
+            "max": 5.8537919999999986
+          },
+          "legacyFirstPageMs": {
+            "count": 6,
+            "median": 16.613687999999968,
+            "mean": 16.565777999999984,
+            "p95": 17.842292000000043,
+            "min": 15.240499999999884,
+            "max": 17.842292000000043
+          }
+        }
+      },
+      "percentChangeVsOriginalJson": {
+        "current-legacy-json": {
+          "messageOwnerMs": -3.639000102676959,
+          "messageRepositorySaveMs": 0.5637859923826927,
+          "fullReadMs": 2.004996884622079,
+          "recentPageMs": 0.5869393230941711,
+          "allPagesMs": -9.148755458342428,
+          "legacyFirstPageMs": 2.998943644563079,
+          "messageBytesPerRun": 0.0,
+          "allForkBytesPerRun": 0.0
+        },
+        "current-jsonl": {
+          "messageOwnerMs": -26.615846476821147,
+          "messageRepositorySaveMs": -26.988429293766004,
+          "fullReadMs": 99.0511014222017,
+          "recentPageMs": -85.32194568573482,
+          "allPagesMs": -79.91398176564243,
+          "legacyFirstPageMs": 16.421504073689874,
+          "messageBytesPerRun": -96.77100620463045,
+          "allForkBytesPerRun": -96.44607464942527
+        }
+      }
+    },
+    {
+      "id": "molecular",
+      "variants": {
+        "original-json": {
+          "messageOwnerMs": {
+            "count": 402,
+            "median": 16.000167000000147,
+            "mean": 17.218731042288542,
+            "p95": 24.07049999999981,
+            "min": 13.047750000000633,
+            "max": 27.495874999999614
+          },
+          "messageRepositorySaveMs": {
+            "count": 402,
+            "median": 13.403937499999756,
+            "mean": 14.105187380597,
+            "p95": 18.495874999999614,
+            "min": 10.879291999999623,
+            "max": 21.315708999999515
+          },
+          "allForkCommitOwnerMs": {
+            "count": 654,
+            "median": 16.986083000000235,
+            "mean": 18.463110977064222,
+            "p95": 25.10554200000024,
+            "min": 12.892832999999882,
+            "max": 34.89904200000001
+          },
+          "promptOwnerMs": {
+            "count": 48,
+            "median": 16.976645499999904,
+            "mean": 17.137798583333392,
+            "p95": 20.70458299999973,
+            "min": 12.892832999999882,
+            "max": 22.675459000000046
+          },
+          "admissionOwnerMs": {
+            "count": 48,
+            "median": 22.214958500000193,
+            "mean": 22.434228249999972,
+            "p95": 28.97625000000062,
+            "min": 15.611665999999786,
+            "max": 30.215374999999767
+          },
+          "terminalOwnerMs": {
+            "count": 48,
+            "median": 21.265270500000042,
+            "mean": 21.32212318750004,
+            "p95": 27.23454099999981,
+            "min": 16.04120800000055,
+            "max": 34.89904200000001
+          },
+          "importedTitleOwnerMs": {
+            "count": 6,
+            "median": 15.983583499999895,
+            "mean": 15.925798500000079,
+            "p95": 18.40625,
+            "min": 13.97033300000021,
+            "max": 18.40625
+          },
+          "allForkBytesPerRun": {
+            "count": 6,
+            "median": 30813194.0,
+            "mean": 30813194,
+            "p95": 30813194,
+            "min": 30813194,
+            "max": 30813194
+          },
+          "messageBytesPerRun": {
+            "count": 6,
+            "median": 15824824.0,
+            "mean": 15824824,
+            "p95": 15824824,
+            "min": 15824824,
+            "max": 15824824
+          },
+          "fullReadMs": {
+            "count": 6,
+            "median": 12.003374500000007,
+            "mean": 12.723562333333348,
+            "p95": 14.90870899999993,
+            "min": 11.766875000000027,
+            "max": 14.90870899999993
+          },
+          "recentPageMs": {
+            "count": 6,
+            "median": 16.207978999999966,
+            "mean": 16.41205549999997,
+            "p95": 17.83854199999996,
+            "min": 15.887916000000018,
+            "max": 17.83854199999996
+          },
+          "allPagesMs": {
+            "count": 6,
+            "median": 15.992083499999978,
+            "mean": 16.08317366666667,
+            "p95": 16.673791999999935,
+            "min": 15.664582999999993,
+            "max": 16.673791999999935
+          },
+          "legacyFirstPageMs": {
+            "count": 6,
+            "median": 8.341958500000032,
+            "mean": 8.509326500000023,
+            "p95": 9.153374999999983,
+            "min": 8.123583000000053,
+            "max": 9.153374999999983
+          }
+        },
+        "current-legacy-json": {
+          "messageOwnerMs": {
+            "count": 402,
+            "median": 15.861437499999738,
+            "mean": 16.67003141542288,
+            "p95": 22.914165999999568,
+            "min": 12.689749999999549,
+            "max": 37.00562499999978
+          },
+          "messageRepositorySaveMs": {
+            "count": 402,
+            "median": 13.42247899999984,
+            "mean": 14.025466398009938,
+            "p95": 18.16558299999997,
+            "min": 10.605208999999377,
+            "max": 34.69133299999976
+          },
+          "allForkCommitOwnerMs": {
+            "count": 654,
+            "median": 16.76535399999966,
+            "mean": 17.680272944954122,
+            "p95": 24.036667000000307,
+            "min": 12.689749999999549,
+            "max": 37.00562499999978
+          },
+          "promptOwnerMs": {
+            "count": 48,
+            "median": 16.20252049999999,
+            "mean": 16.591890583333264,
+            "p95": 21.036082999999962,
+            "min": 13.646499999999833,
+            "max": 24.362874999999804
+          },
+          "admissionOwnerMs": {
+            "count": 48,
+            "median": 20.683188000000428,
+            "mean": 21.452558208333375,
+            "p95": 29.74041599999964,
+            "min": 15.61004099999991,
+            "max": 32.63770799999929
+          },
+          "terminalOwnerMs": {
+            "count": 48,
+            "median": 19.83687500000042,
+            "mean": 19.991640625000002,
+            "p95": 25.615874999999505,
+            "min": 15.204625000000306,
+            "max": 27.672375000000102
+          },
+          "importedTitleOwnerMs": {
+            "count": 6,
+            "median": 17.095708000000286,
+            "mean": 17.96256933333355,
+            "p95": 24.530958000000282,
+            "min": 15.522459000000708,
+            "max": 24.530958000000282
+          },
+          "allForkBytesPerRun": {
+            "count": 6,
+            "median": 30813194.0,
+            "mean": 30813194,
+            "p95": 30813194,
+            "min": 30813194,
+            "max": 30813194
+          },
+          "messageBytesPerRun": {
+            "count": 6,
+            "median": 15824824.0,
+            "mean": 15824824,
+            "p95": 15824824,
+            "min": 15824824,
+            "max": 15824824
+          },
+          "fullReadMs": {
+            "count": 6,
+            "median": 12.491895499999998,
+            "mean": 12.558978833333319,
+            "p95": 13.149415999999974,
+            "min": 12.132833000000005,
+            "max": 13.149415999999974
+          },
+          "recentPageMs": {
+            "count": 6,
+            "median": 12.971479499999987,
+            "mean": 12.90208316666667,
+            "p95": 13.04929100000004,
+            "min": 12.615583000000015,
+            "max": 13.04929100000004
+          },
+          "allPagesMs": {
+            "count": 6,
+            "median": 13.65587499999998,
+            "mean": 13.532784666666677,
+            "p95": 14.086625000000026,
+            "min": 12.785208000000011,
+            "max": 14.086625000000026
+          },
+          "legacyFirstPageMs": {
+            "count": 6,
+            "median": 8.999979000000053,
+            "mean": 9.147854166666718,
+            "p95": 9.64545800000019,
+            "min": 8.860291999999959,
+            "max": 9.64545800000019
+          }
+        },
+        "current-jsonl": {
+          "messageOwnerMs": {
+            "count": 402,
+            "median": 10.987812499999563,
+            "mean": 11.561567286069634,
+            "p95": 15.930999999999585,
+            "min": 8.774124999999913,
+            "max": 21.3272079999997
+          },
+          "messageRepositorySaveMs": {
+            "count": 402,
+            "median": 9.16491649999989,
+            "mean": 9.531373860696556,
+            "p95": 12.175749999999425,
+            "min": 7.3720839999996315,
+            "max": 15.739790999999968
+          },
+          "allForkCommitOwnerMs": {
+            "count": 654,
+            "median": 12.049542000000201,
+            "mean": 12.863319314984695,
+            "p95": 19.440832999999657,
+            "min": 8.774124999999913,
+            "max": 28.51116699999966
+          },
+          "promptOwnerMs": {
+            "count": 48,
+            "median": 13.94793750000008,
+            "mean": 14.1254504166666,
+            "p95": 17.257416000000376,
+            "min": 10.708875000000262,
+            "max": 20.54754099999991
+          },
+          "admissionOwnerMs": {
+            "count": 48,
+            "median": 16.9739169999998,
+            "mean": 17.88895739583336,
+            "p95": 25.121125000000575,
+            "min": 12.065207999999984,
+            "max": 28.51116699999966
+          },
+          "terminalOwnerMs": {
+            "count": 48,
+            "median": 16.656291499999952,
+            "mean": 16.890625833333274,
+            "p95": 21.628083000000515,
+            "min": 11.70587499999965,
+            "max": 22.7632909999993
+          },
+          "importedTitleOwnerMs": {
+            "count": 6,
+            "median": 15.38183300000037,
+            "mean": 15.751604166666917,
+            "p95": 19.59320800000023,
+            "min": 12.64575000000059,
+            "max": 19.59320800000023
+          },
+          "allForkBytesPerRun": {
+            "count": 6,
+            "median": 1103340.0,
+            "mean": 1103340,
+            "p95": 1103340,
+            "min": 1103340,
+            "max": 1103340
+          },
+          "messageBytesPerRun": {
+            "count": 6,
+            "median": 442510.0,
+            "mean": 442510,
+            "p95": 442510,
+            "min": 442510,
+            "max": 442510
+          },
+          "fullReadMs": {
+            "count": 6,
+            "median": 25.770749999999964,
+            "mean": 26.48017383333333,
+            "p95": 28.636708999999996,
+            "min": 24.823624999999993,
+            "max": 28.636708999999996
+          },
+          "recentPageMs": {
+            "count": 6,
+            "median": 3.7779579999999555,
+            "mean": 3.836957833333315,
+            "p95": 4.065291000000002,
+            "min": 3.749708000000055,
+            "max": 4.065291000000002
+          },
+          "allPagesMs": {
+            "count": 6,
+            "median": 3.7868960000000698,
+            "mean": 3.7948403333333354,
+            "p95": 3.9279999999999973,
+            "min": 3.6966249999999263,
+            "max": 3.9279999999999973
+          },
+          "legacyFirstPageMs": {
+            "count": 6,
+            "median": 8.990125000000091,
+            "mean": 9.187937500000032,
+            "p95": 10.1183749999999,
+            "min": 8.867791000000011,
+            "max": 10.1183749999999
+          }
+        }
+      },
+      "percentChangeVsOriginalJson": {
+        "current-legacy-json": {
+          "messageOwnerMs": -0.8670503251647754,
+          "messageRepositorySaveMs": 0.13832875600980898,
+          "fullReadMs": 4.0698638537020715,
+          "recentPageMs": -19.96855684474903,
+          "allPagesMs": -14.608531152304206,
+          "legacyFirstPageMs": 7.888081677702163,
+          "messageBytesPerRun": 0.0,
+          "allForkBytesPerRun": 0.0
+        },
+        "current-jsonl": {
+          "messageOwnerMs": -31.326888650603067,
+          "messageRepositorySaveMs": -31.625192224299337,
+          "fullReadMs": 114.69587573061185,
+          "recentPageMs": -76.69075212893623,
+          "allPagesMs": -76.32018367087645,
+          "legacyFirstPageMs": 7.7699559402034435,
+          "messageBytesPerRun": -97.20369717855945,
+          "allForkBytesPerRun": -96.41926117753323
+        }
+      }
+    },
+    {
+      "id": "rainfall",
+      "variants": {
+        "original-json": {
+          "messageOwnerMs": {
+            "count": 348,
+            "median": 32.70360349999919,
+            "mean": 35.574170149425335,
+            "p95": 55.38287499999933,
+            "min": 29.896958999999697,
+            "max": 71.27150000000256
+          },
+          "messageRepositorySaveMs": {
+            "count": 348,
+            "median": 22.02124999999978,
+            "mean": 23.793627862068917,
+            "p95": 35.52570799999921,
+            "min": 19.98516699999891,
+            "max": 44.27008300000307
+          },
+          "allForkCommitOwnerMs": {
+            "count": 1410,
+            "median": 45.45770850000008,
+            "mean": 47.217602378723385,
+            "p95": 65.95899999999892,
+            "min": 22.663499999999658,
+            "max": 119.0151249999999
+          },
+          "promptOwnerMs": {
+            "count": 42,
+            "median": 28.8413129999999,
+            "mean": 31.119472309523687,
+            "p95": 39.90904199999932,
+            "min": 22.663499999999658,
+            "max": 58.68120799999997
+          },
+          "admissionOwnerMs": {
+            "count": 42,
+            "median": 48.5316670000002,
+            "mean": 53.217932547618865,
+            "p95": 72.5575829999998,
+            "min": 36.89866599999914,
+            "max": 119.0151249999999
+          },
+          "terminalOwnerMs": {
+            "count": 42,
+            "median": 50.03093749999971,
+            "mean": 48.07223719047614,
+            "p95": 66.898416,
+            "min": 31.899457999999868,
+            "max": 72.56816699999763
+          },
+          "importedTitleOwnerMs": {
+            "count": 6,
+            "median": 27.430895500000133,
+            "mean": 27.383451333333596,
+            "p95": 28.94775000000027,
+            "min": 25.497041000000536,
+            "max": 28.94775000000027
+          },
+          "allForkBytesPerRun": {
+            "count": 6,
+            "median": 268226388.0,
+            "mean": 268226388,
+            "p95": 268226388,
+            "min": 268226388,
+            "max": 268226388
+          },
+          "messageBytesPerRun": {
+            "count": 6,
+            "median": 43409135.0,
+            "mean": 43409135,
+            "p95": 43409135,
+            "min": 43409135,
+            "max": 43409135
+          },
+          "fullReadMs": {
+            "count": 6,
+            "median": 33.665395500000045,
+            "mean": 35.27694416666666,
+            "p95": 45.51016699999991,
+            "min": 31.647624999999948,
+            "max": 45.51016699999991
+          },
+          "recentPageMs": {
+            "count": 6,
+            "median": 32.089916500000015,
+            "mean": 32.285506999999974,
+            "p95": 34.0698329999999,
+            "min": 31.629749999999945,
+            "max": 34.0698329999999
+          },
+          "allPagesMs": {
+            "count": 6,
+            "median": 38.70716599999997,
+            "mean": 38.3470275,
+            "p95": 40.14795800000002,
+            "min": 35.685333000000014,
+            "max": 40.14795800000002
+          },
+          "legacyFirstPageMs": {
+            "count": 6,
+            "median": 19.5270625,
+            "mean": 19.53484716666668,
+            "p95": 19.81058299999995,
+            "min": 19.260999999999967,
+            "max": 19.81058299999995
+          }
+        },
+        "current-legacy-json": {
+          "messageOwnerMs": {
+            "count": 348,
+            "median": 30.88316649999979,
+            "mean": 33.405679497126386,
+            "p95": 49.07179199999882,
+            "min": 27.89704199999869,
+            "max": 65.2855410000011
+          },
+          "messageRepositorySaveMs": {
+            "count": 348,
+            "median": 22.307645999999295,
+            "mean": 23.885986112068984,
+            "p95": 33.799708000000464,
+            "min": 19.749958000000333,
+            "max": 46.17595799999981
+          },
+          "allForkCommitOwnerMs": {
+            "count": 1410,
+            "median": 40.911166500000036,
+            "mean": 42.796978780851056,
+            "p95": 59.19541599999866,
+            "min": 22.298749999999927,
+            "max": 80.8296250000003
+          },
+          "promptOwnerMs": {
+            "count": 42,
+            "median": 27.878958500000408,
+            "mean": 29.802411642857155,
+            "p95": 37.70766700000058,
+            "min": 22.298749999999927,
+            "max": 37.89287499999955
+          },
+          "admissionOwnerMs": {
+            "count": 42,
+            "median": 47.61566649999986,
+            "mean": 52.281561523809245,
+            "p95": 67.44816599999831,
+            "min": 36.83833400000003,
+            "max": 69.50104200000169
+          },
+          "terminalOwnerMs": {
+            "count": 42,
+            "median": 44.90918749999946,
+            "mean": 44.64600690476185,
+            "p95": 63.7098330000008,
+            "min": 28.426041999999143,
+            "max": 66.20133300000089
+          },
+          "importedTitleOwnerMs": {
+            "count": 6,
+            "median": 30.3274164999998,
+            "mean": 30.598687166666576,
+            "p95": 32.697040999999444,
+            "min": 29.402375000000575,
+            "max": 32.697040999999444
+          },
+          "allForkBytesPerRun": {
+            "count": 6,
+            "median": 268226388.0,
+            "mean": 268226388,
+            "p95": 268226388,
+            "min": 268226388,
+            "max": 268226388
+          },
+          "messageBytesPerRun": {
+            "count": 6,
+            "median": 43409135.0,
+            "mean": 43409135,
+            "p95": 43409135,
+            "min": 43409135,
+            "max": 43409135
+          },
+          "fullReadMs": {
+            "count": 6,
+            "median": 34.455375000000004,
+            "mean": 34.28420133333331,
+            "p95": 37.379790999999955,
+            "min": 32.036749999999984,
+            "max": 37.379790999999955
+          },
+          "recentPageMs": {
+            "count": 6,
+            "median": 33.05252100000001,
+            "mean": 33.12491666666665,
+            "p95": 33.736749999999915,
+            "min": 32.724541000000045,
+            "max": 33.736749999999915
+          },
+          "allPagesMs": {
+            "count": 6,
+            "median": 33.203979000000004,
+            "mean": 33.624611000000016,
+            "p95": 36.849334,
+            "min": 32.520083,
+            "max": 36.849334
+          },
+          "legacyFirstPageMs": {
+            "count": 6,
+            "median": 18.481312000000003,
+            "mean": 19.32738166666663,
+            "p95": 21.833375000000046,
+            "min": 18.104249999999865,
+            "max": 21.833375000000046
+          }
+        },
+        "current-jsonl": {
+          "messageOwnerMs": {
+            "count": 348,
+            "median": 21.959395500000028,
+            "mean": 23.92716225574712,
+            "p95": 37.80620799999997,
+            "min": 19.91120899999987,
+            "max": 46.11462500000016
+          },
+          "messageRepositorySaveMs": {
+            "count": 348,
+            "median": 15.131583500000488,
+            "mean": 16.292189054597717,
+            "p95": 24.63249999999971,
+            "min": 13.525375000000167,
+            "max": 32.19258300000001
+          },
+          "allForkCommitOwnerMs": {
+            "count": 1410,
+            "median": 29.918979499999296,
+            "mean": 31.26477230638298,
+            "p95": 41.673541000000114,
+            "min": 19.91120899999987,
+            "max": 67.10220800000025
+          },
+          "promptOwnerMs": {
+            "count": 42,
+            "median": 28.60241649999989,
+            "mean": 30.80728473809525,
+            "p95": 41.64624999999978,
+            "min": 22.477708999999777,
+            "max": 45.49995800000033
+          },
+          "admissionOwnerMs": {
+            "count": 42,
+            "median": 43.42670850000013,
+            "mean": 46.86998319047613,
+            "p95": 63.420874999999796,
+            "min": 34.183334000000286,
+            "max": 67.10220800000025
+          },
+          "terminalOwnerMs": {
+            "count": 42,
+            "median": 43.51745899999878,
+            "mean": 43.1720624761905,
+            "p95": 60.47308400000111,
+            "min": 27.76116700000057,
+            "max": 61.633334000000104
+          },
+          "importedTitleOwnerMs": {
+            "count": 6,
+            "median": 32.19687500000009,
+            "mean": 32.70020150000013,
+            "p95": 35.785124999999425,
+            "min": 31.080792000000656,
+            "max": 35.785124999999425
+          },
+          "allForkBytesPerRun": {
+            "count": 6,
+            "median": 6406047.0,
+            "mean": 6406047,
+            "p95": 6406047,
+            "min": 6406047,
+            "max": 6406047
+          },
+          "messageBytesPerRun": {
+            "count": 6,
+            "median": 445340.0,
+            "mean": 445340,
+            "p95": 445340,
+            "min": 445340,
+            "max": 445340
+          },
+          "fullReadMs": {
+            "count": 6,
+            "median": 81.26466650000003,
+            "mean": 82.53161116666666,
+            "p95": 87.62079199999994,
+            "min": 79.92012499999998,
+            "max": 87.62079199999994
+          },
+          "recentPageMs": {
+            "count": 6,
+            "median": 3.4704790000000685,
+            "mean": 3.5578054999999913,
+            "p95": 3.9974589999999353,
+            "min": 3.3613749999999527,
+            "max": 3.9974589999999353
+          },
+          "allPagesMs": {
+            "count": 6,
+            "median": 9.873770999999977,
+            "mean": 9.897020833333329,
+            "p95": 10.181790999999976,
+            "min": 9.736250000000041,
+            "max": 10.181790999999976
+          },
+          "legacyFirstPageMs": {
+            "count": 6,
+            "median": 20.497771,
+            "mean": 20.46979166666665,
+            "p95": 20.86012500000004,
+            "min": 20.16199999999992,
+            "max": 20.86012500000004
+          }
+        }
+      },
+      "percentChangeVsOriginalJson": {
+        "current-legacy-json": {
+          "messageOwnerMs": -5.566472208481388,
+          "messageRepositorySaveMs": 1.3005437929250796,
+          "fullReadMs": 2.346562362530258,
+          "recentPageMs": 2.9997102049174718,
+          "allPagesMs": -14.217488823645663,
+          "legacyFirstPageMs": -5.355390755778022,
+          "messageBytesPerRun": 0.0,
+          "allForkBytesPerRun": 0.0
+        },
+        "current-jsonl": {
+          "messageOwnerMs": -32.85328480697679,
+          "messageRepositorySaveMs": -31.28644604642953,
+          "fullReadMs": 141.38931176376622,
+          "recentPageMs": -89.18514169396462,
+          "allPagesMs": -74.49110327529537,
+          "legacyFirstPageMs": 4.9710933224083265,
+          "messageBytesPerRun": -98.97408690590126,
+          "allForkBytesPerRun": -97.61170142588655
+        }
+      }
+    }
+  ],
+  "canonicalAndSqlDigestComparisons": [
+    {
+      "id": "investment",
+      "stage": "imported",
+      "canonicalDigest": "b8419b348d7e6407e425775c754239d832a1a841e8e5c682f403b6266806da35",
+      "sqliteDigest": "e563c4d464ae7585a0806186257fe4ecdcb0e84ca89402432334a50535d57190",
+      "allTimedRunsMatch": true,
+      "runCount": 18
+    },
+    {
+      "id": "investment",
+      "stage": "fork",
+      "canonicalDigest": "b4e6177ceb25daa5e8052c6787bb72ae881e751e75260f088d60b53f2b656ab0",
+      "sqliteDigest": "7656cbaa5052d8c434969c6ef68f644d527dfd336ce8b5abf2442b87f3b709cf",
+      "allTimedRunsMatch": true,
+      "runCount": 18
+    },
+    {
+      "id": "molecular",
+      "stage": "imported",
+      "canonicalDigest": "e59ad3d5aaaec4519a7be8e0a0e15c10b2b99b6d48633d06df8239dd99f062e2",
+      "sqliteDigest": "99875d52d6c0b1c86efc4c5f12cfa02c3ddc8fd8d806a355ebf76e7a5013d6b0",
+      "allTimedRunsMatch": true,
+      "runCount": 18
+    },
+    {
+      "id": "molecular",
+      "stage": "fork",
+      "canonicalDigest": "cc43c0903e6f668528c2cc2f18d2f8d4762168016939a9be8eb7886f853cbd70",
+      "sqliteDigest": "9260da716c5b9669e12ab6e9fdab34e0ee4bb4f35ec83fe374310e4a210dc36e",
+      "allTimedRunsMatch": true,
+      "runCount": 18
+    },
+    {
+      "id": "rainfall",
+      "stage": "imported",
+      "canonicalDigest": "42e92824889ed1252da65e8299dca6a3193c3595b6a073564ca967b5c0711aee",
+      "sqliteDigest": "03a570a8f3ef11c71979c615647e61e10daac704055ef51058096d5f24bdcb6f",
+      "allTimedRunsMatch": true,
+      "runCount": 18
+    },
+    {
+      "id": "rainfall",
+      "stage": "fork",
+      "canonicalDigest": "71096002e962d1d2166274da2c749096a4c2307cdce9e9b30032fde88f2d1e1d",
+      "sqliteDigest": "99bc160cb790fed8bc02b71a5ff5b8a766bc036af529f34151f58cb396b3c1a4",
+      "allTimedRunsMatch": true,
+      "runCount": 18
+    }
+  ],
+  "physicalFormatChecks": [
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 1,
+      "id": "investment",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-15Uzdk",
+      "format": "json",
+      "bytes": 316200,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 1,
+      "id": "investment",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-15Uzdk",
+      "format": "json",
+      "bytes": 1138592,
+      "revision": 137,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 1,
+      "id": "molecular",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-qbcJm4",
+      "format": "json",
+      "bytes": 237534,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 1,
+      "id": "molecular",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-qbcJm4",
+      "format": "json",
+      "bytes": 531684,
+      "revision": 111,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 1,
+      "id": "rainfall",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-N5G4Ue",
+      "format": "json",
+      "bytes": 806922,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 1,
+      "id": "rainfall",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-N5G4Ue",
+      "format": "json",
+      "bytes": 1833081,
+      "revision": 237,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 1,
+      "id": "investment",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-9zpJct",
+      "format": "json",
+      "bytes": 316200,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 1,
+      "id": "investment",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-9zpJct",
+      "format": "json",
+      "bytes": 1138592,
+      "revision": 137,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 1,
+      "id": "molecular",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-2ucngd",
+      "format": "json",
+      "bytes": 237534,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 1,
+      "id": "molecular",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-2ucngd",
+      "format": "json",
+      "bytes": 531684,
+      "revision": 111,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 1,
+      "id": "rainfall",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-mYRzgU",
+      "format": "json",
+      "bytes": 806922,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 1,
+      "id": "rainfall",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-mYRzgU",
+      "format": "json",
+      "bytes": 1833081,
+      "revision": 237,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 1,
+      "id": "investment",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-pHxpeF",
+      "format": "journal",
+      "bytes": 264389,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 1,
+      "id": "investment",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-pHxpeF",
+      "format": "journal",
+      "bytes": 3013337,
+      "revision": 137,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 1,
+      "id": "molecular",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-LrB9c0",
+      "format": "journal",
+      "bytes": 202298,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 1,
+      "id": "molecular",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-LrB9c0",
+      "format": "journal",
+      "bytes": 1187281,
+      "revision": 111,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 1,
+      "id": "rainfall",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-mBCQsy",
+      "format": "journal",
+      "bytes": 653962,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 1,
+      "id": "rainfall",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-mBCQsy",
+      "format": "journal",
+      "bytes": 6855834,
+      "revision": 237,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 2,
+      "id": "investment",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-HR9ms6",
+      "format": "json",
+      "bytes": 316200,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 2,
+      "id": "investment",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-HR9ms6",
+      "format": "json",
+      "bytes": 1138592,
+      "revision": 137,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 2,
+      "id": "molecular",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-OfYV6o",
+      "format": "json",
+      "bytes": 237534,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 2,
+      "id": "molecular",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-OfYV6o",
+      "format": "json",
+      "bytes": 531684,
+      "revision": 111,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 2,
+      "id": "rainfall",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-kCPCoq",
+      "format": "json",
+      "bytes": 806922,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 2,
+      "id": "rainfall",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-kCPCoq",
+      "format": "json",
+      "bytes": 1833081,
+      "revision": 237,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 2,
+      "id": "investment",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-4IpSJO",
+      "format": "journal",
+      "bytes": 264389,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 2,
+      "id": "investment",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-4IpSJO",
+      "format": "journal",
+      "bytes": 3013337,
+      "revision": 137,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 2,
+      "id": "molecular",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-zqW0jy",
+      "format": "journal",
+      "bytes": 202298,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 2,
+      "id": "molecular",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-zqW0jy",
+      "format": "journal",
+      "bytes": 1187281,
+      "revision": 111,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 2,
+      "id": "rainfall",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-El97LD",
+      "format": "journal",
+      "bytes": 653962,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 2,
+      "id": "rainfall",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-El97LD",
+      "format": "journal",
+      "bytes": 6855834,
+      "revision": 237,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 2,
+      "id": "investment",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-9gNGjG",
+      "format": "json",
+      "bytes": 316200,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 2,
+      "id": "investment",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-9gNGjG",
+      "format": "json",
+      "bytes": 1138592,
+      "revision": 137,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 2,
+      "id": "molecular",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-ABw9sb",
+      "format": "json",
+      "bytes": 237534,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 2,
+      "id": "molecular",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-ABw9sb",
+      "format": "json",
+      "bytes": 531684,
+      "revision": 111,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 2,
+      "id": "rainfall",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-UGCEeB",
+      "format": "json",
+      "bytes": 806922,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 2,
+      "id": "rainfall",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-UGCEeB",
+      "format": "json",
+      "bytes": 1833081,
+      "revision": 237,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 3,
+      "id": "investment",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-HPI4tR",
+      "format": "journal",
+      "bytes": 264389,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 3,
+      "id": "investment",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-HPI4tR",
+      "format": "journal",
+      "bytes": 3013337,
+      "revision": 137,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 3,
+      "id": "molecular",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-h8nl27",
+      "format": "journal",
+      "bytes": 202298,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 3,
+      "id": "molecular",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-h8nl27",
+      "format": "journal",
+      "bytes": 1187281,
+      "revision": 111,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 3,
+      "id": "rainfall",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-mAwWZZ",
+      "format": "journal",
+      "bytes": 653962,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 3,
+      "id": "rainfall",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-mAwWZZ",
+      "format": "journal",
+      "bytes": 6855834,
+      "revision": 237,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 3,
+      "id": "investment",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-rZ7LKI",
+      "format": "json",
+      "bytes": 316200,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 3,
+      "id": "investment",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-rZ7LKI",
+      "format": "json",
+      "bytes": 1138592,
+      "revision": 137,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 3,
+      "id": "molecular",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-hpCI0G",
+      "format": "json",
+      "bytes": 237534,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 3,
+      "id": "molecular",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-hpCI0G",
+      "format": "json",
+      "bytes": 531684,
+      "revision": 111,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 3,
+      "id": "rainfall",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-9HzdGR",
+      "format": "json",
+      "bytes": 806922,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 3,
+      "id": "rainfall",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-9HzdGR",
+      "format": "json",
+      "bytes": 1833081,
+      "revision": 237,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 3,
+      "id": "investment",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-ZDIloa",
+      "format": "json",
+      "bytes": 316200,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 3,
+      "id": "investment",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-ZDIloa",
+      "format": "json",
+      "bytes": 1138592,
+      "revision": 137,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 3,
+      "id": "molecular",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-7IMKLK",
+      "format": "json",
+      "bytes": 237534,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 3,
+      "id": "molecular",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-7IMKLK",
+      "format": "json",
+      "bytes": 531684,
+      "revision": 111,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 3,
+      "id": "rainfall",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-ATK7bV",
+      "format": "json",
+      "bytes": 806922,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 3,
+      "id": "rainfall",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-ATK7bV",
+      "format": "json",
+      "bytes": 1833081,
+      "revision": 237,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 4,
+      "id": "investment",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-LfNRy9",
+      "format": "json",
+      "bytes": 316200,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 4,
+      "id": "investment",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-LfNRy9",
+      "format": "json",
+      "bytes": 1138592,
+      "revision": 137,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 4,
+      "id": "molecular",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-ObodhX",
+      "format": "json",
+      "bytes": 237534,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 4,
+      "id": "molecular",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-ObodhX",
+      "format": "json",
+      "bytes": 531684,
+      "revision": 111,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 4,
+      "id": "rainfall",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-ZvWMtj",
+      "format": "json",
+      "bytes": 806922,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 4,
+      "id": "rainfall",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-ZvWMtj",
+      "format": "json",
+      "bytes": 1833081,
+      "revision": 237,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 4,
+      "id": "investment",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-rBEJUE",
+      "format": "json",
+      "bytes": 316200,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 4,
+      "id": "investment",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-rBEJUE",
+      "format": "json",
+      "bytes": 1138592,
+      "revision": 137,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 4,
+      "id": "molecular",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-gbqlmB",
+      "format": "json",
+      "bytes": 237534,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 4,
+      "id": "molecular",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-gbqlmB",
+      "format": "json",
+      "bytes": 531684,
+      "revision": 111,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 4,
+      "id": "rainfall",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-XSZTuD",
+      "format": "json",
+      "bytes": 806922,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 4,
+      "id": "rainfall",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-XSZTuD",
+      "format": "json",
+      "bytes": 1833081,
+      "revision": 237,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 4,
+      "id": "investment",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-hPcMOr",
+      "format": "journal",
+      "bytes": 264389,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 4,
+      "id": "investment",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-hPcMOr",
+      "format": "journal",
+      "bytes": 3013337,
+      "revision": 137,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 4,
+      "id": "molecular",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-BNqDw3",
+      "format": "journal",
+      "bytes": 202298,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 4,
+      "id": "molecular",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-BNqDw3",
+      "format": "journal",
+      "bytes": 1187281,
+      "revision": 111,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 4,
+      "id": "rainfall",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-XgqpNA",
+      "format": "journal",
+      "bytes": 653962,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 4,
+      "id": "rainfall",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-XgqpNA",
+      "format": "journal",
+      "bytes": 6855834,
+      "revision": 237,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 5,
+      "id": "investment",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-L3xkS7",
+      "format": "json",
+      "bytes": 316200,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 5,
+      "id": "investment",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-L3xkS7",
+      "format": "json",
+      "bytes": 1138592,
+      "revision": 137,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 5,
+      "id": "molecular",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-qEea80",
+      "format": "json",
+      "bytes": 237534,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 5,
+      "id": "molecular",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-qEea80",
+      "format": "json",
+      "bytes": 531684,
+      "revision": 111,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 5,
+      "id": "rainfall",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-vE6Fc7",
+      "format": "json",
+      "bytes": 806922,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 5,
+      "id": "rainfall",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-vE6Fc7",
+      "format": "json",
+      "bytes": 1833081,
+      "revision": 237,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 5,
+      "id": "investment",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-hEgPKv",
+      "format": "journal",
+      "bytes": 264389,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 5,
+      "id": "investment",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-hEgPKv",
+      "format": "journal",
+      "bytes": 3013337,
+      "revision": 137,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 5,
+      "id": "molecular",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-uc9tl1",
+      "format": "journal",
+      "bytes": 202298,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 5,
+      "id": "molecular",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-uc9tl1",
+      "format": "journal",
+      "bytes": 1187281,
+      "revision": 111,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 5,
+      "id": "rainfall",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-PPs5Y7",
+      "format": "journal",
+      "bytes": 653962,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 5,
+      "id": "rainfall",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-PPs5Y7",
+      "format": "journal",
+      "bytes": 6855834,
+      "revision": 237,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 5,
+      "id": "investment",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-CWZkWM",
+      "format": "json",
+      "bytes": 316200,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 5,
+      "id": "investment",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-CWZkWM",
+      "format": "json",
+      "bytes": 1138592,
+      "revision": 137,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 5,
+      "id": "molecular",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-C761SD",
+      "format": "json",
+      "bytes": 237534,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 5,
+      "id": "molecular",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-C761SD",
+      "format": "json",
+      "bytes": 531684,
+      "revision": 111,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 5,
+      "id": "rainfall",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-yaf30o",
+      "format": "json",
+      "bytes": 806922,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 5,
+      "id": "rainfall",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-yaf30o",
+      "format": "json",
+      "bytes": 1833081,
+      "revision": 237,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 6,
+      "id": "investment",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-yl9miO",
+      "format": "journal",
+      "bytes": 264389,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 6,
+      "id": "investment",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-yl9miO",
+      "format": "journal",
+      "bytes": 3013337,
+      "revision": 137,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 6,
+      "id": "molecular",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-skQsag",
+      "format": "journal",
+      "bytes": 202298,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 6,
+      "id": "molecular",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-skQsag",
+      "format": "journal",
+      "bytes": 1187281,
+      "revision": 111,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 6,
+      "id": "rainfall",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-XLSZKl",
+      "format": "journal",
+      "bytes": 653962,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-jsonl",
+      "repeat": 6,
+      "id": "rainfall",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-XLSZKl",
+      "format": "journal",
+      "bytes": 6855834,
+      "revision": 237,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 6,
+      "id": "investment",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-yPoNeB",
+      "format": "json",
+      "bytes": 316200,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 6,
+      "id": "investment",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-yPoNeB",
+      "format": "json",
+      "bytes": 1138592,
+      "revision": 137,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 6,
+      "id": "molecular",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-Kt8hOr",
+      "format": "json",
+      "bytes": 237534,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 6,
+      "id": "molecular",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-Kt8hOr",
+      "format": "json",
+      "bytes": 531684,
+      "revision": 111,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 6,
+      "id": "rainfall",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-JG7inO",
+      "format": "json",
+      "bytes": 806922,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "original-json",
+      "repeat": 6,
+      "id": "rainfall",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-JG7inO",
+      "format": "json",
+      "bytes": 1833081,
+      "revision": 237,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 6,
+      "id": "investment",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-SfchTo",
+      "format": "json",
+      "bytes": 316200,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 6,
+      "id": "investment",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-SfchTo",
+      "format": "json",
+      "bytes": 1138592,
+      "revision": 137,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 6,
+      "id": "molecular",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-Q0ShQ5",
+      "format": "json",
+      "bytes": 237534,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 6,
+      "id": "molecular",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-Q0ShQ5",
+      "format": "json",
+      "bytes": 531684,
+      "revision": 111,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 6,
+      "id": "rainfall",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-f2un0Y",
+      "format": "json",
+      "bytes": 806922,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "timed",
+      "variant": "current-legacy-json",
+      "repeat": 6,
+      "id": "rainfall",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-f2un0Y",
+      "format": "json",
+      "bytes": 1833081,
+      "revision": 237,
+      "matched": true
+    },
+    {
+      "group": "probe",
+      "variant": "original-json",
+      "repeat": 1,
+      "id": "investment",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-4PcWTJ",
+      "format": "json",
+      "bytes": 316200,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "probe",
+      "variant": "original-json",
+      "repeat": 1,
+      "id": "investment",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-4PcWTJ",
+      "format": "json",
+      "bytes": 252753,
+      "revision": 7,
+      "matched": true
+    },
+    {
+      "group": "probe",
+      "variant": "original-json",
+      "repeat": 1,
+      "id": "molecular",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-IFjtwM",
+      "format": "json",
+      "bytes": 237534,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "probe",
+      "variant": "original-json",
+      "repeat": 1,
+      "id": "molecular",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-IFjtwM",
+      "format": "json",
+      "bytes": 111061,
+      "revision": 7,
+      "matched": true
+    },
+    {
+      "group": "probe",
+      "variant": "original-json",
+      "repeat": 1,
+      "id": "rainfall",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-pKoN81",
+      "format": "json",
+      "bytes": 806922,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "probe",
+      "variant": "original-json",
+      "repeat": 1,
+      "id": "rainfall",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-pKoN81",
+      "format": "json",
+      "bytes": 580204,
+      "revision": 7,
+      "matched": true
+    },
+    {
+      "group": "probe",
+      "variant": "current-legacy-json",
+      "repeat": 1,
+      "id": "investment",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-JU3kj3",
+      "format": "json",
+      "bytes": 316200,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "probe",
+      "variant": "current-legacy-json",
+      "repeat": 1,
+      "id": "investment",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-JU3kj3",
+      "format": "json",
+      "bytes": 252753,
+      "revision": 7,
+      "matched": true
+    },
+    {
+      "group": "probe",
+      "variant": "current-legacy-json",
+      "repeat": 1,
+      "id": "molecular",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-L73HBD",
+      "format": "json",
+      "bytes": 237534,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "probe",
+      "variant": "current-legacy-json",
+      "repeat": 1,
+      "id": "molecular",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-L73HBD",
+      "format": "json",
+      "bytes": 111061,
+      "revision": 7,
+      "matched": true
+    },
+    {
+      "group": "probe",
+      "variant": "current-legacy-json",
+      "repeat": 1,
+      "id": "rainfall",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-yd2HJC",
+      "format": "json",
+      "bytes": 806922,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "probe",
+      "variant": "current-legacy-json",
+      "repeat": 1,
+      "id": "rainfall",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-yd2HJC",
+      "format": "json",
+      "bytes": 580204,
+      "revision": 7,
+      "matched": true
+    },
+    {
+      "group": "probe",
+      "variant": "current-jsonl",
+      "repeat": 1,
+      "id": "investment",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-IY9FjW",
+      "format": "journal",
+      "bytes": 264389,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "probe",
+      "variant": "current-jsonl",
+      "repeat": 1,
+      "id": "investment",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-IY9FjW",
+      "format": "journal",
+      "bytes": 257387,
+      "revision": 7,
+      "matched": true
+    },
+    {
+      "group": "probe",
+      "variant": "current-jsonl",
+      "repeat": 1,
+      "id": "molecular",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-7UgJr7",
+      "format": "journal",
+      "bytes": 202298,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "probe",
+      "variant": "current-jsonl",
+      "repeat": 1,
+      "id": "molecular",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-7UgJr7",
+      "format": "journal",
+      "bytes": 117282,
+      "revision": 7,
+      "matched": true
+    },
+    {
+      "group": "probe",
+      "variant": "current-jsonl",
+      "repeat": 1,
+      "id": "rainfall",
+      "stage": "imported",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-A7WxCY",
+      "format": "journal",
+      "bytes": 653962,
+      "revision": 3,
+      "matched": true
+    },
+    {
+      "group": "probe",
+      "variant": "current-jsonl",
+      "repeat": 1,
+      "id": "rainfall",
+      "stage": "fork",
+      "root": "/var/folders/bl/dw3nqpm50kqb5yjgx97k6q900000gn/T/open-science-runtime-run-A7WxCY",
+      "format": "journal",
+      "bytes": 490707,
+      "revision": 7,
+      "matched": true
+    }
+  ],
+  "physicalFormatCheckCount": 126,
+  "allPhysicalFormatsAndLegacyZeroIndexVerified": true,
+  "checks": [
+    {
+      "path": "measuredSaveCount",
+      "actual": 8676,
+      "expected": 8676
+    },
+    {
+      "path": "measuredFreshFullReadCount",
+      "actual": 108,
+      "expected": 108
+    },
+    {
+      "path": "measuredPageOperationCount",
+      "actual": 162,
+      "expected": 162
+    },
+    {
+      "path": "measuredDisplayPageOperationCount",
+      "actual": 72,
+      "expected": 72
+    },
+    {
+      "path": "measuredCompleteLegacyReadCount",
+      "actual": 90,
+      "expected": 90
+    },
+    {
+      "path": "untimedProbeCases",
+      "actual": 9,
+      "expected": 9
+    },
+    {
+      "path": "investment/original-json/messageOwnerMs/count",
+      "actual": 330,
+      "expected": 330
+    },
+    {
+      "path": "investment/original-json/messageOwnerMs/median",
+      "actual": 21.733291500000064,
+      "expected": 21.733291500000064
+    },
+    {
+      "path": "investment/original-json/messageOwnerMs/mean",
+      "actual": 23.688950381818195,
+      "expected": 23.688950381818206
+    },
+    {
+      "path": "investment/original-json/messageOwnerMs/p95",
+      "actual": 39.19787499999984,
+      "expected": 39.19787499999984
+    },
+    {
+      "path": "investment/original-json/messageOwnerMs/min",
+      "actual": 18.982124999999996,
+      "expected": 18.982124999999996
+    },
+    {
+      "path": "investment/original-json/messageOwnerMs/max",
+      "actual": 47.45733400000063,
+      "expected": 47.45733400000063
+    },
+    {
+      "path": "investment/original-json/messageRepositorySaveMs/count",
+      "actual": 330,
+      "expected": 330
+    },
+    {
+      "path": "investment/original-json/messageRepositorySaveMs/median",
+      "actual": 16.229562500000043,
+      "expected": 16.229562500000043
+    },
+    {
+      "path": "investment/original-json/messageRepositorySaveMs/mean",
+      "actual": 17.539939015151514,
+      "expected": 17.539939015151496
+    },
+    {
+      "path": "investment/original-json/messageRepositorySaveMs/p95",
+      "actual": 27.233666000000085,
+      "expected": 27.233666000000085
+    },
+    {
+      "path": "investment/original-json/messageRepositorySaveMs/min",
+      "actual": 14.04537500000015,
+      "expected": 14.04537500000015
+    },
+    {
+      "path": "investment/original-json/messageRepositorySaveMs/max",
+      "actual": 34.26324999999997,
+      "expected": 34.26324999999997
+    },
+    {
+      "path": "investment/original-json/allForkCommitOwnerMs/count",
+      "actual": 810,
+      "expected": 810
+    },
+    {
+      "path": "investment/original-json/allForkCommitOwnerMs/median",
+      "actual": 27.618832999999995,
+      "expected": 27.618832999999995
+    },
+    {
+      "path": "investment/original-json/allForkCommitOwnerMs/mean",
+      "actual": 30.055395503703707,
+      "expected": 30.05539550370374
+    },
+    {
+      "path": "investment/original-json/allForkCommitOwnerMs/p95",
+      "actual": 46.00116600000001,
+      "expected": 46.00116600000001
+    },
+    {
+      "path": "investment/original-json/allForkCommitOwnerMs/min",
+      "actual": 18.678457999999864,
+      "expected": 18.678457999999864
+    },
+    {
+      "path": "investment/original-json/allForkCommitOwnerMs/max",
+      "actual": 57.56233299999985,
+      "expected": 57.56233299999985
+    },
+    {
+      "path": "investment/original-json/promptOwnerMs/count",
+      "actual": 48,
+      "expected": 48
+    },
+    {
+      "path": "investment/original-json/promptOwnerMs/median",
+      "actual": 24.26741650000008,
+      "expected": 24.26741650000008
+    },
+    {
+      "path": "investment/original-json/promptOwnerMs/mean",
+      "actual": 24.737976541666644,
+      "expected": 24.737976541666644
+    },
+    {
+      "path": "investment/original-json/promptOwnerMs/p95",
+      "actual": 34.39925000000039,
+      "expected": 34.39925000000039
+    },
+    {
+      "path": "investment/original-json/promptOwnerMs/min",
+      "actual": 18.678457999999864,
+      "expected": 18.678457999999864
+    },
+    {
+      "path": "investment/original-json/promptOwnerMs/max",
+      "actual": 35.32549999999992,
+      "expected": 35.32549999999992
+    },
+    {
+      "path": "investment/original-json/admissionOwnerMs/count",
+      "actual": 48,
+      "expected": 48
+    },
+    {
+      "path": "investment/original-json/admissionOwnerMs/median",
+      "actual": 37.30829149999977,
+      "expected": 37.30829149999977
+    },
+    {
+      "path": "investment/original-json/admissionOwnerMs/mean",
+      "actual": 38.6169027083333,
+      "expected": 38.6169027083333
+    },
+    {
+      "path": "investment/original-json/admissionOwnerMs/p95",
+      "actual": 52.40912500000013,
+      "expected": 52.40912500000013
+    },
+    {
+      "path": "investment/original-json/admissionOwnerMs/min",
+      "actual": 25.732124999999996,
+      "expected": 25.732124999999996
+    },
+    {
+      "path": "investment/original-json/admissionOwnerMs/max",
+      "actual": 57.56233299999985,
+      "expected": 57.56233299999985
+    },
+    {
+      "path": "investment/original-json/terminalOwnerMs/count",
+      "actual": 48,
+      "expected": 48
+    },
+    {
+      "path": "investment/original-json/terminalOwnerMs/median",
+      "actual": 35.984499499999856,
+      "expected": 35.984499499999856
+    },
+    {
+      "path": "investment/original-json/terminalOwnerMs/mean",
+      "actual": 35.226006041666615,
+      "expected": 35.226006041666615
+    },
+    {
+      "path": "investment/original-json/terminalOwnerMs/p95",
+      "actual": 47.58675000000039,
+      "expected": 47.58675000000039
+    },
+    {
+      "path": "investment/original-json/terminalOwnerMs/min",
+      "actual": 22.496999999999844,
+      "expected": 22.496999999999844
+    },
+    {
+      "path": "investment/original-json/terminalOwnerMs/max",
+      "actual": 47.76291599999968,
+      "expected": 47.76291599999968
+    },
+    {
+      "path": "investment/original-json/importedTitleOwnerMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "investment/original-json/importedTitleOwnerMs/median",
+      "actual": 29.747187499999995,
+      "expected": 29.747187499999995
+    },
+    {
+      "path": "investment/original-json/importedTitleOwnerMs/mean",
+      "actual": 29.68133316666668,
+      "expected": 29.68133316666668
+    },
+    {
+      "path": "investment/original-json/importedTitleOwnerMs/p95",
+      "actual": 33.64045799999997,
+      "expected": 33.64045799999997
+    },
+    {
+      "path": "investment/original-json/importedTitleOwnerMs/min",
+      "actual": 25.774166000000037,
+      "expected": 25.774166000000037
+    },
+    {
+      "path": "investment/original-json/importedTitleOwnerMs/max",
+      "actual": 33.64045799999997,
+      "expected": 33.64045799999997
+    },
+    {
+      "path": "investment/original-json/allForkBytesPerRun/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "investment/original-json/allForkBytesPerRun/median",
+      "actual": 79356619.0,
+      "expected": 79356619
+    },
+    {
+      "path": "investment/original-json/allForkBytesPerRun/mean",
+      "actual": 79356619,
+      "expected": 79356619
+    },
+    {
+      "path": "investment/original-json/allForkBytesPerRun/p95",
+      "actual": 79356619,
+      "expected": 79356619
+    },
+    {
+      "path": "investment/original-json/allForkBytesPerRun/min",
+      "actual": 79356619,
+      "expected": 79356619
+    },
+    {
+      "path": "investment/original-json/allForkBytesPerRun/max",
+      "actual": 79356619,
+      "expected": 79356619
+    },
+    {
+      "path": "investment/original-json/messageBytesPerRun/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "investment/original-json/messageBytesPerRun/median",
+      "actual": 20881985.0,
+      "expected": 20881985
+    },
+    {
+      "path": "investment/original-json/messageBytesPerRun/mean",
+      "actual": 20881985,
+      "expected": 20881985
+    },
+    {
+      "path": "investment/original-json/messageBytesPerRun/p95",
+      "actual": 20881985,
+      "expected": 20881985
+    },
+    {
+      "path": "investment/original-json/messageBytesPerRun/min",
+      "actual": 20881985,
+      "expected": 20881985
+    },
+    {
+      "path": "investment/original-json/messageBytesPerRun/max",
+      "actual": 20881985,
+      "expected": 20881985
+    },
+    {
+      "path": "investment/original-json/fullReadMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "investment/original-json/fullReadMs/median",
+      "actual": 25.65258349999999,
+      "expected": 25.65258349999999
+    },
+    {
+      "path": "investment/original-json/fullReadMs/mean",
+      "actual": 26.09779850000001,
+      "expected": 26.09779850000001
+    },
+    {
+      "path": "investment/original-json/fullReadMs/p95",
+      "actual": 27.356958000000077,
+      "expected": 27.356958000000077
+    },
+    {
+      "path": "investment/original-json/fullReadMs/min",
+      "actual": 25.299582999999984,
+      "expected": 25.299582999999984
+    },
+    {
+      "path": "investment/original-json/fullReadMs/max",
+      "actual": 27.356958000000077,
+      "expected": 27.356958000000077
+    },
+    {
+      "path": "investment/original-json/recentPageMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "investment/original-json/recentPageMs/median",
+      "actual": 25.343249999999955,
+      "expected": 25.343249999999955
+    },
+    {
+      "path": "investment/original-json/recentPageMs/mean",
+      "actual": 26.406229166666645,
+      "expected": 26.406229166666645
+    },
+    {
+      "path": "investment/original-json/recentPageMs/p95",
+      "actual": 31.473416999999927,
+      "expected": 31.473416999999927
+    },
+    {
+      "path": "investment/original-json/recentPageMs/min",
+      "actual": 24.029833000000053,
+      "expected": 24.029833000000053
+    },
+    {
+      "path": "investment/original-json/recentPageMs/max",
+      "actual": 31.473416999999927,
+      "expected": 31.473416999999927
+    },
+    {
+      "path": "investment/original-json/allPagesMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "investment/original-json/allPagesMs/median",
+      "actual": 28.671479000000033,
+      "expected": 28.671479000000033
+    },
+    {
+      "path": "investment/original-json/allPagesMs/mean",
+      "actual": 30.830875166666676,
+      "expected": 30.830875166666676
+    },
+    {
+      "path": "investment/original-json/allPagesMs/p95",
+      "actual": 42.30058400000007,
+      "expected": 42.30058400000007
+    },
+    {
+      "path": "investment/original-json/allPagesMs/min",
+      "actual": 27.876916999999935,
+      "expected": 27.876916999999935
+    },
+    {
+      "path": "investment/original-json/allPagesMs/max",
+      "actual": 42.30058400000007,
+      "expected": 42.30058400000007
+    },
+    {
+      "path": "investment/original-json/legacyFirstPageMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "investment/original-json/legacyFirstPageMs/median",
+      "actual": 14.270291500000042,
+      "expected": 14.270291500000042
+    },
+    {
+      "path": "investment/original-json/legacyFirstPageMs/mean",
+      "actual": 14.421971999999982,
+      "expected": 14.421971999999982
+    },
+    {
+      "path": "investment/original-json/legacyFirstPageMs/p95",
+      "actual": 15.798499999999876,
+      "expected": 15.798499999999876
+    },
+    {
+      "path": "investment/original-json/legacyFirstPageMs/min",
+      "actual": 12.855833000000075,
+      "expected": 12.855833000000075
+    },
+    {
+      "path": "investment/original-json/legacyFirstPageMs/max",
+      "actual": 15.798499999999876,
+      "expected": 15.798499999999876
+    },
+    {
+      "path": "investment/current-legacy-json/messageOwnerMs/count",
+      "actual": 330,
+      "expected": 330
+    },
+    {
+      "path": "investment/current-legacy-json/messageOwnerMs/median",
+      "actual": 20.942416999999978,
+      "expected": 20.942416999999978
+    },
+    {
+      "path": "investment/current-legacy-json/messageOwnerMs/mean",
+      "actual": 22.452392048484857,
+      "expected": 22.45239204848486
+    },
+    {
+      "path": "investment/current-legacy-json/messageOwnerMs/p95",
+      "actual": 34.64375000000018,
+      "expected": 34.64375000000018
+    },
+    {
+      "path": "investment/current-legacy-json/messageOwnerMs/min",
+      "actual": 18.02108300000009,
+      "expected": 18.02108300000009
+    },
+    {
+      "path": "investment/current-legacy-json/messageOwnerMs/max",
+      "actual": 47.37525000000005,
+      "expected": 47.37525000000005
+    },
+    {
+      "path": "investment/current-legacy-json/messageRepositorySaveMs/count",
+      "actual": 330,
+      "expected": 330
+    },
+    {
+      "path": "investment/current-legacy-json/messageRepositorySaveMs/median",
+      "actual": 16.32106250000004,
+      "expected": 16.32106250000004
+    },
+    {
+      "path": "investment/current-legacy-json/messageRepositorySaveMs/mean",
+      "actual": 17.27850084545455,
+      "expected": 17.278500845454555
+    },
+    {
+      "path": "investment/current-legacy-json/messageRepositorySaveMs/p95",
+      "actual": 24.8706659999998,
+      "expected": 24.8706659999998
+    },
+    {
+      "path": "investment/current-legacy-json/messageRepositorySaveMs/min",
+      "actual": 13.588624999999865,
+      "expected": 13.588624999999865
+    },
+    {
+      "path": "investment/current-legacy-json/messageRepositorySaveMs/max",
+      "actual": 35.24341600000025,
+      "expected": 35.24341600000025
+    },
+    {
+      "path": "investment/current-legacy-json/allForkCommitOwnerMs/count",
+      "actual": 810,
+      "expected": 810
+    },
+    {
+      "path": "investment/current-legacy-json/allForkCommitOwnerMs/median",
+      "actual": 26.280771000000186,
+      "expected": 26.280771000000186
+    },
+    {
+      "path": "investment/current-legacy-json/allForkCommitOwnerMs/mean",
+      "actual": 28.14774670740741,
+      "expected": 28.14774670740742
+    },
+    {
+      "path": "investment/current-legacy-json/allForkCommitOwnerMs/p95",
+      "actual": 41.521999999999935,
+      "expected": 41.521999999999935
+    },
+    {
+      "path": "investment/current-legacy-json/allForkCommitOwnerMs/min",
+      "actual": 17.449541999999838,
+      "expected": 17.449541999999838
+    },
+    {
+      "path": "investment/current-legacy-json/allForkCommitOwnerMs/max",
+      "actual": 54.535499999999956,
+      "expected": 54.535499999999956
+    },
+    {
+      "path": "investment/current-legacy-json/promptOwnerMs/count",
+      "actual": 48,
+      "expected": 48
+    },
+    {
+      "path": "investment/current-legacy-json/promptOwnerMs/median",
+      "actual": 23.315395500000022,
+      "expected": 23.315395500000022
+    },
+    {
+      "path": "investment/current-legacy-json/promptOwnerMs/mean",
+      "actual": 24.377667479166643,
+      "expected": 24.377667479166643
+    },
+    {
+      "path": "investment/current-legacy-json/promptOwnerMs/p95",
+      "actual": 31.476584000000003,
+      "expected": 31.476584000000003
+    },
+    {
+      "path": "investment/current-legacy-json/promptOwnerMs/min",
+      "actual": 17.449541999999838,
+      "expected": 17.449541999999838
+    },
+    {
+      "path": "investment/current-legacy-json/promptOwnerMs/max",
+      "actual": 48.36212500000056,
+      "expected": 48.36212500000056
+    },
+    {
+      "path": "investment/current-legacy-json/admissionOwnerMs/count",
+      "actual": 48,
+      "expected": 48
+    },
+    {
+      "path": "investment/current-legacy-json/admissionOwnerMs/median",
+      "actual": 37.75847899999985,
+      "expected": 37.75847899999985
+    },
+    {
+      "path": "investment/current-legacy-json/admissionOwnerMs/mean",
+      "actual": 38.546694437500044,
+      "expected": 38.546694437500044
+    },
+    {
+      "path": "investment/current-legacy-json/admissionOwnerMs/p95",
+      "actual": 53.3310419999998,
+      "expected": 53.3310419999998
+    },
+    {
+      "path": "investment/current-legacy-json/admissionOwnerMs/min",
+      "actual": 25.33725000000004,
+      "expected": 25.33725000000004
+    },
+    {
+      "path": "investment/current-legacy-json/admissionOwnerMs/max",
+      "actual": 54.535499999999956,
+      "expected": 54.535499999999956
+    },
+    {
+      "path": "investment/current-legacy-json/terminalOwnerMs/count",
+      "actual": 48,
+      "expected": 48
+    },
+    {
+      "path": "investment/current-legacy-json/terminalOwnerMs/median",
+      "actual": 32.80358299999989,
+      "expected": 32.80358299999989
+    },
+    {
+      "path": "investment/current-legacy-json/terminalOwnerMs/mean",
+      "actual": 32.84015622916663,
+      "expected": 32.84015622916663
+    },
+    {
+      "path": "investment/current-legacy-json/terminalOwnerMs/p95",
+      "actual": 42.79933299999993,
+      "expected": 42.79933299999993
+    },
+    {
+      "path": "investment/current-legacy-json/terminalOwnerMs/min",
+      "actual": 21.18229099999985,
+      "expected": 21.18229099999985
+    },
+    {
+      "path": "investment/current-legacy-json/terminalOwnerMs/max",
+      "actual": 46.27466699999968,
+      "expected": 46.27466699999968
+    },
+    {
+      "path": "investment/current-legacy-json/importedTitleOwnerMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "investment/current-legacy-json/importedTitleOwnerMs/median",
+      "actual": 31.002875000000017,
+      "expected": 31.002875000000017
+    },
+    {
+      "path": "investment/current-legacy-json/importedTitleOwnerMs/mean",
+      "actual": 30.646395833333354,
+      "expected": 30.646395833333354
+    },
+    {
+      "path": "investment/current-legacy-json/importedTitleOwnerMs/p95",
+      "actual": 33.28733399999999,
+      "expected": 33.28733399999999
+    },
+    {
+      "path": "investment/current-legacy-json/importedTitleOwnerMs/min",
+      "actual": 27.256875000000036,
+      "expected": 27.256875000000036
+    },
+    {
+      "path": "investment/current-legacy-json/importedTitleOwnerMs/max",
+      "actual": 33.28733399999999,
+      "expected": 33.28733399999999
+    },
+    {
+      "path": "investment/current-legacy-json/allForkBytesPerRun/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "investment/current-legacy-json/allForkBytesPerRun/median",
+      "actual": 79356619.0,
+      "expected": 79356619
+    },
+    {
+      "path": "investment/current-legacy-json/allForkBytesPerRun/mean",
+      "actual": 79356619,
+      "expected": 79356619
+    },
+    {
+      "path": "investment/current-legacy-json/allForkBytesPerRun/p95",
+      "actual": 79356619,
+      "expected": 79356619
+    },
+    {
+      "path": "investment/current-legacy-json/allForkBytesPerRun/min",
+      "actual": 79356619,
+      "expected": 79356619
+    },
+    {
+      "path": "investment/current-legacy-json/allForkBytesPerRun/max",
+      "actual": 79356619,
+      "expected": 79356619
+    },
+    {
+      "path": "investment/current-legacy-json/messageBytesPerRun/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "investment/current-legacy-json/messageBytesPerRun/median",
+      "actual": 20881985.0,
+      "expected": 20881985
+    },
+    {
+      "path": "investment/current-legacy-json/messageBytesPerRun/mean",
+      "actual": 20881985,
+      "expected": 20881985
+    },
+    {
+      "path": "investment/current-legacy-json/messageBytesPerRun/p95",
+      "actual": 20881985,
+      "expected": 20881985
+    },
+    {
+      "path": "investment/current-legacy-json/messageBytesPerRun/min",
+      "actual": 20881985,
+      "expected": 20881985
+    },
+    {
+      "path": "investment/current-legacy-json/messageBytesPerRun/max",
+      "actual": 20881985,
+      "expected": 20881985
+    },
+    {
+      "path": "investment/current-legacy-json/fullReadMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "investment/current-legacy-json/fullReadMs/median",
+      "actual": 26.16691700000007,
+      "expected": 26.16691700000007
+    },
+    {
+      "path": "investment/current-legacy-json/fullReadMs/mean",
+      "actual": 26.680729333333357,
+      "expected": 26.680729333333357
+    },
+    {
+      "path": "investment/current-legacy-json/fullReadMs/p95",
+      "actual": 30.188125000000014,
+      "expected": 30.188125000000014
+    },
+    {
+      "path": "investment/current-legacy-json/fullReadMs/min",
+      "actual": 24.57725000000005,
+      "expected": 24.57725000000005
+    },
+    {
+      "path": "investment/current-legacy-json/fullReadMs/max",
+      "actual": 30.188125000000014,
+      "expected": 30.188125000000014
+    },
+    {
+      "path": "investment/current-legacy-json/recentPageMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "investment/current-legacy-json/recentPageMs/median",
+      "actual": 25.49199950000002,
+      "expected": 25.49199950000002
+    },
+    {
+      "path": "investment/current-legacy-json/recentPageMs/mean",
+      "actual": 25.781965000000014,
+      "expected": 25.781965000000014
+    },
+    {
+      "path": "investment/current-legacy-json/recentPageMs/p95",
+      "actual": 28.431166000000076,
+      "expected": 28.431166000000076
+    },
+    {
+      "path": "investment/current-legacy-json/recentPageMs/min",
+      "actual": 24.501708000000008,
+      "expected": 24.501708000000008
+    },
+    {
+      "path": "investment/current-legacy-json/recentPageMs/max",
+      "actual": 28.431166000000076,
+      "expected": 28.431166000000076
+    },
+    {
+      "path": "investment/current-legacy-json/allPagesMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "investment/current-legacy-json/allPagesMs/median",
+      "actual": 26.048395500000026,
+      "expected": 26.048395500000026
+    },
+    {
+      "path": "investment/current-legacy-json/allPagesMs/mean",
+      "actual": 26.52885416666665,
+      "expected": 26.52885416666665
+    },
+    {
+      "path": "investment/current-legacy-json/allPagesMs/p95",
+      "actual": 29.855500000000006,
+      "expected": 29.855500000000006
+    },
+    {
+      "path": "investment/current-legacy-json/allPagesMs/min",
+      "actual": 24.481457999999975,
+      "expected": 24.481457999999975
+    },
+    {
+      "path": "investment/current-legacy-json/allPagesMs/max",
+      "actual": 29.855500000000006,
+      "expected": 29.855500000000006
+    },
+    {
+      "path": "investment/current-legacy-json/legacyFirstPageMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "investment/current-legacy-json/legacyFirstPageMs/median",
+      "actual": 14.698249499999918,
+      "expected": 14.698249499999918
+    },
+    {
+      "path": "investment/current-legacy-json/legacyFirstPageMs/mean",
+      "actual": 14.99350649999993,
+      "expected": 14.99350649999993
+    },
+    {
+      "path": "investment/current-legacy-json/legacyFirstPageMs/p95",
+      "actual": 17.82095800000002,
+      "expected": 17.82095800000002
+    },
+    {
+      "path": "investment/current-legacy-json/legacyFirstPageMs/min",
+      "actual": 13.142582999999945,
+      "expected": 13.142582999999945
+    },
+    {
+      "path": "investment/current-legacy-json/legacyFirstPageMs/max",
+      "actual": 17.82095800000002,
+      "expected": 17.82095800000002
+    },
+    {
+      "path": "investment/current-jsonl/messageOwnerMs/count",
+      "actual": 330,
+      "expected": 330
+    },
+    {
+      "path": "investment/current-jsonl/messageOwnerMs/median",
+      "actual": 15.948792000000026,
+      "expected": 15.948792000000026
+    },
+    {
+      "path": "investment/current-jsonl/messageOwnerMs/mean",
+      "actual": 16.829320848484844,
+      "expected": 16.829320848484855
+    },
+    {
+      "path": "investment/current-jsonl/messageOwnerMs/p95",
+      "actual": 25.642499999999927,
+      "expected": 25.642499999999927
+    },
+    {
+      "path": "investment/current-jsonl/messageOwnerMs/min",
+      "actual": 13.545374999999922,
+      "expected": 13.545374999999922
+    },
+    {
+      "path": "investment/current-jsonl/messageOwnerMs/max",
+      "actual": 32.167207999999846,
+      "expected": 32.167207999999846
+    },
+    {
+      "path": "investment/current-jsonl/messageRepositorySaveMs/count",
+      "actual": 330,
+      "expected": 330
+    },
+    {
+      "path": "investment/current-jsonl/messageRepositorySaveMs/median",
+      "actual": 11.849458499999969,
+      "expected": 11.849458499999969
+    },
+    {
+      "path": "investment/current-jsonl/messageRepositorySaveMs/mean",
+      "actual": 12.459495566666673,
+      "expected": 12.459495566666677
+    },
+    {
+      "path": "investment/current-jsonl/messageRepositorySaveMs/p95",
+      "actual": 17.111707999999908,
+      "expected": 17.111707999999908
+    },
+    {
+      "path": "investment/current-jsonl/messageRepositorySaveMs/min",
+      "actual": 10.237290999999914,
+      "expected": 10.237290999999914
+    },
+    {
+      "path": "investment/current-jsonl/messageRepositorySaveMs/max",
+      "actual": 21.632958000000144,
+      "expected": 21.632958000000144
+    },
+    {
+      "path": "investment/current-jsonl/allForkCommitOwnerMs/count",
+      "actual": 810,
+      "expected": 810
+    },
+    {
+      "path": "investment/current-jsonl/allForkCommitOwnerMs/median",
+      "actual": 19.20122900000024,
+      "expected": 19.20122900000024
+    },
+    {
+      "path": "investment/current-jsonl/allForkCommitOwnerMs/mean",
+      "actual": 21.415263777777792,
+      "expected": 21.415263777777778
+    },
+    {
+      "path": "investment/current-jsonl/allForkCommitOwnerMs/p95",
+      "actual": 34.387416999999914,
+      "expected": 34.387416999999914
+    },
+    {
+      "path": "investment/current-jsonl/allForkCommitOwnerMs/min",
+      "actual": 13.545374999999922,
+      "expected": 13.545374999999922
+    },
+    {
+      "path": "investment/current-jsonl/allForkCommitOwnerMs/max",
+      "actual": 47.18754100000024,
+      "expected": 47.18754100000024
+    },
+    {
+      "path": "investment/current-jsonl/promptOwnerMs/count",
+      "actual": 48,
+      "expected": 48
+    },
+    {
+      "path": "investment/current-jsonl/promptOwnerMs/median",
+      "actual": 22.632708500000035,
+      "expected": 22.632708500000035
+    },
+    {
+      "path": "investment/current-jsonl/promptOwnerMs/mean",
+      "actual": 23.134401895833395,
+      "expected": 23.134401895833395
+    },
+    {
+      "path": "investment/current-jsonl/promptOwnerMs/p95",
+      "actual": 29.738042000000405,
+      "expected": 29.738042000000405
+    },
+    {
+      "path": "investment/current-jsonl/promptOwnerMs/min",
+      "actual": 16.847999999999956,
+      "expected": 16.847999999999956
+    },
+    {
+      "path": "investment/current-jsonl/promptOwnerMs/max",
+      "actual": 30.39783299999999,
+      "expected": 30.39783299999999
+    },
+    {
+      "path": "investment/current-jsonl/admissionOwnerMs/count",
+      "actual": 48,
+      "expected": 48
+    },
+    {
+      "path": "investment/current-jsonl/admissionOwnerMs/median",
+      "actual": 32.20897900000023,
+      "expected": 32.20897900000023
+    },
+    {
+      "path": "investment/current-jsonl/admissionOwnerMs/mean",
+      "actual": 33.16249470833332,
+      "expected": 33.16249470833332
+    },
+    {
+      "path": "investment/current-jsonl/admissionOwnerMs/p95",
+      "actual": 46.51104200000009,
+      "expected": 46.51104200000009
+    },
+    {
+      "path": "investment/current-jsonl/admissionOwnerMs/min",
+      "actual": 21.033166000000165,
+      "expected": 21.033166000000165
+    },
+    {
+      "path": "investment/current-jsonl/admissionOwnerMs/max",
+      "actual": 47.18754100000024,
+      "expected": 47.18754100000024
+    },
+    {
+      "path": "investment/current-jsonl/terminalOwnerMs/count",
+      "actual": 48,
+      "expected": 48
+    },
+    {
+      "path": "investment/current-jsonl/terminalOwnerMs/median",
+      "actual": 31.287395500000002,
+      "expected": 31.287395500000002
+    },
+    {
+      "path": "investment/current-jsonl/terminalOwnerMs/mean",
+      "actual": 30.899715250000114,
+      "expected": 30.899715250000114
+    },
+    {
+      "path": "investment/current-jsonl/terminalOwnerMs/p95",
+      "actual": 41.767125000000306,
+      "expected": 41.767125000000306
+    },
+    {
+      "path": "investment/current-jsonl/terminalOwnerMs/min",
+      "actual": 20.085665999999947,
+      "expected": 20.085665999999947
+    },
+    {
+      "path": "investment/current-jsonl/terminalOwnerMs/max",
+      "actual": 42.426290999999765,
+      "expected": 42.426290999999765
+    },
+    {
+      "path": "investment/current-jsonl/importedTitleOwnerMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "investment/current-jsonl/importedTitleOwnerMs/median",
+      "actual": 29.28791650000005,
+      "expected": 29.28791650000005
+    },
+    {
+      "path": "investment/current-jsonl/importedTitleOwnerMs/mean",
+      "actual": 29.714180500000055,
+      "expected": 29.714180500000055
+    },
+    {
+      "path": "investment/current-jsonl/importedTitleOwnerMs/p95",
+      "actual": 33.55150000000003,
+      "expected": 33.55150000000003
+    },
+    {
+      "path": "investment/current-jsonl/importedTitleOwnerMs/min",
+      "actual": 26.170042000000194,
+      "expected": 26.170042000000194
+    },
+    {
+      "path": "investment/current-jsonl/importedTitleOwnerMs/max",
+      "actual": 33.55150000000003,
+      "expected": 33.55150000000003
+    },
+    {
+      "path": "investment/current-jsonl/allForkBytesPerRun/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "investment/current-jsonl/allForkBytesPerRun/median",
+      "actual": 2820275.0,
+      "expected": 2820275
+    },
+    {
+      "path": "investment/current-jsonl/allForkBytesPerRun/mean",
+      "actual": 2820275,
+      "expected": 2820275
+    },
+    {
+      "path": "investment/current-jsonl/allForkBytesPerRun/p95",
+      "actual": 2820275,
+      "expected": 2820275
+    },
+    {
+      "path": "investment/current-jsonl/allForkBytesPerRun/min",
+      "actual": 2820275,
+      "expected": 2820275
+    },
+    {
+      "path": "investment/current-jsonl/allForkBytesPerRun/max",
+      "actual": 2820275,
+      "expected": 2820275
+    },
+    {
+      "path": "investment/current-jsonl/messageBytesPerRun/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "investment/current-jsonl/messageBytesPerRun/median",
+      "actual": 674278.0,
+      "expected": 674278
+    },
+    {
+      "path": "investment/current-jsonl/messageBytesPerRun/mean",
+      "actual": 674278,
+      "expected": 674278
+    },
+    {
+      "path": "investment/current-jsonl/messageBytesPerRun/p95",
+      "actual": 674278,
+      "expected": 674278
+    },
+    {
+      "path": "investment/current-jsonl/messageBytesPerRun/min",
+      "actual": 674278,
+      "expected": 674278
+    },
+    {
+      "path": "investment/current-jsonl/messageBytesPerRun/max",
+      "actual": 674278,
+      "expected": 674278
+    },
+    {
+      "path": "investment/current-jsonl/fullReadMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "investment/current-jsonl/fullReadMs/median",
+      "actual": 51.06174999999996,
+      "expected": 51.06174999999996
+    },
+    {
+      "path": "investment/current-jsonl/fullReadMs/mean",
+      "actual": 50.26188183333335,
+      "expected": 50.26188183333335
+    },
+    {
+      "path": "investment/current-jsonl/fullReadMs/p95",
+      "actual": 51.530125,
+      "expected": 51.530125
+    },
+    {
+      "path": "investment/current-jsonl/fullReadMs/min",
+      "actual": 48.095541000000026,
+      "expected": 48.095541000000026
+    },
+    {
+      "path": "investment/current-jsonl/fullReadMs/max",
+      "actual": 51.530125,
+      "expected": 51.530125
+    },
+    {
+      "path": "investment/current-jsonl/recentPageMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "investment/current-jsonl/recentPageMs/median",
+      "actual": 3.7198960000000056,
+      "expected": 3.7198960000000056
+    },
+    {
+      "path": "investment/current-jsonl/recentPageMs/mean",
+      "actual": 3.7273890000000165,
+      "expected": 3.7273890000000165
+    },
+    {
+      "path": "investment/current-jsonl/recentPageMs/p95",
+      "actual": 3.8084170000000768,
+      "expected": 3.8084170000000768
+    },
+    {
+      "path": "investment/current-jsonl/recentPageMs/min",
+      "actual": 3.6656249999999773,
+      "expected": 3.6656249999999773
+    },
+    {
+      "path": "investment/current-jsonl/recentPageMs/max",
+      "actual": 3.8084170000000768,
+      "expected": 3.8084170000000768
+    },
+    {
+      "path": "investment/current-jsonl/allPagesMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "investment/current-jsonl/allPagesMs/median",
+      "actual": 5.758958500000006,
+      "expected": 5.758958500000006
+    },
+    {
+      "path": "investment/current-jsonl/allPagesMs/mean",
+      "actual": 5.743194499999959,
+      "expected": 5.743194499999959
+    },
+    {
+      "path": "investment/current-jsonl/allPagesMs/p95",
+      "actual": 5.8537919999999986,
+      "expected": 5.8537919999999986
+    },
+    {
+      "path": "investment/current-jsonl/allPagesMs/min",
+      "actual": 5.643499999999904,
+      "expected": 5.643499999999904
+    },
+    {
+      "path": "investment/current-jsonl/allPagesMs/max",
+      "actual": 5.8537919999999986,
+      "expected": 5.8537919999999986
+    },
+    {
+      "path": "investment/current-jsonl/legacyFirstPageMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "investment/current-jsonl/legacyFirstPageMs/median",
+      "actual": 16.613687999999968,
+      "expected": 16.613687999999968
+    },
+    {
+      "path": "investment/current-jsonl/legacyFirstPageMs/mean",
+      "actual": 16.565777999999984,
+      "expected": 16.565777999999984
+    },
+    {
+      "path": "investment/current-jsonl/legacyFirstPageMs/p95",
+      "actual": 17.842292000000043,
+      "expected": 17.842292000000043
+    },
+    {
+      "path": "investment/current-jsonl/legacyFirstPageMs/min",
+      "actual": 15.240499999999884,
+      "expected": 15.240499999999884
+    },
+    {
+      "path": "investment/current-jsonl/legacyFirstPageMs/max",
+      "actual": 17.842292000000043,
+      "expected": 17.842292000000043
+    },
+    {
+      "path": "investment/current-legacy-json/percent/messageOwnerMs",
+      "actual": -3.639000102676959,
+      "expected": -3.639000102676959
+    },
+    {
+      "path": "investment/current-legacy-json/percent/messageRepositorySaveMs",
+      "actual": 0.5637859923826927,
+      "expected": 0.5637859923826927
+    },
+    {
+      "path": "investment/current-legacy-json/percent/fullReadMs",
+      "actual": 2.004996884622079,
+      "expected": 2.004996884622079
+    },
+    {
+      "path": "investment/current-legacy-json/percent/recentPageMs",
+      "actual": 0.5869393230941711,
+      "expected": 0.5869393230941711
+    },
+    {
+      "path": "investment/current-legacy-json/percent/allPagesMs",
+      "actual": -9.148755458342428,
+      "expected": -9.148755458342428
+    },
+    {
+      "path": "investment/current-legacy-json/percent/legacyFirstPageMs",
+      "actual": 2.998943644563079,
+      "expected": 2.998943644563079
+    },
+    {
+      "path": "investment/current-legacy-json/percent/messageBytesPerRun",
+      "actual": 0.0,
+      "expected": 0
+    },
+    {
+      "path": "investment/current-legacy-json/percent/allForkBytesPerRun",
+      "actual": 0.0,
+      "expected": 0
+    },
+    {
+      "path": "investment/current-jsonl/percent/messageOwnerMs",
+      "actual": -26.615846476821147,
+      "expected": -26.615846476821147
+    },
+    {
+      "path": "investment/current-jsonl/percent/messageRepositorySaveMs",
+      "actual": -26.988429293766004,
+      "expected": -26.988429293766004
+    },
+    {
+      "path": "investment/current-jsonl/percent/fullReadMs",
+      "actual": 99.0511014222017,
+      "expected": 99.0511014222017
+    },
+    {
+      "path": "investment/current-jsonl/percent/recentPageMs",
+      "actual": -85.32194568573482,
+      "expected": -85.32194568573482
+    },
+    {
+      "path": "investment/current-jsonl/percent/allPagesMs",
+      "actual": -79.91398176564243,
+      "expected": -79.91398176564243
+    },
+    {
+      "path": "investment/current-jsonl/percent/legacyFirstPageMs",
+      "actual": 16.421504073689874,
+      "expected": 16.421504073689874
+    },
+    {
+      "path": "investment/current-jsonl/percent/messageBytesPerRun",
+      "actual": -96.77100620463045,
+      "expected": -96.77100620463045
+    },
+    {
+      "path": "investment/current-jsonl/percent/allForkBytesPerRun",
+      "actual": -96.44607464942527,
+      "expected": -96.44607464942527
+    },
+    {
+      "path": "molecular/original-json/messageOwnerMs/count",
+      "actual": 402,
+      "expected": 402
+    },
+    {
+      "path": "molecular/original-json/messageOwnerMs/median",
+      "actual": 16.000167000000147,
+      "expected": 16.000167000000147
+    },
+    {
+      "path": "molecular/original-json/messageOwnerMs/mean",
+      "actual": 17.218731042288542,
+      "expected": 17.218731042288542
+    },
+    {
+      "path": "molecular/original-json/messageOwnerMs/p95",
+      "actual": 24.07049999999981,
+      "expected": 24.07049999999981
+    },
+    {
+      "path": "molecular/original-json/messageOwnerMs/min",
+      "actual": 13.047750000000633,
+      "expected": 13.047750000000633
+    },
+    {
+      "path": "molecular/original-json/messageOwnerMs/max",
+      "actual": 27.495874999999614,
+      "expected": 27.495874999999614
+    },
+    {
+      "path": "molecular/original-json/messageRepositorySaveMs/count",
+      "actual": 402,
+      "expected": 402
+    },
+    {
+      "path": "molecular/original-json/messageRepositorySaveMs/median",
+      "actual": 13.403937499999756,
+      "expected": 13.403937499999756
+    },
+    {
+      "path": "molecular/original-json/messageRepositorySaveMs/mean",
+      "actual": 14.105187380597,
+      "expected": 14.105187380597
+    },
+    {
+      "path": "molecular/original-json/messageRepositorySaveMs/p95",
+      "actual": 18.495874999999614,
+      "expected": 18.495874999999614
+    },
+    {
+      "path": "molecular/original-json/messageRepositorySaveMs/min",
+      "actual": 10.879291999999623,
+      "expected": 10.879291999999623
+    },
+    {
+      "path": "molecular/original-json/messageRepositorySaveMs/max",
+      "actual": 21.315708999999515,
+      "expected": 21.315708999999515
+    },
+    {
+      "path": "molecular/original-json/allForkCommitOwnerMs/count",
+      "actual": 654,
+      "expected": 654
+    },
+    {
+      "path": "molecular/original-json/allForkCommitOwnerMs/median",
+      "actual": 16.986083000000235,
+      "expected": 16.986083000000235
+    },
+    {
+      "path": "molecular/original-json/allForkCommitOwnerMs/mean",
+      "actual": 18.463110977064222,
+      "expected": 18.463110977064208
+    },
+    {
+      "path": "molecular/original-json/allForkCommitOwnerMs/p95",
+      "actual": 25.10554200000024,
+      "expected": 25.10554200000024
+    },
+    {
+      "path": "molecular/original-json/allForkCommitOwnerMs/min",
+      "actual": 12.892832999999882,
+      "expected": 12.892832999999882
+    },
+    {
+      "path": "molecular/original-json/allForkCommitOwnerMs/max",
+      "actual": 34.89904200000001,
+      "expected": 34.89904200000001
+    },
+    {
+      "path": "molecular/original-json/promptOwnerMs/count",
+      "actual": 48,
+      "expected": 48
+    },
+    {
+      "path": "molecular/original-json/promptOwnerMs/median",
+      "actual": 16.976645499999904,
+      "expected": 16.976645499999904
+    },
+    {
+      "path": "molecular/original-json/promptOwnerMs/mean",
+      "actual": 17.137798583333392,
+      "expected": 17.137798583333392
+    },
+    {
+      "path": "molecular/original-json/promptOwnerMs/p95",
+      "actual": 20.70458299999973,
+      "expected": 20.70458299999973
+    },
+    {
+      "path": "molecular/original-json/promptOwnerMs/min",
+      "actual": 12.892832999999882,
+      "expected": 12.892832999999882
+    },
+    {
+      "path": "molecular/original-json/promptOwnerMs/max",
+      "actual": 22.675459000000046,
+      "expected": 22.675459000000046
+    },
+    {
+      "path": "molecular/original-json/admissionOwnerMs/count",
+      "actual": 48,
+      "expected": 48
+    },
+    {
+      "path": "molecular/original-json/admissionOwnerMs/median",
+      "actual": 22.214958500000193,
+      "expected": 22.214958500000193
+    },
+    {
+      "path": "molecular/original-json/admissionOwnerMs/mean",
+      "actual": 22.434228249999972,
+      "expected": 22.434228249999972
+    },
+    {
+      "path": "molecular/original-json/admissionOwnerMs/p95",
+      "actual": 28.97625000000062,
+      "expected": 28.97625000000062
+    },
+    {
+      "path": "molecular/original-json/admissionOwnerMs/min",
+      "actual": 15.611665999999786,
+      "expected": 15.611665999999786
+    },
+    {
+      "path": "molecular/original-json/admissionOwnerMs/max",
+      "actual": 30.215374999999767,
+      "expected": 30.215374999999767
+    },
+    {
+      "path": "molecular/original-json/terminalOwnerMs/count",
+      "actual": 48,
+      "expected": 48
+    },
+    {
+      "path": "molecular/original-json/terminalOwnerMs/median",
+      "actual": 21.265270500000042,
+      "expected": 21.265270500000042
+    },
+    {
+      "path": "molecular/original-json/terminalOwnerMs/mean",
+      "actual": 21.32212318750004,
+      "expected": 21.32212318750004
+    },
+    {
+      "path": "molecular/original-json/terminalOwnerMs/p95",
+      "actual": 27.23454099999981,
+      "expected": 27.23454099999981
+    },
+    {
+      "path": "molecular/original-json/terminalOwnerMs/min",
+      "actual": 16.04120800000055,
+      "expected": 16.04120800000055
+    },
+    {
+      "path": "molecular/original-json/terminalOwnerMs/max",
+      "actual": 34.89904200000001,
+      "expected": 34.89904200000001
+    },
+    {
+      "path": "molecular/original-json/importedTitleOwnerMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "molecular/original-json/importedTitleOwnerMs/median",
+      "actual": 15.983583499999895,
+      "expected": 15.983583499999895
+    },
+    {
+      "path": "molecular/original-json/importedTitleOwnerMs/mean",
+      "actual": 15.925798500000079,
+      "expected": 15.925798500000079
+    },
+    {
+      "path": "molecular/original-json/importedTitleOwnerMs/p95",
+      "actual": 18.40625,
+      "expected": 18.40625
+    },
+    {
+      "path": "molecular/original-json/importedTitleOwnerMs/min",
+      "actual": 13.97033300000021,
+      "expected": 13.97033300000021
+    },
+    {
+      "path": "molecular/original-json/importedTitleOwnerMs/max",
+      "actual": 18.40625,
+      "expected": 18.40625
+    },
+    {
+      "path": "molecular/original-json/allForkBytesPerRun/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "molecular/original-json/allForkBytesPerRun/median",
+      "actual": 30813194.0,
+      "expected": 30813194
+    },
+    {
+      "path": "molecular/original-json/allForkBytesPerRun/mean",
+      "actual": 30813194,
+      "expected": 30813194
+    },
+    {
+      "path": "molecular/original-json/allForkBytesPerRun/p95",
+      "actual": 30813194,
+      "expected": 30813194
+    },
+    {
+      "path": "molecular/original-json/allForkBytesPerRun/min",
+      "actual": 30813194,
+      "expected": 30813194
+    },
+    {
+      "path": "molecular/original-json/allForkBytesPerRun/max",
+      "actual": 30813194,
+      "expected": 30813194
+    },
+    {
+      "path": "molecular/original-json/messageBytesPerRun/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "molecular/original-json/messageBytesPerRun/median",
+      "actual": 15824824.0,
+      "expected": 15824824
+    },
+    {
+      "path": "molecular/original-json/messageBytesPerRun/mean",
+      "actual": 15824824,
+      "expected": 15824824
+    },
+    {
+      "path": "molecular/original-json/messageBytesPerRun/p95",
+      "actual": 15824824,
+      "expected": 15824824
+    },
+    {
+      "path": "molecular/original-json/messageBytesPerRun/min",
+      "actual": 15824824,
+      "expected": 15824824
+    },
+    {
+      "path": "molecular/original-json/messageBytesPerRun/max",
+      "actual": 15824824,
+      "expected": 15824824
+    },
+    {
+      "path": "molecular/original-json/fullReadMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "molecular/original-json/fullReadMs/median",
+      "actual": 12.003374500000007,
+      "expected": 12.003374500000007
+    },
+    {
+      "path": "molecular/original-json/fullReadMs/mean",
+      "actual": 12.723562333333348,
+      "expected": 12.723562333333348
+    },
+    {
+      "path": "molecular/original-json/fullReadMs/p95",
+      "actual": 14.90870899999993,
+      "expected": 14.90870899999993
+    },
+    {
+      "path": "molecular/original-json/fullReadMs/min",
+      "actual": 11.766875000000027,
+      "expected": 11.766875000000027
+    },
+    {
+      "path": "molecular/original-json/fullReadMs/max",
+      "actual": 14.90870899999993,
+      "expected": 14.90870899999993
+    },
+    {
+      "path": "molecular/original-json/recentPageMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "molecular/original-json/recentPageMs/median",
+      "actual": 16.207978999999966,
+      "expected": 16.207978999999966
+    },
+    {
+      "path": "molecular/original-json/recentPageMs/mean",
+      "actual": 16.41205549999997,
+      "expected": 16.41205549999997
+    },
+    {
+      "path": "molecular/original-json/recentPageMs/p95",
+      "actual": 17.83854199999996,
+      "expected": 17.83854199999996
+    },
+    {
+      "path": "molecular/original-json/recentPageMs/min",
+      "actual": 15.887916000000018,
+      "expected": 15.887916000000018
+    },
+    {
+      "path": "molecular/original-json/recentPageMs/max",
+      "actual": 17.83854199999996,
+      "expected": 17.83854199999996
+    },
+    {
+      "path": "molecular/original-json/allPagesMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "molecular/original-json/allPagesMs/median",
+      "actual": 15.992083499999978,
+      "expected": 15.992083499999978
+    },
+    {
+      "path": "molecular/original-json/allPagesMs/mean",
+      "actual": 16.08317366666667,
+      "expected": 16.08317366666667
+    },
+    {
+      "path": "molecular/original-json/allPagesMs/p95",
+      "actual": 16.673791999999935,
+      "expected": 16.673791999999935
+    },
+    {
+      "path": "molecular/original-json/allPagesMs/min",
+      "actual": 15.664582999999993,
+      "expected": 15.664582999999993
+    },
+    {
+      "path": "molecular/original-json/allPagesMs/max",
+      "actual": 16.673791999999935,
+      "expected": 16.673791999999935
+    },
+    {
+      "path": "molecular/original-json/legacyFirstPageMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "molecular/original-json/legacyFirstPageMs/median",
+      "actual": 8.341958500000032,
+      "expected": 8.341958500000032
+    },
+    {
+      "path": "molecular/original-json/legacyFirstPageMs/mean",
+      "actual": 8.509326500000023,
+      "expected": 8.509326500000023
+    },
+    {
+      "path": "molecular/original-json/legacyFirstPageMs/p95",
+      "actual": 9.153374999999983,
+      "expected": 9.153374999999983
+    },
+    {
+      "path": "molecular/original-json/legacyFirstPageMs/min",
+      "actual": 8.123583000000053,
+      "expected": 8.123583000000053
+    },
+    {
+      "path": "molecular/original-json/legacyFirstPageMs/max",
+      "actual": 9.153374999999983,
+      "expected": 9.153374999999983
+    },
+    {
+      "path": "molecular/current-legacy-json/messageOwnerMs/count",
+      "actual": 402,
+      "expected": 402
+    },
+    {
+      "path": "molecular/current-legacy-json/messageOwnerMs/median",
+      "actual": 15.861437499999738,
+      "expected": 15.861437499999738
+    },
+    {
+      "path": "molecular/current-legacy-json/messageOwnerMs/mean",
+      "actual": 16.67003141542288,
+      "expected": 16.67003141542288
+    },
+    {
+      "path": "molecular/current-legacy-json/messageOwnerMs/p95",
+      "actual": 22.914165999999568,
+      "expected": 22.914165999999568
+    },
+    {
+      "path": "molecular/current-legacy-json/messageOwnerMs/min",
+      "actual": 12.689749999999549,
+      "expected": 12.689749999999549
+    },
+    {
+      "path": "molecular/current-legacy-json/messageOwnerMs/max",
+      "actual": 37.00562499999978,
+      "expected": 37.00562499999978
+    },
+    {
+      "path": "molecular/current-legacy-json/messageRepositorySaveMs/count",
+      "actual": 402,
+      "expected": 402
+    },
+    {
+      "path": "molecular/current-legacy-json/messageRepositorySaveMs/median",
+      "actual": 13.42247899999984,
+      "expected": 13.42247899999984
+    },
+    {
+      "path": "molecular/current-legacy-json/messageRepositorySaveMs/mean",
+      "actual": 14.025466398009938,
+      "expected": 14.025466398009938
+    },
+    {
+      "path": "molecular/current-legacy-json/messageRepositorySaveMs/p95",
+      "actual": 18.16558299999997,
+      "expected": 18.16558299999997
+    },
+    {
+      "path": "molecular/current-legacy-json/messageRepositorySaveMs/min",
+      "actual": 10.605208999999377,
+      "expected": 10.605208999999377
+    },
+    {
+      "path": "molecular/current-legacy-json/messageRepositorySaveMs/max",
+      "actual": 34.69133299999976,
+      "expected": 34.69133299999976
+    },
+    {
+      "path": "molecular/current-legacy-json/allForkCommitOwnerMs/count",
+      "actual": 654,
+      "expected": 654
+    },
+    {
+      "path": "molecular/current-legacy-json/allForkCommitOwnerMs/median",
+      "actual": 16.76535399999966,
+      "expected": 16.76535399999966
+    },
+    {
+      "path": "molecular/current-legacy-json/allForkCommitOwnerMs/mean",
+      "actual": 17.680272944954122,
+      "expected": 17.680272944954115
+    },
+    {
+      "path": "molecular/current-legacy-json/allForkCommitOwnerMs/p95",
+      "actual": 24.036667000000307,
+      "expected": 24.036667000000307
+    },
+    {
+      "path": "molecular/current-legacy-json/allForkCommitOwnerMs/min",
+      "actual": 12.689749999999549,
+      "expected": 12.689749999999549
+    },
+    {
+      "path": "molecular/current-legacy-json/allForkCommitOwnerMs/max",
+      "actual": 37.00562499999978,
+      "expected": 37.00562499999978
+    },
+    {
+      "path": "molecular/current-legacy-json/promptOwnerMs/count",
+      "actual": 48,
+      "expected": 48
+    },
+    {
+      "path": "molecular/current-legacy-json/promptOwnerMs/median",
+      "actual": 16.20252049999999,
+      "expected": 16.20252049999999
+    },
+    {
+      "path": "molecular/current-legacy-json/promptOwnerMs/mean",
+      "actual": 16.591890583333264,
+      "expected": 16.591890583333264
+    },
+    {
+      "path": "molecular/current-legacy-json/promptOwnerMs/p95",
+      "actual": 21.036082999999962,
+      "expected": 21.036082999999962
+    },
+    {
+      "path": "molecular/current-legacy-json/promptOwnerMs/min",
+      "actual": 13.646499999999833,
+      "expected": 13.646499999999833
+    },
+    {
+      "path": "molecular/current-legacy-json/promptOwnerMs/max",
+      "actual": 24.362874999999804,
+      "expected": 24.362874999999804
+    },
+    {
+      "path": "molecular/current-legacy-json/admissionOwnerMs/count",
+      "actual": 48,
+      "expected": 48
+    },
+    {
+      "path": "molecular/current-legacy-json/admissionOwnerMs/median",
+      "actual": 20.683188000000428,
+      "expected": 20.683188000000428
+    },
+    {
+      "path": "molecular/current-legacy-json/admissionOwnerMs/mean",
+      "actual": 21.452558208333375,
+      "expected": 21.452558208333375
+    },
+    {
+      "path": "molecular/current-legacy-json/admissionOwnerMs/p95",
+      "actual": 29.74041599999964,
+      "expected": 29.74041599999964
+    },
+    {
+      "path": "molecular/current-legacy-json/admissionOwnerMs/min",
+      "actual": 15.61004099999991,
+      "expected": 15.61004099999991
+    },
+    {
+      "path": "molecular/current-legacy-json/admissionOwnerMs/max",
+      "actual": 32.63770799999929,
+      "expected": 32.63770799999929
+    },
+    {
+      "path": "molecular/current-legacy-json/terminalOwnerMs/count",
+      "actual": 48,
+      "expected": 48
+    },
+    {
+      "path": "molecular/current-legacy-json/terminalOwnerMs/median",
+      "actual": 19.83687500000042,
+      "expected": 19.83687500000042
+    },
+    {
+      "path": "molecular/current-legacy-json/terminalOwnerMs/mean",
+      "actual": 19.991640625000002,
+      "expected": 19.991640625000002
+    },
+    {
+      "path": "molecular/current-legacy-json/terminalOwnerMs/p95",
+      "actual": 25.615874999999505,
+      "expected": 25.615874999999505
+    },
+    {
+      "path": "molecular/current-legacy-json/terminalOwnerMs/min",
+      "actual": 15.204625000000306,
+      "expected": 15.204625000000306
+    },
+    {
+      "path": "molecular/current-legacy-json/terminalOwnerMs/max",
+      "actual": 27.672375000000102,
+      "expected": 27.672375000000102
+    },
+    {
+      "path": "molecular/current-legacy-json/importedTitleOwnerMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "molecular/current-legacy-json/importedTitleOwnerMs/median",
+      "actual": 17.095708000000286,
+      "expected": 17.095708000000286
+    },
+    {
+      "path": "molecular/current-legacy-json/importedTitleOwnerMs/mean",
+      "actual": 17.96256933333355,
+      "expected": 17.96256933333355
+    },
+    {
+      "path": "molecular/current-legacy-json/importedTitleOwnerMs/p95",
+      "actual": 24.530958000000282,
+      "expected": 24.530958000000282
+    },
+    {
+      "path": "molecular/current-legacy-json/importedTitleOwnerMs/min",
+      "actual": 15.522459000000708,
+      "expected": 15.522459000000708
+    },
+    {
+      "path": "molecular/current-legacy-json/importedTitleOwnerMs/max",
+      "actual": 24.530958000000282,
+      "expected": 24.530958000000282
+    },
+    {
+      "path": "molecular/current-legacy-json/allForkBytesPerRun/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "molecular/current-legacy-json/allForkBytesPerRun/median",
+      "actual": 30813194.0,
+      "expected": 30813194
+    },
+    {
+      "path": "molecular/current-legacy-json/allForkBytesPerRun/mean",
+      "actual": 30813194,
+      "expected": 30813194
+    },
+    {
+      "path": "molecular/current-legacy-json/allForkBytesPerRun/p95",
+      "actual": 30813194,
+      "expected": 30813194
+    },
+    {
+      "path": "molecular/current-legacy-json/allForkBytesPerRun/min",
+      "actual": 30813194,
+      "expected": 30813194
+    },
+    {
+      "path": "molecular/current-legacy-json/allForkBytesPerRun/max",
+      "actual": 30813194,
+      "expected": 30813194
+    },
+    {
+      "path": "molecular/current-legacy-json/messageBytesPerRun/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "molecular/current-legacy-json/messageBytesPerRun/median",
+      "actual": 15824824.0,
+      "expected": 15824824
+    },
+    {
+      "path": "molecular/current-legacy-json/messageBytesPerRun/mean",
+      "actual": 15824824,
+      "expected": 15824824
+    },
+    {
+      "path": "molecular/current-legacy-json/messageBytesPerRun/p95",
+      "actual": 15824824,
+      "expected": 15824824
+    },
+    {
+      "path": "molecular/current-legacy-json/messageBytesPerRun/min",
+      "actual": 15824824,
+      "expected": 15824824
+    },
+    {
+      "path": "molecular/current-legacy-json/messageBytesPerRun/max",
+      "actual": 15824824,
+      "expected": 15824824
+    },
+    {
+      "path": "molecular/current-legacy-json/fullReadMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "molecular/current-legacy-json/fullReadMs/median",
+      "actual": 12.491895499999998,
+      "expected": 12.491895499999998
+    },
+    {
+      "path": "molecular/current-legacy-json/fullReadMs/mean",
+      "actual": 12.558978833333319,
+      "expected": 12.558978833333319
+    },
+    {
+      "path": "molecular/current-legacy-json/fullReadMs/p95",
+      "actual": 13.149415999999974,
+      "expected": 13.149415999999974
+    },
+    {
+      "path": "molecular/current-legacy-json/fullReadMs/min",
+      "actual": 12.132833000000005,
+      "expected": 12.132833000000005
+    },
+    {
+      "path": "molecular/current-legacy-json/fullReadMs/max",
+      "actual": 13.149415999999974,
+      "expected": 13.149415999999974
+    },
+    {
+      "path": "molecular/current-legacy-json/recentPageMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "molecular/current-legacy-json/recentPageMs/median",
+      "actual": 12.971479499999987,
+      "expected": 12.971479499999987
+    },
+    {
+      "path": "molecular/current-legacy-json/recentPageMs/mean",
+      "actual": 12.90208316666667,
+      "expected": 12.90208316666667
+    },
+    {
+      "path": "molecular/current-legacy-json/recentPageMs/p95",
+      "actual": 13.04929100000004,
+      "expected": 13.04929100000004
+    },
+    {
+      "path": "molecular/current-legacy-json/recentPageMs/min",
+      "actual": 12.615583000000015,
+      "expected": 12.615583000000015
+    },
+    {
+      "path": "molecular/current-legacy-json/recentPageMs/max",
+      "actual": 13.04929100000004,
+      "expected": 13.04929100000004
+    },
+    {
+      "path": "molecular/current-legacy-json/allPagesMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "molecular/current-legacy-json/allPagesMs/median",
+      "actual": 13.65587499999998,
+      "expected": 13.65587499999998
+    },
+    {
+      "path": "molecular/current-legacy-json/allPagesMs/mean",
+      "actual": 13.532784666666677,
+      "expected": 13.532784666666677
+    },
+    {
+      "path": "molecular/current-legacy-json/allPagesMs/p95",
+      "actual": 14.086625000000026,
+      "expected": 14.086625000000026
+    },
+    {
+      "path": "molecular/current-legacy-json/allPagesMs/min",
+      "actual": 12.785208000000011,
+      "expected": 12.785208000000011
+    },
+    {
+      "path": "molecular/current-legacy-json/allPagesMs/max",
+      "actual": 14.086625000000026,
+      "expected": 14.086625000000026
+    },
+    {
+      "path": "molecular/current-legacy-json/legacyFirstPageMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "molecular/current-legacy-json/legacyFirstPageMs/median",
+      "actual": 8.999979000000053,
+      "expected": 8.999979000000053
+    },
+    {
+      "path": "molecular/current-legacy-json/legacyFirstPageMs/mean",
+      "actual": 9.147854166666718,
+      "expected": 9.147854166666718
+    },
+    {
+      "path": "molecular/current-legacy-json/legacyFirstPageMs/p95",
+      "actual": 9.64545800000019,
+      "expected": 9.64545800000019
+    },
+    {
+      "path": "molecular/current-legacy-json/legacyFirstPageMs/min",
+      "actual": 8.860291999999959,
+      "expected": 8.860291999999959
+    },
+    {
+      "path": "molecular/current-legacy-json/legacyFirstPageMs/max",
+      "actual": 9.64545800000019,
+      "expected": 9.64545800000019
+    },
+    {
+      "path": "molecular/current-jsonl/messageOwnerMs/count",
+      "actual": 402,
+      "expected": 402
+    },
+    {
+      "path": "molecular/current-jsonl/messageOwnerMs/median",
+      "actual": 10.987812499999563,
+      "expected": 10.987812499999563
+    },
+    {
+      "path": "molecular/current-jsonl/messageOwnerMs/mean",
+      "actual": 11.561567286069634,
+      "expected": 11.561567286069634
+    },
+    {
+      "path": "molecular/current-jsonl/messageOwnerMs/p95",
+      "actual": 15.930999999999585,
+      "expected": 15.930999999999585
+    },
+    {
+      "path": "molecular/current-jsonl/messageOwnerMs/min",
+      "actual": 8.774124999999913,
+      "expected": 8.774124999999913
+    },
+    {
+      "path": "molecular/current-jsonl/messageOwnerMs/max",
+      "actual": 21.3272079999997,
+      "expected": 21.3272079999997
+    },
+    {
+      "path": "molecular/current-jsonl/messageRepositorySaveMs/count",
+      "actual": 402,
+      "expected": 402
+    },
+    {
+      "path": "molecular/current-jsonl/messageRepositorySaveMs/median",
+      "actual": 9.16491649999989,
+      "expected": 9.16491649999989
+    },
+    {
+      "path": "molecular/current-jsonl/messageRepositorySaveMs/mean",
+      "actual": 9.531373860696556,
+      "expected": 9.531373860696556
+    },
+    {
+      "path": "molecular/current-jsonl/messageRepositorySaveMs/p95",
+      "actual": 12.175749999999425,
+      "expected": 12.175749999999425
+    },
+    {
+      "path": "molecular/current-jsonl/messageRepositorySaveMs/min",
+      "actual": 7.3720839999996315,
+      "expected": 7.3720839999996315
+    },
+    {
+      "path": "molecular/current-jsonl/messageRepositorySaveMs/max",
+      "actual": 15.739790999999968,
+      "expected": 15.739790999999968
+    },
+    {
+      "path": "molecular/current-jsonl/allForkCommitOwnerMs/count",
+      "actual": 654,
+      "expected": 654
+    },
+    {
+      "path": "molecular/current-jsonl/allForkCommitOwnerMs/median",
+      "actual": 12.049542000000201,
+      "expected": 12.049542000000201
+    },
+    {
+      "path": "molecular/current-jsonl/allForkCommitOwnerMs/mean",
+      "actual": 12.863319314984695,
+      "expected": 12.863319314984697
+    },
+    {
+      "path": "molecular/current-jsonl/allForkCommitOwnerMs/p95",
+      "actual": 19.440832999999657,
+      "expected": 19.440832999999657
+    },
+    {
+      "path": "molecular/current-jsonl/allForkCommitOwnerMs/min",
+      "actual": 8.774124999999913,
+      "expected": 8.774124999999913
+    },
+    {
+      "path": "molecular/current-jsonl/allForkCommitOwnerMs/max",
+      "actual": 28.51116699999966,
+      "expected": 28.51116699999966
+    },
+    {
+      "path": "molecular/current-jsonl/promptOwnerMs/count",
+      "actual": 48,
+      "expected": 48
+    },
+    {
+      "path": "molecular/current-jsonl/promptOwnerMs/median",
+      "actual": 13.94793750000008,
+      "expected": 13.94793750000008
+    },
+    {
+      "path": "molecular/current-jsonl/promptOwnerMs/mean",
+      "actual": 14.1254504166666,
+      "expected": 14.1254504166666
+    },
+    {
+      "path": "molecular/current-jsonl/promptOwnerMs/p95",
+      "actual": 17.257416000000376,
+      "expected": 17.257416000000376
+    },
+    {
+      "path": "molecular/current-jsonl/promptOwnerMs/min",
+      "actual": 10.708875000000262,
+      "expected": 10.708875000000262
+    },
+    {
+      "path": "molecular/current-jsonl/promptOwnerMs/max",
+      "actual": 20.54754099999991,
+      "expected": 20.54754099999991
+    },
+    {
+      "path": "molecular/current-jsonl/admissionOwnerMs/count",
+      "actual": 48,
+      "expected": 48
+    },
+    {
+      "path": "molecular/current-jsonl/admissionOwnerMs/median",
+      "actual": 16.9739169999998,
+      "expected": 16.9739169999998
+    },
+    {
+      "path": "molecular/current-jsonl/admissionOwnerMs/mean",
+      "actual": 17.88895739583336,
+      "expected": 17.88895739583336
+    },
+    {
+      "path": "molecular/current-jsonl/admissionOwnerMs/p95",
+      "actual": 25.121125000000575,
+      "expected": 25.121125000000575
+    },
+    {
+      "path": "molecular/current-jsonl/admissionOwnerMs/min",
+      "actual": 12.065207999999984,
+      "expected": 12.065207999999984
+    },
+    {
+      "path": "molecular/current-jsonl/admissionOwnerMs/max",
+      "actual": 28.51116699999966,
+      "expected": 28.51116699999966
+    },
+    {
+      "path": "molecular/current-jsonl/terminalOwnerMs/count",
+      "actual": 48,
+      "expected": 48
+    },
+    {
+      "path": "molecular/current-jsonl/terminalOwnerMs/median",
+      "actual": 16.656291499999952,
+      "expected": 16.656291499999952
+    },
+    {
+      "path": "molecular/current-jsonl/terminalOwnerMs/mean",
+      "actual": 16.890625833333274,
+      "expected": 16.890625833333274
+    },
+    {
+      "path": "molecular/current-jsonl/terminalOwnerMs/p95",
+      "actual": 21.628083000000515,
+      "expected": 21.628083000000515
+    },
+    {
+      "path": "molecular/current-jsonl/terminalOwnerMs/min",
+      "actual": 11.70587499999965,
+      "expected": 11.70587499999965
+    },
+    {
+      "path": "molecular/current-jsonl/terminalOwnerMs/max",
+      "actual": 22.7632909999993,
+      "expected": 22.7632909999993
+    },
+    {
+      "path": "molecular/current-jsonl/importedTitleOwnerMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "molecular/current-jsonl/importedTitleOwnerMs/median",
+      "actual": 15.38183300000037,
+      "expected": 15.38183300000037
+    },
+    {
+      "path": "molecular/current-jsonl/importedTitleOwnerMs/mean",
+      "actual": 15.751604166666917,
+      "expected": 15.751604166666917
+    },
+    {
+      "path": "molecular/current-jsonl/importedTitleOwnerMs/p95",
+      "actual": 19.59320800000023,
+      "expected": 19.59320800000023
+    },
+    {
+      "path": "molecular/current-jsonl/importedTitleOwnerMs/min",
+      "actual": 12.64575000000059,
+      "expected": 12.64575000000059
+    },
+    {
+      "path": "molecular/current-jsonl/importedTitleOwnerMs/max",
+      "actual": 19.59320800000023,
+      "expected": 19.59320800000023
+    },
+    {
+      "path": "molecular/current-jsonl/allForkBytesPerRun/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "molecular/current-jsonl/allForkBytesPerRun/median",
+      "actual": 1103340.0,
+      "expected": 1103340
+    },
+    {
+      "path": "molecular/current-jsonl/allForkBytesPerRun/mean",
+      "actual": 1103340,
+      "expected": 1103340
+    },
+    {
+      "path": "molecular/current-jsonl/allForkBytesPerRun/p95",
+      "actual": 1103340,
+      "expected": 1103340
+    },
+    {
+      "path": "molecular/current-jsonl/allForkBytesPerRun/min",
+      "actual": 1103340,
+      "expected": 1103340
+    },
+    {
+      "path": "molecular/current-jsonl/allForkBytesPerRun/max",
+      "actual": 1103340,
+      "expected": 1103340
+    },
+    {
+      "path": "molecular/current-jsonl/messageBytesPerRun/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "molecular/current-jsonl/messageBytesPerRun/median",
+      "actual": 442510.0,
+      "expected": 442510
+    },
+    {
+      "path": "molecular/current-jsonl/messageBytesPerRun/mean",
+      "actual": 442510,
+      "expected": 442510
+    },
+    {
+      "path": "molecular/current-jsonl/messageBytesPerRun/p95",
+      "actual": 442510,
+      "expected": 442510
+    },
+    {
+      "path": "molecular/current-jsonl/messageBytesPerRun/min",
+      "actual": 442510,
+      "expected": 442510
+    },
+    {
+      "path": "molecular/current-jsonl/messageBytesPerRun/max",
+      "actual": 442510,
+      "expected": 442510
+    },
+    {
+      "path": "molecular/current-jsonl/fullReadMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "molecular/current-jsonl/fullReadMs/median",
+      "actual": 25.770749999999964,
+      "expected": 25.770749999999964
+    },
+    {
+      "path": "molecular/current-jsonl/fullReadMs/mean",
+      "actual": 26.48017383333333,
+      "expected": 26.48017383333333
+    },
+    {
+      "path": "molecular/current-jsonl/fullReadMs/p95",
+      "actual": 28.636708999999996,
+      "expected": 28.636708999999996
+    },
+    {
+      "path": "molecular/current-jsonl/fullReadMs/min",
+      "actual": 24.823624999999993,
+      "expected": 24.823624999999993
+    },
+    {
+      "path": "molecular/current-jsonl/fullReadMs/max",
+      "actual": 28.636708999999996,
+      "expected": 28.636708999999996
+    },
+    {
+      "path": "molecular/current-jsonl/recentPageMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "molecular/current-jsonl/recentPageMs/median",
+      "actual": 3.7779579999999555,
+      "expected": 3.7779579999999555
+    },
+    {
+      "path": "molecular/current-jsonl/recentPageMs/mean",
+      "actual": 3.836957833333315,
+      "expected": 3.836957833333315
+    },
+    {
+      "path": "molecular/current-jsonl/recentPageMs/p95",
+      "actual": 4.065291000000002,
+      "expected": 4.065291000000002
+    },
+    {
+      "path": "molecular/current-jsonl/recentPageMs/min",
+      "actual": 3.749708000000055,
+      "expected": 3.749708000000055
+    },
+    {
+      "path": "molecular/current-jsonl/recentPageMs/max",
+      "actual": 4.065291000000002,
+      "expected": 4.065291000000002
+    },
+    {
+      "path": "molecular/current-jsonl/allPagesMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "molecular/current-jsonl/allPagesMs/median",
+      "actual": 3.7868960000000698,
+      "expected": 3.7868960000000698
+    },
+    {
+      "path": "molecular/current-jsonl/allPagesMs/mean",
+      "actual": 3.7948403333333354,
+      "expected": 3.7948403333333354
+    },
+    {
+      "path": "molecular/current-jsonl/allPagesMs/p95",
+      "actual": 3.9279999999999973,
+      "expected": 3.9279999999999973
+    },
+    {
+      "path": "molecular/current-jsonl/allPagesMs/min",
+      "actual": 3.6966249999999263,
+      "expected": 3.6966249999999263
+    },
+    {
+      "path": "molecular/current-jsonl/allPagesMs/max",
+      "actual": 3.9279999999999973,
+      "expected": 3.9279999999999973
+    },
+    {
+      "path": "molecular/current-jsonl/legacyFirstPageMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "molecular/current-jsonl/legacyFirstPageMs/median",
+      "actual": 8.990125000000091,
+      "expected": 8.990125000000091
+    },
+    {
+      "path": "molecular/current-jsonl/legacyFirstPageMs/mean",
+      "actual": 9.187937500000032,
+      "expected": 9.187937500000032
+    },
+    {
+      "path": "molecular/current-jsonl/legacyFirstPageMs/p95",
+      "actual": 10.1183749999999,
+      "expected": 10.1183749999999
+    },
+    {
+      "path": "molecular/current-jsonl/legacyFirstPageMs/min",
+      "actual": 8.867791000000011,
+      "expected": 8.867791000000011
+    },
+    {
+      "path": "molecular/current-jsonl/legacyFirstPageMs/max",
+      "actual": 10.1183749999999,
+      "expected": 10.1183749999999
+    },
+    {
+      "path": "molecular/current-legacy-json/percent/messageOwnerMs",
+      "actual": -0.8670503251647754,
+      "expected": -0.8670503251647754
+    },
+    {
+      "path": "molecular/current-legacy-json/percent/messageRepositorySaveMs",
+      "actual": 0.13832875600980898,
+      "expected": 0.13832875600980898
+    },
+    {
+      "path": "molecular/current-legacy-json/percent/fullReadMs",
+      "actual": 4.0698638537020715,
+      "expected": 4.0698638537020715
+    },
+    {
+      "path": "molecular/current-legacy-json/percent/recentPageMs",
+      "actual": -19.96855684474903,
+      "expected": -19.96855684474903
+    },
+    {
+      "path": "molecular/current-legacy-json/percent/allPagesMs",
+      "actual": -14.608531152304206,
+      "expected": -14.608531152304206
+    },
+    {
+      "path": "molecular/current-legacy-json/percent/legacyFirstPageMs",
+      "actual": 7.888081677702163,
+      "expected": 7.888081677702163
+    },
+    {
+      "path": "molecular/current-legacy-json/percent/messageBytesPerRun",
+      "actual": 0.0,
+      "expected": 0
+    },
+    {
+      "path": "molecular/current-legacy-json/percent/allForkBytesPerRun",
+      "actual": 0.0,
+      "expected": 0
+    },
+    {
+      "path": "molecular/current-jsonl/percent/messageOwnerMs",
+      "actual": -31.326888650603067,
+      "expected": -31.326888650603067
+    },
+    {
+      "path": "molecular/current-jsonl/percent/messageRepositorySaveMs",
+      "actual": -31.625192224299337,
+      "expected": -31.625192224299337
+    },
+    {
+      "path": "molecular/current-jsonl/percent/fullReadMs",
+      "actual": 114.69587573061185,
+      "expected": 114.69587573061185
+    },
+    {
+      "path": "molecular/current-jsonl/percent/recentPageMs",
+      "actual": -76.69075212893623,
+      "expected": -76.69075212893623
+    },
+    {
+      "path": "molecular/current-jsonl/percent/allPagesMs",
+      "actual": -76.32018367087645,
+      "expected": -76.32018367087645
+    },
+    {
+      "path": "molecular/current-jsonl/percent/legacyFirstPageMs",
+      "actual": 7.7699559402034435,
+      "expected": 7.7699559402034435
+    },
+    {
+      "path": "molecular/current-jsonl/percent/messageBytesPerRun",
+      "actual": -97.20369717855945,
+      "expected": -97.20369717855945
+    },
+    {
+      "path": "molecular/current-jsonl/percent/allForkBytesPerRun",
+      "actual": -96.41926117753323,
+      "expected": -96.41926117753323
+    },
+    {
+      "path": "rainfall/original-json/messageOwnerMs/count",
+      "actual": 348,
+      "expected": 348
+    },
+    {
+      "path": "rainfall/original-json/messageOwnerMs/median",
+      "actual": 32.70360349999919,
+      "expected": 32.70360349999919
+    },
+    {
+      "path": "rainfall/original-json/messageOwnerMs/mean",
+      "actual": 35.574170149425335,
+      "expected": 35.574170149425335
+    },
+    {
+      "path": "rainfall/original-json/messageOwnerMs/p95",
+      "actual": 55.38287499999933,
+      "expected": 55.38287499999933
+    },
+    {
+      "path": "rainfall/original-json/messageOwnerMs/min",
+      "actual": 29.896958999999697,
+      "expected": 29.896958999999697
+    },
+    {
+      "path": "rainfall/original-json/messageOwnerMs/max",
+      "actual": 71.27150000000256,
+      "expected": 71.27150000000256
+    },
+    {
+      "path": "rainfall/original-json/messageRepositorySaveMs/count",
+      "actual": 348,
+      "expected": 348
+    },
+    {
+      "path": "rainfall/original-json/messageRepositorySaveMs/median",
+      "actual": 22.02124999999978,
+      "expected": 22.02124999999978
+    },
+    {
+      "path": "rainfall/original-json/messageRepositorySaveMs/mean",
+      "actual": 23.793627862068917,
+      "expected": 23.793627862068917
+    },
+    {
+      "path": "rainfall/original-json/messageRepositorySaveMs/p95",
+      "actual": 35.52570799999921,
+      "expected": 35.52570799999921
+    },
+    {
+      "path": "rainfall/original-json/messageRepositorySaveMs/min",
+      "actual": 19.98516699999891,
+      "expected": 19.98516699999891
+    },
+    {
+      "path": "rainfall/original-json/messageRepositorySaveMs/max",
+      "actual": 44.27008300000307,
+      "expected": 44.27008300000307
+    },
+    {
+      "path": "rainfall/original-json/allForkCommitOwnerMs/count",
+      "actual": 1410,
+      "expected": 1410
+    },
+    {
+      "path": "rainfall/original-json/allForkCommitOwnerMs/median",
+      "actual": 45.45770850000008,
+      "expected": 45.45770850000008
+    },
+    {
+      "path": "rainfall/original-json/allForkCommitOwnerMs/mean",
+      "actual": 47.217602378723385,
+      "expected": 47.21760237872338
+    },
+    {
+      "path": "rainfall/original-json/allForkCommitOwnerMs/p95",
+      "actual": 65.95899999999892,
+      "expected": 65.95899999999892
+    },
+    {
+      "path": "rainfall/original-json/allForkCommitOwnerMs/min",
+      "actual": 22.663499999999658,
+      "expected": 22.663499999999658
+    },
+    {
+      "path": "rainfall/original-json/allForkCommitOwnerMs/max",
+      "actual": 119.0151249999999,
+      "expected": 119.0151249999999
+    },
+    {
+      "path": "rainfall/original-json/promptOwnerMs/count",
+      "actual": 42,
+      "expected": 42
+    },
+    {
+      "path": "rainfall/original-json/promptOwnerMs/median",
+      "actual": 28.8413129999999,
+      "expected": 28.8413129999999
+    },
+    {
+      "path": "rainfall/original-json/promptOwnerMs/mean",
+      "actual": 31.119472309523687,
+      "expected": 31.119472309523687
+    },
+    {
+      "path": "rainfall/original-json/promptOwnerMs/p95",
+      "actual": 39.90904199999932,
+      "expected": 39.90904199999932
+    },
+    {
+      "path": "rainfall/original-json/promptOwnerMs/min",
+      "actual": 22.663499999999658,
+      "expected": 22.663499999999658
+    },
+    {
+      "path": "rainfall/original-json/promptOwnerMs/max",
+      "actual": 58.68120799999997,
+      "expected": 58.68120799999997
+    },
+    {
+      "path": "rainfall/original-json/admissionOwnerMs/count",
+      "actual": 42,
+      "expected": 42
+    },
+    {
+      "path": "rainfall/original-json/admissionOwnerMs/median",
+      "actual": 48.5316670000002,
+      "expected": 48.5316670000002
+    },
+    {
+      "path": "rainfall/original-json/admissionOwnerMs/mean",
+      "actual": 53.217932547618865,
+      "expected": 53.217932547618865
+    },
+    {
+      "path": "rainfall/original-json/admissionOwnerMs/p95",
+      "actual": 72.5575829999998,
+      "expected": 72.5575829999998
+    },
+    {
+      "path": "rainfall/original-json/admissionOwnerMs/min",
+      "actual": 36.89866599999914,
+      "expected": 36.89866599999914
+    },
+    {
+      "path": "rainfall/original-json/admissionOwnerMs/max",
+      "actual": 119.0151249999999,
+      "expected": 119.0151249999999
+    },
+    {
+      "path": "rainfall/original-json/terminalOwnerMs/count",
+      "actual": 42,
+      "expected": 42
+    },
+    {
+      "path": "rainfall/original-json/terminalOwnerMs/median",
+      "actual": 50.03093749999971,
+      "expected": 50.03093749999971
+    },
+    {
+      "path": "rainfall/original-json/terminalOwnerMs/mean",
+      "actual": 48.07223719047614,
+      "expected": 48.07223719047614
+    },
+    {
+      "path": "rainfall/original-json/terminalOwnerMs/p95",
+      "actual": 66.898416,
+      "expected": 66.898416
+    },
+    {
+      "path": "rainfall/original-json/terminalOwnerMs/min",
+      "actual": 31.899457999999868,
+      "expected": 31.899457999999868
+    },
+    {
+      "path": "rainfall/original-json/terminalOwnerMs/max",
+      "actual": 72.56816699999763,
+      "expected": 72.56816699999763
+    },
+    {
+      "path": "rainfall/original-json/importedTitleOwnerMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "rainfall/original-json/importedTitleOwnerMs/median",
+      "actual": 27.430895500000133,
+      "expected": 27.430895500000133
+    },
+    {
+      "path": "rainfall/original-json/importedTitleOwnerMs/mean",
+      "actual": 27.383451333333596,
+      "expected": 27.383451333333596
+    },
+    {
+      "path": "rainfall/original-json/importedTitleOwnerMs/p95",
+      "actual": 28.94775000000027,
+      "expected": 28.94775000000027
+    },
+    {
+      "path": "rainfall/original-json/importedTitleOwnerMs/min",
+      "actual": 25.497041000000536,
+      "expected": 25.497041000000536
+    },
+    {
+      "path": "rainfall/original-json/importedTitleOwnerMs/max",
+      "actual": 28.94775000000027,
+      "expected": 28.94775000000027
+    },
+    {
+      "path": "rainfall/original-json/allForkBytesPerRun/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "rainfall/original-json/allForkBytesPerRun/median",
+      "actual": 268226388.0,
+      "expected": 268226388
+    },
+    {
+      "path": "rainfall/original-json/allForkBytesPerRun/mean",
+      "actual": 268226388,
+      "expected": 268226388
+    },
+    {
+      "path": "rainfall/original-json/allForkBytesPerRun/p95",
+      "actual": 268226388,
+      "expected": 268226388
+    },
+    {
+      "path": "rainfall/original-json/allForkBytesPerRun/min",
+      "actual": 268226388,
+      "expected": 268226388
+    },
+    {
+      "path": "rainfall/original-json/allForkBytesPerRun/max",
+      "actual": 268226388,
+      "expected": 268226388
+    },
+    {
+      "path": "rainfall/original-json/messageBytesPerRun/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "rainfall/original-json/messageBytesPerRun/median",
+      "actual": 43409135.0,
+      "expected": 43409135
+    },
+    {
+      "path": "rainfall/original-json/messageBytesPerRun/mean",
+      "actual": 43409135,
+      "expected": 43409135
+    },
+    {
+      "path": "rainfall/original-json/messageBytesPerRun/p95",
+      "actual": 43409135,
+      "expected": 43409135
+    },
+    {
+      "path": "rainfall/original-json/messageBytesPerRun/min",
+      "actual": 43409135,
+      "expected": 43409135
+    },
+    {
+      "path": "rainfall/original-json/messageBytesPerRun/max",
+      "actual": 43409135,
+      "expected": 43409135
+    },
+    {
+      "path": "rainfall/original-json/fullReadMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "rainfall/original-json/fullReadMs/median",
+      "actual": 33.665395500000045,
+      "expected": 33.665395500000045
+    },
+    {
+      "path": "rainfall/original-json/fullReadMs/mean",
+      "actual": 35.27694416666666,
+      "expected": 35.27694416666666
+    },
+    {
+      "path": "rainfall/original-json/fullReadMs/p95",
+      "actual": 45.51016699999991,
+      "expected": 45.51016699999991
+    },
+    {
+      "path": "rainfall/original-json/fullReadMs/min",
+      "actual": 31.647624999999948,
+      "expected": 31.647624999999948
+    },
+    {
+      "path": "rainfall/original-json/fullReadMs/max",
+      "actual": 45.51016699999991,
+      "expected": 45.51016699999991
+    },
+    {
+      "path": "rainfall/original-json/recentPageMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "rainfall/original-json/recentPageMs/median",
+      "actual": 32.089916500000015,
+      "expected": 32.089916500000015
+    },
+    {
+      "path": "rainfall/original-json/recentPageMs/mean",
+      "actual": 32.285506999999974,
+      "expected": 32.285506999999974
+    },
+    {
+      "path": "rainfall/original-json/recentPageMs/p95",
+      "actual": 34.0698329999999,
+      "expected": 34.0698329999999
+    },
+    {
+      "path": "rainfall/original-json/recentPageMs/min",
+      "actual": 31.629749999999945,
+      "expected": 31.629749999999945
+    },
+    {
+      "path": "rainfall/original-json/recentPageMs/max",
+      "actual": 34.0698329999999,
+      "expected": 34.0698329999999
+    },
+    {
+      "path": "rainfall/original-json/allPagesMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "rainfall/original-json/allPagesMs/median",
+      "actual": 38.70716599999997,
+      "expected": 38.70716599999997
+    },
+    {
+      "path": "rainfall/original-json/allPagesMs/mean",
+      "actual": 38.3470275,
+      "expected": 38.3470275
+    },
+    {
+      "path": "rainfall/original-json/allPagesMs/p95",
+      "actual": 40.14795800000002,
+      "expected": 40.14795800000002
+    },
+    {
+      "path": "rainfall/original-json/allPagesMs/min",
+      "actual": 35.685333000000014,
+      "expected": 35.685333000000014
+    },
+    {
+      "path": "rainfall/original-json/allPagesMs/max",
+      "actual": 40.14795800000002,
+      "expected": 40.14795800000002
+    },
+    {
+      "path": "rainfall/original-json/legacyFirstPageMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "rainfall/original-json/legacyFirstPageMs/median",
+      "actual": 19.5270625,
+      "expected": 19.5270625
+    },
+    {
+      "path": "rainfall/original-json/legacyFirstPageMs/mean",
+      "actual": 19.53484716666668,
+      "expected": 19.53484716666668
+    },
+    {
+      "path": "rainfall/original-json/legacyFirstPageMs/p95",
+      "actual": 19.81058299999995,
+      "expected": 19.81058299999995
+    },
+    {
+      "path": "rainfall/original-json/legacyFirstPageMs/min",
+      "actual": 19.260999999999967,
+      "expected": 19.260999999999967
+    },
+    {
+      "path": "rainfall/original-json/legacyFirstPageMs/max",
+      "actual": 19.81058299999995,
+      "expected": 19.81058299999995
+    },
+    {
+      "path": "rainfall/current-legacy-json/messageOwnerMs/count",
+      "actual": 348,
+      "expected": 348
+    },
+    {
+      "path": "rainfall/current-legacy-json/messageOwnerMs/median",
+      "actual": 30.88316649999979,
+      "expected": 30.88316649999979
+    },
+    {
+      "path": "rainfall/current-legacy-json/messageOwnerMs/mean",
+      "actual": 33.405679497126386,
+      "expected": 33.405679497126386
+    },
+    {
+      "path": "rainfall/current-legacy-json/messageOwnerMs/p95",
+      "actual": 49.07179199999882,
+      "expected": 49.07179199999882
+    },
+    {
+      "path": "rainfall/current-legacy-json/messageOwnerMs/min",
+      "actual": 27.89704199999869,
+      "expected": 27.89704199999869
+    },
+    {
+      "path": "rainfall/current-legacy-json/messageOwnerMs/max",
+      "actual": 65.2855410000011,
+      "expected": 65.2855410000011
+    },
+    {
+      "path": "rainfall/current-legacy-json/messageRepositorySaveMs/count",
+      "actual": 348,
+      "expected": 348
+    },
+    {
+      "path": "rainfall/current-legacy-json/messageRepositorySaveMs/median",
+      "actual": 22.307645999999295,
+      "expected": 22.307645999999295
+    },
+    {
+      "path": "rainfall/current-legacy-json/messageRepositorySaveMs/mean",
+      "actual": 23.885986112068984,
+      "expected": 23.885986112068984
+    },
+    {
+      "path": "rainfall/current-legacy-json/messageRepositorySaveMs/p95",
+      "actual": 33.799708000000464,
+      "expected": 33.799708000000464
+    },
+    {
+      "path": "rainfall/current-legacy-json/messageRepositorySaveMs/min",
+      "actual": 19.749958000000333,
+      "expected": 19.749958000000333
+    },
+    {
+      "path": "rainfall/current-legacy-json/messageRepositorySaveMs/max",
+      "actual": 46.17595799999981,
+      "expected": 46.17595799999981
+    },
+    {
+      "path": "rainfall/current-legacy-json/allForkCommitOwnerMs/count",
+      "actual": 1410,
+      "expected": 1410
+    },
+    {
+      "path": "rainfall/current-legacy-json/allForkCommitOwnerMs/median",
+      "actual": 40.911166500000036,
+      "expected": 40.911166500000036
+    },
+    {
+      "path": "rainfall/current-legacy-json/allForkCommitOwnerMs/mean",
+      "actual": 42.796978780851056,
+      "expected": 42.79697878085108
+    },
+    {
+      "path": "rainfall/current-legacy-json/allForkCommitOwnerMs/p95",
+      "actual": 59.19541599999866,
+      "expected": 59.19541599999866
+    },
+    {
+      "path": "rainfall/current-legacy-json/allForkCommitOwnerMs/min",
+      "actual": 22.298749999999927,
+      "expected": 22.298749999999927
+    },
+    {
+      "path": "rainfall/current-legacy-json/allForkCommitOwnerMs/max",
+      "actual": 80.8296250000003,
+      "expected": 80.8296250000003
+    },
+    {
+      "path": "rainfall/current-legacy-json/promptOwnerMs/count",
+      "actual": 42,
+      "expected": 42
+    },
+    {
+      "path": "rainfall/current-legacy-json/promptOwnerMs/median",
+      "actual": 27.878958500000408,
+      "expected": 27.878958500000408
+    },
+    {
+      "path": "rainfall/current-legacy-json/promptOwnerMs/mean",
+      "actual": 29.802411642857155,
+      "expected": 29.802411642857155
+    },
+    {
+      "path": "rainfall/current-legacy-json/promptOwnerMs/p95",
+      "actual": 37.70766700000058,
+      "expected": 37.70766700000058
+    },
+    {
+      "path": "rainfall/current-legacy-json/promptOwnerMs/min",
+      "actual": 22.298749999999927,
+      "expected": 22.298749999999927
+    },
+    {
+      "path": "rainfall/current-legacy-json/promptOwnerMs/max",
+      "actual": 37.89287499999955,
+      "expected": 37.89287499999955
+    },
+    {
+      "path": "rainfall/current-legacy-json/admissionOwnerMs/count",
+      "actual": 42,
+      "expected": 42
+    },
+    {
+      "path": "rainfall/current-legacy-json/admissionOwnerMs/median",
+      "actual": 47.61566649999986,
+      "expected": 47.61566649999986
+    },
+    {
+      "path": "rainfall/current-legacy-json/admissionOwnerMs/mean",
+      "actual": 52.281561523809245,
+      "expected": 52.281561523809245
+    },
+    {
+      "path": "rainfall/current-legacy-json/admissionOwnerMs/p95",
+      "actual": 67.44816599999831,
+      "expected": 67.44816599999831
+    },
+    {
+      "path": "rainfall/current-legacy-json/admissionOwnerMs/min",
+      "actual": 36.83833400000003,
+      "expected": 36.83833400000003
+    },
+    {
+      "path": "rainfall/current-legacy-json/admissionOwnerMs/max",
+      "actual": 69.50104200000169,
+      "expected": 69.50104200000169
+    },
+    {
+      "path": "rainfall/current-legacy-json/terminalOwnerMs/count",
+      "actual": 42,
+      "expected": 42
+    },
+    {
+      "path": "rainfall/current-legacy-json/terminalOwnerMs/median",
+      "actual": 44.90918749999946,
+      "expected": 44.90918749999946
+    },
+    {
+      "path": "rainfall/current-legacy-json/terminalOwnerMs/mean",
+      "actual": 44.64600690476185,
+      "expected": 44.64600690476185
+    },
+    {
+      "path": "rainfall/current-legacy-json/terminalOwnerMs/p95",
+      "actual": 63.7098330000008,
+      "expected": 63.7098330000008
+    },
+    {
+      "path": "rainfall/current-legacy-json/terminalOwnerMs/min",
+      "actual": 28.426041999999143,
+      "expected": 28.426041999999143
+    },
+    {
+      "path": "rainfall/current-legacy-json/terminalOwnerMs/max",
+      "actual": 66.20133300000089,
+      "expected": 66.20133300000089
+    },
+    {
+      "path": "rainfall/current-legacy-json/importedTitleOwnerMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "rainfall/current-legacy-json/importedTitleOwnerMs/median",
+      "actual": 30.3274164999998,
+      "expected": 30.3274164999998
+    },
+    {
+      "path": "rainfall/current-legacy-json/importedTitleOwnerMs/mean",
+      "actual": 30.598687166666576,
+      "expected": 30.598687166666576
+    },
+    {
+      "path": "rainfall/current-legacy-json/importedTitleOwnerMs/p95",
+      "actual": 32.697040999999444,
+      "expected": 32.697040999999444
+    },
+    {
+      "path": "rainfall/current-legacy-json/importedTitleOwnerMs/min",
+      "actual": 29.402375000000575,
+      "expected": 29.402375000000575
+    },
+    {
+      "path": "rainfall/current-legacy-json/importedTitleOwnerMs/max",
+      "actual": 32.697040999999444,
+      "expected": 32.697040999999444
+    },
+    {
+      "path": "rainfall/current-legacy-json/allForkBytesPerRun/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "rainfall/current-legacy-json/allForkBytesPerRun/median",
+      "actual": 268226388.0,
+      "expected": 268226388
+    },
+    {
+      "path": "rainfall/current-legacy-json/allForkBytesPerRun/mean",
+      "actual": 268226388,
+      "expected": 268226388
+    },
+    {
+      "path": "rainfall/current-legacy-json/allForkBytesPerRun/p95",
+      "actual": 268226388,
+      "expected": 268226388
+    },
+    {
+      "path": "rainfall/current-legacy-json/allForkBytesPerRun/min",
+      "actual": 268226388,
+      "expected": 268226388
+    },
+    {
+      "path": "rainfall/current-legacy-json/allForkBytesPerRun/max",
+      "actual": 268226388,
+      "expected": 268226388
+    },
+    {
+      "path": "rainfall/current-legacy-json/messageBytesPerRun/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "rainfall/current-legacy-json/messageBytesPerRun/median",
+      "actual": 43409135.0,
+      "expected": 43409135
+    },
+    {
+      "path": "rainfall/current-legacy-json/messageBytesPerRun/mean",
+      "actual": 43409135,
+      "expected": 43409135
+    },
+    {
+      "path": "rainfall/current-legacy-json/messageBytesPerRun/p95",
+      "actual": 43409135,
+      "expected": 43409135
+    },
+    {
+      "path": "rainfall/current-legacy-json/messageBytesPerRun/min",
+      "actual": 43409135,
+      "expected": 43409135
+    },
+    {
+      "path": "rainfall/current-legacy-json/messageBytesPerRun/max",
+      "actual": 43409135,
+      "expected": 43409135
+    },
+    {
+      "path": "rainfall/current-legacy-json/fullReadMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "rainfall/current-legacy-json/fullReadMs/median",
+      "actual": 34.455375000000004,
+      "expected": 34.455375000000004
+    },
+    {
+      "path": "rainfall/current-legacy-json/fullReadMs/mean",
+      "actual": 34.28420133333331,
+      "expected": 34.28420133333331
+    },
+    {
+      "path": "rainfall/current-legacy-json/fullReadMs/p95",
+      "actual": 37.379790999999955,
+      "expected": 37.379790999999955
+    },
+    {
+      "path": "rainfall/current-legacy-json/fullReadMs/min",
+      "actual": 32.036749999999984,
+      "expected": 32.036749999999984
+    },
+    {
+      "path": "rainfall/current-legacy-json/fullReadMs/max",
+      "actual": 37.379790999999955,
+      "expected": 37.379790999999955
+    },
+    {
+      "path": "rainfall/current-legacy-json/recentPageMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "rainfall/current-legacy-json/recentPageMs/median",
+      "actual": 33.05252100000001,
+      "expected": 33.05252100000001
+    },
+    {
+      "path": "rainfall/current-legacy-json/recentPageMs/mean",
+      "actual": 33.12491666666665,
+      "expected": 33.12491666666665
+    },
+    {
+      "path": "rainfall/current-legacy-json/recentPageMs/p95",
+      "actual": 33.736749999999915,
+      "expected": 33.736749999999915
+    },
+    {
+      "path": "rainfall/current-legacy-json/recentPageMs/min",
+      "actual": 32.724541000000045,
+      "expected": 32.724541000000045
+    },
+    {
+      "path": "rainfall/current-legacy-json/recentPageMs/max",
+      "actual": 33.736749999999915,
+      "expected": 33.736749999999915
+    },
+    {
+      "path": "rainfall/current-legacy-json/allPagesMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "rainfall/current-legacy-json/allPagesMs/median",
+      "actual": 33.203979000000004,
+      "expected": 33.203979000000004
+    },
+    {
+      "path": "rainfall/current-legacy-json/allPagesMs/mean",
+      "actual": 33.624611000000016,
+      "expected": 33.624611000000016
+    },
+    {
+      "path": "rainfall/current-legacy-json/allPagesMs/p95",
+      "actual": 36.849334,
+      "expected": 36.849334
+    },
+    {
+      "path": "rainfall/current-legacy-json/allPagesMs/min",
+      "actual": 32.520083,
+      "expected": 32.520083
+    },
+    {
+      "path": "rainfall/current-legacy-json/allPagesMs/max",
+      "actual": 36.849334,
+      "expected": 36.849334
+    },
+    {
+      "path": "rainfall/current-legacy-json/legacyFirstPageMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "rainfall/current-legacy-json/legacyFirstPageMs/median",
+      "actual": 18.481312000000003,
+      "expected": 18.481312000000003
+    },
+    {
+      "path": "rainfall/current-legacy-json/legacyFirstPageMs/mean",
+      "actual": 19.32738166666663,
+      "expected": 19.32738166666663
+    },
+    {
+      "path": "rainfall/current-legacy-json/legacyFirstPageMs/p95",
+      "actual": 21.833375000000046,
+      "expected": 21.833375000000046
+    },
+    {
+      "path": "rainfall/current-legacy-json/legacyFirstPageMs/min",
+      "actual": 18.104249999999865,
+      "expected": 18.104249999999865
+    },
+    {
+      "path": "rainfall/current-legacy-json/legacyFirstPageMs/max",
+      "actual": 21.833375000000046,
+      "expected": 21.833375000000046
+    },
+    {
+      "path": "rainfall/current-jsonl/messageOwnerMs/count",
+      "actual": 348,
+      "expected": 348
+    },
+    {
+      "path": "rainfall/current-jsonl/messageOwnerMs/median",
+      "actual": 21.959395500000028,
+      "expected": 21.959395500000028
+    },
+    {
+      "path": "rainfall/current-jsonl/messageOwnerMs/mean",
+      "actual": 23.92716225574712,
+      "expected": 23.927162255747124
+    },
+    {
+      "path": "rainfall/current-jsonl/messageOwnerMs/p95",
+      "actual": 37.80620799999997,
+      "expected": 37.80620799999997
+    },
+    {
+      "path": "rainfall/current-jsonl/messageOwnerMs/min",
+      "actual": 19.91120899999987,
+      "expected": 19.91120899999987
+    },
+    {
+      "path": "rainfall/current-jsonl/messageOwnerMs/max",
+      "actual": 46.11462500000016,
+      "expected": 46.11462500000016
+    },
+    {
+      "path": "rainfall/current-jsonl/messageRepositorySaveMs/count",
+      "actual": 348,
+      "expected": 348
+    },
+    {
+      "path": "rainfall/current-jsonl/messageRepositorySaveMs/median",
+      "actual": 15.131583500000488,
+      "expected": 15.131583500000488
+    },
+    {
+      "path": "rainfall/current-jsonl/messageRepositorySaveMs/mean",
+      "actual": 16.292189054597717,
+      "expected": 16.292189054597717
+    },
+    {
+      "path": "rainfall/current-jsonl/messageRepositorySaveMs/p95",
+      "actual": 24.63249999999971,
+      "expected": 24.63249999999971
+    },
+    {
+      "path": "rainfall/current-jsonl/messageRepositorySaveMs/min",
+      "actual": 13.525375000000167,
+      "expected": 13.525375000000167
+    },
+    {
+      "path": "rainfall/current-jsonl/messageRepositorySaveMs/max",
+      "actual": 32.19258300000001,
+      "expected": 32.19258300000001
+    },
+    {
+      "path": "rainfall/current-jsonl/allForkCommitOwnerMs/count",
+      "actual": 1410,
+      "expected": 1410
+    },
+    {
+      "path": "rainfall/current-jsonl/allForkCommitOwnerMs/median",
+      "actual": 29.918979499999296,
+      "expected": 29.918979499999296
+    },
+    {
+      "path": "rainfall/current-jsonl/allForkCommitOwnerMs/mean",
+      "actual": 31.26477230638298,
+      "expected": 31.264772306382977
+    },
+    {
+      "path": "rainfall/current-jsonl/allForkCommitOwnerMs/p95",
+      "actual": 41.673541000000114,
+      "expected": 41.673541000000114
+    },
+    {
+      "path": "rainfall/current-jsonl/allForkCommitOwnerMs/min",
+      "actual": 19.91120899999987,
+      "expected": 19.91120899999987
+    },
+    {
+      "path": "rainfall/current-jsonl/allForkCommitOwnerMs/max",
+      "actual": 67.10220800000025,
+      "expected": 67.10220800000025
+    },
+    {
+      "path": "rainfall/current-jsonl/promptOwnerMs/count",
+      "actual": 42,
+      "expected": 42
+    },
+    {
+      "path": "rainfall/current-jsonl/promptOwnerMs/median",
+      "actual": 28.60241649999989,
+      "expected": 28.60241649999989
+    },
+    {
+      "path": "rainfall/current-jsonl/promptOwnerMs/mean",
+      "actual": 30.80728473809525,
+      "expected": 30.80728473809525
+    },
+    {
+      "path": "rainfall/current-jsonl/promptOwnerMs/p95",
+      "actual": 41.64624999999978,
+      "expected": 41.64624999999978
+    },
+    {
+      "path": "rainfall/current-jsonl/promptOwnerMs/min",
+      "actual": 22.477708999999777,
+      "expected": 22.477708999999777
+    },
+    {
+      "path": "rainfall/current-jsonl/promptOwnerMs/max",
+      "actual": 45.49995800000033,
+      "expected": 45.49995800000033
+    },
+    {
+      "path": "rainfall/current-jsonl/admissionOwnerMs/count",
+      "actual": 42,
+      "expected": 42
+    },
+    {
+      "path": "rainfall/current-jsonl/admissionOwnerMs/median",
+      "actual": 43.42670850000013,
+      "expected": 43.42670850000013
+    },
+    {
+      "path": "rainfall/current-jsonl/admissionOwnerMs/mean",
+      "actual": 46.86998319047613,
+      "expected": 46.86998319047613
+    },
+    {
+      "path": "rainfall/current-jsonl/admissionOwnerMs/p95",
+      "actual": 63.420874999999796,
+      "expected": 63.420874999999796
+    },
+    {
+      "path": "rainfall/current-jsonl/admissionOwnerMs/min",
+      "actual": 34.183334000000286,
+      "expected": 34.183334000000286
+    },
+    {
+      "path": "rainfall/current-jsonl/admissionOwnerMs/max",
+      "actual": 67.10220800000025,
+      "expected": 67.10220800000025
+    },
+    {
+      "path": "rainfall/current-jsonl/terminalOwnerMs/count",
+      "actual": 42,
+      "expected": 42
+    },
+    {
+      "path": "rainfall/current-jsonl/terminalOwnerMs/median",
+      "actual": 43.51745899999878,
+      "expected": 43.51745899999878
+    },
+    {
+      "path": "rainfall/current-jsonl/terminalOwnerMs/mean",
+      "actual": 43.1720624761905,
+      "expected": 43.1720624761905
+    },
+    {
+      "path": "rainfall/current-jsonl/terminalOwnerMs/p95",
+      "actual": 60.47308400000111,
+      "expected": 60.47308400000111
+    },
+    {
+      "path": "rainfall/current-jsonl/terminalOwnerMs/min",
+      "actual": 27.76116700000057,
+      "expected": 27.76116700000057
+    },
+    {
+      "path": "rainfall/current-jsonl/terminalOwnerMs/max",
+      "actual": 61.633334000000104,
+      "expected": 61.633334000000104
+    },
+    {
+      "path": "rainfall/current-jsonl/importedTitleOwnerMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "rainfall/current-jsonl/importedTitleOwnerMs/median",
+      "actual": 32.19687500000009,
+      "expected": 32.19687500000009
+    },
+    {
+      "path": "rainfall/current-jsonl/importedTitleOwnerMs/mean",
+      "actual": 32.70020150000013,
+      "expected": 32.70020150000013
+    },
+    {
+      "path": "rainfall/current-jsonl/importedTitleOwnerMs/p95",
+      "actual": 35.785124999999425,
+      "expected": 35.785124999999425
+    },
+    {
+      "path": "rainfall/current-jsonl/importedTitleOwnerMs/min",
+      "actual": 31.080792000000656,
+      "expected": 31.080792000000656
+    },
+    {
+      "path": "rainfall/current-jsonl/importedTitleOwnerMs/max",
+      "actual": 35.785124999999425,
+      "expected": 35.785124999999425
+    },
+    {
+      "path": "rainfall/current-jsonl/allForkBytesPerRun/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "rainfall/current-jsonl/allForkBytesPerRun/median",
+      "actual": 6406047.0,
+      "expected": 6406047
+    },
+    {
+      "path": "rainfall/current-jsonl/allForkBytesPerRun/mean",
+      "actual": 6406047,
+      "expected": 6406047
+    },
+    {
+      "path": "rainfall/current-jsonl/allForkBytesPerRun/p95",
+      "actual": 6406047,
+      "expected": 6406047
+    },
+    {
+      "path": "rainfall/current-jsonl/allForkBytesPerRun/min",
+      "actual": 6406047,
+      "expected": 6406047
+    },
+    {
+      "path": "rainfall/current-jsonl/allForkBytesPerRun/max",
+      "actual": 6406047,
+      "expected": 6406047
+    },
+    {
+      "path": "rainfall/current-jsonl/messageBytesPerRun/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "rainfall/current-jsonl/messageBytesPerRun/median",
+      "actual": 445340.0,
+      "expected": 445340
+    },
+    {
+      "path": "rainfall/current-jsonl/messageBytesPerRun/mean",
+      "actual": 445340,
+      "expected": 445340
+    },
+    {
+      "path": "rainfall/current-jsonl/messageBytesPerRun/p95",
+      "actual": 445340,
+      "expected": 445340
+    },
+    {
+      "path": "rainfall/current-jsonl/messageBytesPerRun/min",
+      "actual": 445340,
+      "expected": 445340
+    },
+    {
+      "path": "rainfall/current-jsonl/messageBytesPerRun/max",
+      "actual": 445340,
+      "expected": 445340
+    },
+    {
+      "path": "rainfall/current-jsonl/fullReadMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "rainfall/current-jsonl/fullReadMs/median",
+      "actual": 81.26466650000003,
+      "expected": 81.26466650000003
+    },
+    {
+      "path": "rainfall/current-jsonl/fullReadMs/mean",
+      "actual": 82.53161116666666,
+      "expected": 82.53161116666666
+    },
+    {
+      "path": "rainfall/current-jsonl/fullReadMs/p95",
+      "actual": 87.62079199999994,
+      "expected": 87.62079199999994
+    },
+    {
+      "path": "rainfall/current-jsonl/fullReadMs/min",
+      "actual": 79.92012499999998,
+      "expected": 79.92012499999998
+    },
+    {
+      "path": "rainfall/current-jsonl/fullReadMs/max",
+      "actual": 87.62079199999994,
+      "expected": 87.62079199999994
+    },
+    {
+      "path": "rainfall/current-jsonl/recentPageMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "rainfall/current-jsonl/recentPageMs/median",
+      "actual": 3.4704790000000685,
+      "expected": 3.4704790000000685
+    },
+    {
+      "path": "rainfall/current-jsonl/recentPageMs/mean",
+      "actual": 3.5578054999999913,
+      "expected": 3.5578054999999913
+    },
+    {
+      "path": "rainfall/current-jsonl/recentPageMs/p95",
+      "actual": 3.9974589999999353,
+      "expected": 3.9974589999999353
+    },
+    {
+      "path": "rainfall/current-jsonl/recentPageMs/min",
+      "actual": 3.3613749999999527,
+      "expected": 3.3613749999999527
+    },
+    {
+      "path": "rainfall/current-jsonl/recentPageMs/max",
+      "actual": 3.9974589999999353,
+      "expected": 3.9974589999999353
+    },
+    {
+      "path": "rainfall/current-jsonl/allPagesMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "rainfall/current-jsonl/allPagesMs/median",
+      "actual": 9.873770999999977,
+      "expected": 9.873770999999977
+    },
+    {
+      "path": "rainfall/current-jsonl/allPagesMs/mean",
+      "actual": 9.897020833333329,
+      "expected": 9.897020833333329
+    },
+    {
+      "path": "rainfall/current-jsonl/allPagesMs/p95",
+      "actual": 10.181790999999976,
+      "expected": 10.181790999999976
+    },
+    {
+      "path": "rainfall/current-jsonl/allPagesMs/min",
+      "actual": 9.736250000000041,
+      "expected": 9.736250000000041
+    },
+    {
+      "path": "rainfall/current-jsonl/allPagesMs/max",
+      "actual": 10.181790999999976,
+      "expected": 10.181790999999976
+    },
+    {
+      "path": "rainfall/current-jsonl/legacyFirstPageMs/count",
+      "actual": 6,
+      "expected": 6
+    },
+    {
+      "path": "rainfall/current-jsonl/legacyFirstPageMs/median",
+      "actual": 20.497771,
+      "expected": 20.497771
+    },
+    {
+      "path": "rainfall/current-jsonl/legacyFirstPageMs/mean",
+      "actual": 20.46979166666665,
+      "expected": 20.46979166666665
+    },
+    {
+      "path": "rainfall/current-jsonl/legacyFirstPageMs/p95",
+      "actual": 20.86012500000004,
+      "expected": 20.86012500000004
+    },
+    {
+      "path": "rainfall/current-jsonl/legacyFirstPageMs/min",
+      "actual": 20.16199999999992,
+      "expected": 20.16199999999992
+    },
+    {
+      "path": "rainfall/current-jsonl/legacyFirstPageMs/max",
+      "actual": 20.86012500000004,
+      "expected": 20.86012500000004
+    },
+    {
+      "path": "rainfall/current-legacy-json/percent/messageOwnerMs",
+      "actual": -5.566472208481388,
+      "expected": -5.566472208481388
+    },
+    {
+      "path": "rainfall/current-legacy-json/percent/messageRepositorySaveMs",
+      "actual": 1.3005437929250796,
+      "expected": 1.3005437929250796
+    },
+    {
+      "path": "rainfall/current-legacy-json/percent/fullReadMs",
+      "actual": 2.346562362530258,
+      "expected": 2.346562362530258
+    },
+    {
+      "path": "rainfall/current-legacy-json/percent/recentPageMs",
+      "actual": 2.9997102049174718,
+      "expected": 2.9997102049174718
+    },
+    {
+      "path": "rainfall/current-legacy-json/percent/allPagesMs",
+      "actual": -14.217488823645663,
+      "expected": -14.217488823645663
+    },
+    {
+      "path": "rainfall/current-legacy-json/percent/legacyFirstPageMs",
+      "actual": -5.355390755778022,
+      "expected": -5.355390755778022
+    },
+    {
+      "path": "rainfall/current-legacy-json/percent/messageBytesPerRun",
+      "actual": 0.0,
+      "expected": 0
+    },
+    {
+      "path": "rainfall/current-legacy-json/percent/allForkBytesPerRun",
+      "actual": 0.0,
+      "expected": 0
+    },
+    {
+      "path": "rainfall/current-jsonl/percent/messageOwnerMs",
+      "actual": -32.85328480697679,
+      "expected": -32.85328480697679
+    },
+    {
+      "path": "rainfall/current-jsonl/percent/messageRepositorySaveMs",
+      "actual": -31.28644604642953,
+      "expected": -31.28644604642953
+    },
+    {
+      "path": "rainfall/current-jsonl/percent/fullReadMs",
+      "actual": 141.38931176376622,
+      "expected": 141.38931176376622
+    },
+    {
+      "path": "rainfall/current-jsonl/percent/recentPageMs",
+      "actual": -89.18514169396462,
+      "expected": -89.18514169396462
+    },
+    {
+      "path": "rainfall/current-jsonl/percent/allPagesMs",
+      "actual": -74.49110327529537,
+      "expected": -74.49110327529537
+    },
+    {
+      "path": "rainfall/current-jsonl/percent/legacyFirstPageMs",
+      "actual": 4.9710933224083265,
+      "expected": 4.9710933224083265
+    },
+    {
+      "path": "rainfall/current-jsonl/percent/messageBytesPerRun",
+      "actual": -98.97408690590126,
+      "expected": -98.97408690590126
+    },
+    {
+      "path": "rainfall/current-jsonl/percent/allForkBytesPerRun",
+      "actual": -97.61170142588655,
+      "expected": -97.61170142588655
+    }
+  ]
+}

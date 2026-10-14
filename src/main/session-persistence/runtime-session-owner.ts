@@ -10,7 +10,9 @@ import {
 import { hasDurableRuntimeSessionAdmission } from '../../shared/runtime-session-admission'
 import {
   applyRuntimeSessionEvents,
+  applyRuntimeSessionEventsWithChanges,
   attachRuntimeSessionArtifacts,
+  type RuntimeSessionChanges,
   type RuntimeSessionScope
 } from '../../shared/runtime-session-projection'
 import {
@@ -23,6 +25,7 @@ import {
 } from '../../shared/session-persistence'
 import type { AgentFrameworkId } from '../../shared/settings'
 import { matchPlanDelivery } from '../session-plan/plan-delivery'
+import type { RuntimeSessionMutationOptions } from './runtime-session-mutation'
 
 const log = createLogger('session-persistence')
 
@@ -98,7 +101,8 @@ type RuntimeSessionOwnerDependencies = {
   loadSession(scope: RuntimeSessionTurnScope): Promise<PersistedChatSession | undefined>
   mutateSession(
     scope: RuntimeSessionTurnScope,
-    mutate: (latest: PersistedChatSession) => PersistedChatSession
+    mutate: (latest: PersistedChatSession) => PersistedChatSession,
+    options?: import('./runtime-session-mutation').RuntimeSessionMutationOptions
   ): Promise<PersistedChatSession>
   finalizeArtifacts(request: { claimId: string; messageId: string }): Promise<ArtifactFile[]>
   onCommitted?(session: PersistedChatSession): void
@@ -1139,58 +1143,84 @@ export class RuntimeSessionOwner {
     while (turn.pending.length > 0 || turn.replayConsumptionPending) {
       const batch = turn.pending.slice()
       const consumeReplay = turn.replayConsumptionPending
-      committed = await this.mutateSession(turn.scope, 'flush-events', (latest) => {
-        if (this.turns.get(turnKey(turn.scope.sessionId, turn.scope.promptMessageId)) !== turn)
-          return latest
-        // Admission may have included this batch while an older physical write was waiting for
-        // the Session lane. Never replay its deltas over the newly committed execution.
-        const pendingIds = new Set(turn.pending.map(({ id }) => id))
-        const remainingBatch = batch.filter(({ id }) => pendingIds.has(id))
-        if (remainingBatch.length === 0 && !consumeReplay) return latest
-        assertScopeMatchesSession(
-          turn.scope,
-          latest,
-          false,
-          turn.promptRuntimeSegmentId,
-          turn.terminalObserved
-        )
-        if (
-          latest.activeRun?.promptMessageId === turn.scope.promptMessageId &&
-          latest.activeRun.startedAt > turn.runStartedAt
-        )
-          return latest
-        const next = this.applyTurnEvents(latest, turn, remainingBatch)
-        if (consumeReplay) {
-          delete next.pendingHistoryReplay
-          delete next.branchContextResetRequired
-          // Only decisions from before this Attempt were delivered by its prompt. A new question
-          // answered during this Attempt belongs to a later continuation and keeps its receipt.
-          const settle = <T extends NonNullable<PersistedChatSession['activities']>[number]>(
-            activity: T
-          ): T => {
-            if (
-              !activity.elicitation?.continuationPending ||
-              !turn.elicitationReceipts.has(activity.id) ||
-              turn.elicitationReceipts.get(activity.id) !== activity.elicitation.respondedAt
-            )
-              return activity
-            const { continuationPending: _pending, ...elicitation } = activity.elicitation
-            void _pending
-            return { ...activity, elicitation }
-          }
-          if (next.conversationGraph) {
-            next.conversationGraph = {
-              ...next.conversationGraph,
-              activities: next.conversationGraph.activities.map(settle)
+      let projection: PersistedChatSession | undefined
+      let changes: RuntimeSessionChanges | undefined
+      committed = await this.mutateSession(
+        turn.scope,
+        'flush-events',
+        (latest) => {
+          projection = undefined
+          changes = undefined
+          if (this.turns.get(turnKey(turn.scope.sessionId, turn.scope.promptMessageId)) !== turn)
+            return latest
+          // Admission may have included this batch while an older physical write was waiting for
+          // the Session lane. Never replay its deltas over the newly committed execution.
+          const pendingIds = new Set(turn.pending.map(({ id }) => id))
+          const remainingBatch = batch.filter(({ id }) => pendingIds.has(id))
+          if (remainingBatch.length === 0 && !consumeReplay) return latest
+          assertScopeMatchesSession(
+            turn.scope,
+            latest,
+            false,
+            turn.promptRuntimeSegmentId,
+            turn.terminalObserved
+          )
+          if (
+            latest.activeRun?.promptMessageId === turn.scope.promptMessageId &&
+            latest.activeRun.startedAt > turn.runStartedAt
+          )
+            return latest
+          // A guarded handoff batch may return latest unchanged. Replay receipt cleanup still
+          // owns a fresh root so the pure-mutation path never deletes fields from its input.
+          const reduced: { session: PersistedChatSession; changes?: RuntimeSessionChanges } =
+            consumeReplay || remainingBatch.some(({ id }) => turn.approvedHandoffFailures?.has(id))
+              ? { session: this.applyTurnEvents(latest, turn, remainingBatch) }
+              : applyRuntimeSessionEventsWithChanges(latest, turn.scope, remainingBatch)
+          const next = { ...reduced.session }
+          changes = reduced.changes
+          if (consumeReplay) {
+            delete next.pendingHistoryReplay
+            delete next.branchContextResetRequired
+            // Only decisions from before this Attempt were delivered by its prompt. A new question
+            // answered during this Attempt belongs to a later continuation and keeps its receipt.
+            const settle = <T extends NonNullable<PersistedChatSession['activities']>[number]>(
+              activity: T
+            ): T => {
+              if (
+                !activity.elicitation?.continuationPending ||
+                !turn.elicitationReceipts.has(activity.id) ||
+                turn.elicitationReceipts.get(activity.id) !== activity.elicitation.respondedAt
+              )
+                return activity
+              const { continuationPending: _pending, ...elicitation } = activity.elicitation
+              void _pending
+              return { ...activity, elicitation }
             }
-            // Flat activities intentionally omit turn identity. Derive them from the settled
-            // graph so the persisted receipt and renderer projection cannot disagree.
-            next.activities = resolveActiveConversationActivities(next.conversationGraph).activities
+            if (next.conversationGraph) {
+              next.conversationGraph = {
+                ...next.conversationGraph,
+                activities: next.conversationGraph.activities.map(settle)
+              }
+              // Flat activities intentionally omit turn identity. Derive them from the settled
+              // graph so the persisted receipt and renderer projection cannot disagree.
+              next.activities = resolveActiveConversationActivities(
+                next.conversationGraph
+              ).activities
+            }
+            next.updatedAt = Math.max(next.updatedAt, this.now())
           }
-          next.updatedAt = Math.max(next.updatedAt, this.now())
-        }
-        return next
-      })
+          projection = next
+          return next
+        },
+        (candidate) =>
+          projection &&
+          candidate.conversationGraph === projection.conversationGraph &&
+          candidate.messages === projection.messages &&
+          candidate.activities === projection.activities &&
+          candidate.activityGroups === projection.activityGroups
+            ? changes
+            : undefined
+      )
       const committedIds = new Set(batch.map(({ id }) => id))
       turn.pending = turn.pending.filter(({ id }) => !committedIds.has(id))
       for (const id of committedIds) turn.approvedHandoffFailures?.delete(id)
@@ -1315,10 +1345,17 @@ export class RuntimeSessionOwner {
     scope: RuntimeSessionTurnScope,
     phase:
       'begin-turn' | 'prepare-permission' | 'flush-events' | 'stage-artifacts' | 'attach-artifacts',
-    mutate: (latest: PersistedChatSession) => PersistedChatSession
+    mutate: (latest: PersistedChatSession) => PersistedChatSession,
+    getChanges?: RuntimeSessionMutationOptions['getChanges']
   ): Promise<PersistedChatSession> {
     try {
-      return await this.dependencies.mutateSession(scope, mutate)
+      return await this.dependencies.mutateSession(
+        scope,
+        mutate,
+        phase === 'flush-events' || phase === 'stage-artifacts' || phase === 'attach-artifacts'
+          ? { immutableCanonicalTranscript: true, ...(getChanges ? { getChanges } : {}) }
+          : undefined
+      )
     } catch (error) {
       try {
         log.warn('Runtime Session mutation failed', {

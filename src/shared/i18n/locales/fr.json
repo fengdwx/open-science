@@ -7509,6 +7509,11 @@
     "Check the proxy used by Open-Science. A working browser connection may use different proxy settings.": "Vérifiez le proxy utilisé par Open-Science. Une connexion de navigateur fonctionnelle peut utiliser d’autres paramètres de proxy.",
     "Reconnect the backend, then check again.": "Reconnectez le backend, puis vérifiez à nouveau.",
     "System uses the proxy configuration available to the backend. Browser and operating-system proxy settings may differ; choose Manual to set a fixed proxy.": "Le mode Système utilise la configuration proxy disponible pour le serveur. Les paramètres du navigateur et du système d’exploitation peuvent différer. Choisissez Manuel pour définir un proxy fixe.",
-    "Backend defaults": "Valeurs par défaut du serveur"
+    "Backend defaults": "Valeurs par défaut du serveur",
+    "Loading earlier messages…": "Chargement des messages précédents…",
+    "Retry loading earlier messages": "Réessayer de charger les messages précédents",
+    "Load full conversation": "Charger la conversation complète",
+    "Load the complete conversation to access message revisions and subagents.": "Chargez la conversation complète pour accéder aux révisions des messages et aux sous-agents.",
+    "Could not load conversation history.": "Impossible de charger l’historique de la conversation."
   }
 }

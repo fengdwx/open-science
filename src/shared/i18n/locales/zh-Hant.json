@@ -7181,6 +7181,11 @@
     "Check the proxy used by Open-Science. A working browser connection may use different proxy settings.": "請檢查 Open-Science 使用的代理。瀏覽器連線正常時，可能使用了不同的代理設定。",
     "Reconnect the backend, then check again.": "請重新連接後端，然後再次檢查。",
     "System uses the proxy configuration available to the backend. Browser and operating-system proxy settings may differ; choose Manual to set a fixed proxy.": "系統模式使用後端可用的代理設定，可能與瀏覽器和作業系統的代理設定不同。如需固定代理，請選擇手動模式。",
-    "Backend defaults": "後端預設設定"
+    "Backend defaults": "後端預設設定",
+    "Loading earlier messages…": "正在載入更早的訊息…",
+    "Retry loading earlier messages": "重試載入更早的訊息",
+    "Load full conversation": "載入完整對話",
+    "Load the complete conversation to access message revisions and subagents.": "載入完整對話，以查看訊息修訂和子智能體。",
+    "Could not load conversation history.": "無法載入對話歷史。"
   }
 }

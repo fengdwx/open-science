@@ -342,8 +342,8 @@ const createAcpRuntime = ({
               scope.projectId,
               scope.sessionId
             ),
-          mutateSession: (scope, mutate) =>
-            sessionPersistenceCoordinator.mutateRuntimeSession(scope, mutate),
+          mutateSession: (scope, mutate, options) =>
+            sessionPersistenceCoordinator.mutateRuntimeSession(scope, mutate, options),
           finalizeArtifacts: finalizeRuntimeArtifacts,
           onTerminalCommitExhausted: (_scope, event, retry, waitForWriteRelease) =>
             sessionPersistenceCoordinator.recordRuntimeTerminalFailure?.(

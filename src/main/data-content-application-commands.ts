@@ -1,3 +1,8 @@
+import {
+  SESSION_HISTORY_CURSOR_STALE,
+  SessionHistoryCursorStaleError,
+  loadSessionHistoryPageRequestSchema
+} from '../shared/session-history'
 import type { OfficePreviewCommands } from './office-preview/application-commands'
 import type { FileSaveCommands } from './file-save'
 import type { ArtifactReproducibilityCommands } from './artifacts/artifact-reproducibility-commands'
@@ -127,6 +132,12 @@ type SessionApplicationCommandOwner = Omit<SessionPersistenceHandlers, 'deleteSe
   editDetails(
     request: SessionPersistence.EditSessionDetailsRequest
   ): Promise<SessionPersistence.PersistedChatSession>
+  rename(
+    request: SessionPersistence.RenameSessionRequest
+  ): Promise<SessionPersistence.SessionMetadataReceipt>
+  setPinned(
+    request: SessionPersistence.SetSessionPinnedRequest
+  ): Promise<SessionPersistence.SessionMetadataReceipt>
   updateSessionConfiguration(
     session: SessionPersistence.PersistedChatSession,
     expectedRevision: number
@@ -466,6 +477,16 @@ const dataContentApplicationCommands = Object.freeze({
     'editDetails',
     SessionPersistence.sessionApplicationCommandContracts.editDetails
   ),
+  sessionRename: sessionCommand(
+    'sessions:rename',
+    'rename',
+    SessionPersistence.sessionApplicationCommandContracts.rename
+  ),
+  sessionSetPinned: sessionCommand(
+    'sessions:set-pinned',
+    'setPinned',
+    SessionPersistence.sessionApplicationCommandContracts.setPinned
+  ),
   sessionExportConversation: electronCommand(
     'sessions:export-conversation',
     'exportConversationFromInvokingWindow'
@@ -518,6 +539,7 @@ const dataContentApplicationCommands = Object.freeze({
   ),
   sessionLoadAll: sessionCommand('sessions:load-all', 'loadAll'),
   sessionLoadOne: sessionCommand('sessions:load-one', 'loadOne'),
+  sessionLoadHistoryPage: sessionCommand('sessions:load-history-page', 'loadHistoryPage'),
   sessionListRuntimeTerminalFailures: sessionCommand(
     'sessions:list-runtime-terminal-failures',
     'listRuntimeTerminalFailures'
@@ -669,6 +691,8 @@ const dataContentApplicationCommandGroups = Object.freeze([
     dataContentApplicationCommands.sessionOpenRecoveryFolder,
     dataContentApplicationCommands.sessionDelete,
     dataContentApplicationCommands.sessionEditDetails,
+    dataContentApplicationCommands.sessionRename,
+    dataContentApplicationCommands.sessionSetPinned,
     dataContentApplicationCommands.sessionExportConversation,
     dataContentApplicationCommands.sessionInspectDiagnostics,
     dataContentApplicationCommands.sessionExportDiagnostics,
@@ -682,6 +706,7 @@ const dataContentApplicationCommandGroups = Object.freeze([
     dataContentApplicationCommands.sessionList,
     dataContentApplicationCommands.sessionLoadAll,
     dataContentApplicationCommands.sessionLoadOne,
+    dataContentApplicationCommands.sessionLoadHistoryPage,
     dataContentApplicationCommands.sessionListRuntimeTerminalFailures,
     dataContentApplicationCommands.sessionRetryRuntimeTerminalCommit,
     dataContentApplicationCommands.sessionSearchMessages,
@@ -983,6 +1008,50 @@ const registerDataContentApplicationCommands = (
           })
         )
       },
+      'sessions:rename': (invocation) =>
+        dependencies.withDataRootWrite(() =>
+          preserveSessionSizeLimitCode(async () => {
+            try {
+              return await dependencies.sessions.rename(invocation.args[0])
+            } catch (error) {
+              if (SessionPersistence.isSessionDetailsConflictError(error)) {
+                throw new ApplicationCommandError(
+                  SessionPersistence.SESSION_DETAILS_CONFLICT_ERROR_CODE,
+                  error instanceof Error ? error.message : 'Session details changed elsewhere.'
+                )
+              }
+              if (SessionPersistence.isSessionRevisionConflictError(error)) {
+                throw new ApplicationCommandError(
+                  SessionPersistence.SESSION_REVISION_CONFLICT_ERROR_CODE,
+                  error instanceof Error ? error.message : 'Session revision conflict.'
+                )
+              }
+              throw error
+            }
+          })
+        ),
+      'sessions:set-pinned': (invocation) =>
+        dependencies.withDataRootWrite(() =>
+          preserveSessionSizeLimitCode(async () => {
+            try {
+              return await dependencies.sessions.setPinned(invocation.args[0])
+            } catch (error) {
+              if (SessionPersistence.isSessionDetailsConflictError(error)) {
+                throw new ApplicationCommandError(
+                  SessionPersistence.SESSION_DETAILS_CONFLICT_ERROR_CODE,
+                  error instanceof Error ? error.message : 'Session pin changed elsewhere.'
+                )
+              }
+              if (SessionPersistence.isSessionRevisionConflictError(error)) {
+                throw new ApplicationCommandError(
+                  SessionPersistence.SESSION_REVISION_CONFLICT_ERROR_CODE,
+                  error instanceof Error ? error.message : 'Session revision conflict.'
+                )
+              }
+              throw error
+            }
+          })
+        ),
       'sessions:export-conversation': (invocation) => {
         assertElectronCaller(
           invocation,
@@ -1055,6 +1124,18 @@ const registerDataContentApplicationCommands = (
         ),
       'sessions:load-one': ({ args }) =>
         dependencies.withDataRootWrite(() => dependencies.sessions.loadOne(args[0])),
+      'sessions:load-history-page': ({ args }) =>
+        dependencies.withDataRootWrite(async () => {
+          try {
+            return await dependencies.sessions.loadHistoryPage(
+              loadSessionHistoryPageRequestSchema.parse(args[0])
+            )
+          } catch (error) {
+            if (error instanceof SessionHistoryCursorStaleError)
+              throw new ApplicationCommandError(SESSION_HISTORY_CURSOR_STALE, error.message)
+            throw error
+          }
+        }),
       'sessions:list-runtime-terminal-failures': () =>
         dependencies.sessions.listRuntimeTerminalFailures(),
       'sessions:retry-runtime-terminal-commit': ({ args }) =>

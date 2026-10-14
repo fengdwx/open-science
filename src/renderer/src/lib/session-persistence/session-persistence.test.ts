@@ -20,6 +20,7 @@ import {
 } from '../../../../shared/conversation-graph'
 import {
   materializeSessionConversationGraph,
+  sessionMetadataReceipt,
   SESSION_MANIFEST_VERSION,
   SessionRevisionConflictError,
   type LoadAllSessionsResult,
@@ -41,6 +42,7 @@ import {
 } from '../../stores/session-conversation-intents'
 import {
   MAX_SESSION_REVISION_REBASE_ATTEMPTS,
+  applySessionMetadataReceipt,
   createOrderedSessionPersistence,
   createStoreSaver,
   deriveSessionCatalogRecovery,
@@ -826,6 +828,97 @@ describe('renderer session persistence bridge', () => {
       { conflictRebaseFields: ['title'] }
     )
     expect(useSessionStore.getState().sessions[0]?.contentLoaded).not.toBe(false)
+  })
+
+  it('uses narrow commands for unopened metadata edits without hydrating history', async () => {
+    const authority = createPersistedSession({
+      id: 'session-2',
+      projectId: 'project-1',
+      pinned: false
+    })
+    useSessionStore.getState().hydrateSessionSummaries(
+      [
+        {
+          number: 2,
+          id: authority.id,
+          projectId: authority.projectId,
+          title: authority.title,
+          status: 'idle',
+          presentedStatus: 'idle',
+          pinned: false,
+          revision: 0,
+          activeMessageCount: 1000,
+          artifactCount: 0,
+          filesRevision: 0,
+          createdAt: authority.createdAt,
+          updatedAt: authority.updatedAt,
+          needsStartupRecovery: false
+        }
+      ],
+      undefined
+    )
+    const rename = vi.fn(async () =>
+      sessionMetadataReceipt({ ...authority, title: 'Renamed', revision: 1 })
+    )
+    const setPinned = vi.fn(async () =>
+      sessionMetadataReceipt({ ...authority, title: 'Renamed', pinned: true, revision: 2 })
+    )
+    const api = createApi({ rename, setPinned })
+    const save = createStoreSaver(api, useSessionStore.getState())
+    useSessionStore.getState().renameSession(authority.id, 'Renamed')
+    useSessionStore.getState().togglePinned(authority.id)
+    await save(useSessionStore.getState())
+    expect(rename).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      sessionId: 'session-2',
+      expectedTitle: 'Restored',
+      title: 'Renamed'
+    })
+    expect(setPinned).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      sessionId: 'session-2',
+      expectedPinned: false,
+      pinned: true
+    })
+    expect(api.loadOne).not.toHaveBeenCalled()
+    expect(api.saveSession).not.toHaveBeenCalled()
+    expect(useSessionStore.getState().sessions[0]).toMatchObject({
+      title: 'Renamed',
+      pinned: true,
+      contentLoaded: false,
+      messages: [],
+      revision: 2
+    })
+    await save(useSessionStore.getState())
+    expect(rename).toHaveBeenCalledTimes(1)
+    expect(setPinned).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not let a metadata receipt acknowledge unrelated transcript content or a newer local edit', () => {
+    const original = hydrateSession(createPersistedSession({ revision: 3, title: 'Before' }))
+    useSessionStore.setState({ sessions: [original] })
+    useSessionStore.getState().renameSession(original.id, 'Newer local title')
+    applySessionMetadataReceipt(
+      original,
+      sessionMetadataReceipt({
+        ...toPersistedSession(original),
+        title: 'Older receipt',
+        revision: 7
+      }),
+      ['title']
+    )
+    expect(useSessionStore.getState().sessions[0]).toMatchObject({
+      title: 'Newer local title',
+      unsavedTitle: true,
+      revision: 3
+    })
+    useSessionStore.getState().deleteSession(original.id)
+    applySessionMetadataReceipt(
+      original,
+      sessionMetadataReceipt({ ...toPersistedSession(original), title: 'Deleted', revision: 8 }),
+      ['title']
+    )
+    expect(useSessionStore.getState().sessions).toEqual([])
   })
 
   it('does not hydrate a session snapshot after its startup effect is cancelled', async () => {

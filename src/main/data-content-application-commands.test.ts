@@ -24,6 +24,7 @@ import {
 } from './data-content-application-commands'
 import {
   materializeSessionConversationGraph,
+  sessionMetadataReceipt,
   SessionDetailsConflictError,
   SessionRevisionConflictError,
   SessionSizeLimitError,
@@ -32,6 +33,7 @@ import {
   type SessionDeletionResult
 } from '../shared/session-persistence'
 import { ApplicationCommandError } from '../shared/application-command-contract'
+import { SessionHistoryCursorStaleError } from '../shared/session-history'
 import * as Artifacts from '../shared/artifacts'
 import { MAIN_DELEGATION_POLICY_LIFECYCLE_CLIENT_ID } from '../shared/lifecycle-events'
 import { ApplicationEventHub } from './application-events'
@@ -199,6 +201,8 @@ const createDependencies = () => {
     retryRuntimeTerminalCommit: vi.fn(async () => undefined),
     searchMessages: vi.fn(),
     editDetails: vi.fn(async () => session),
+    rename: vi.fn(async () => sessionMetadataReceipt(session)),
+    setPinned: vi.fn(async () => sessionMetadataReceipt(session)),
     filterPdfContextCandidates: vi.fn(async () => ({
       sources: [],
       pendingAttachmentIds: []
@@ -208,6 +212,7 @@ const createDependencies = () => {
     list: vi.fn(),
     loadAll: vi.fn(),
     loadOne: vi.fn(),
+    loadHistoryPage: vi.fn(),
     loadUsage: vi.fn(),
     saveSession: vi.fn(async () => ({ created: true, session })),
     bindTaskSession: vi.fn(async () => session),
@@ -330,6 +335,7 @@ const WRAPPED_COMMAND_KEYS = [
   'sessionList',
   'sessionLoadAll',
   'sessionLoadOne',
+  'sessionLoadHistoryPage',
   'sessionListRuntimeTerminalFailures',
   'sessionRetryRuntimeTerminalCommit',
   'sessionSearchMessages',
@@ -370,6 +376,43 @@ const dispatchCommand = (
 }
 
 describe('Data and content application commands', () => {
+  it('loads bounded history pages and transports stale cursors without falling back to full reads', async () => {
+    const router = createApplicationCommandRouter()
+    const deps = createDependencies()
+    registerDataContentApplicationCommands(router.registrar, deps.dependencies)
+    const request = { projectId: 'project-1', sessionId: 'session-1', limit: 80 }
+    const page = {
+      ...request,
+      revision: 1,
+      session: deps.session,
+      hasMore: false,
+      totalItems: 0
+    }
+    deps.sessions.loadHistoryPage.mockResolvedValueOnce(page)
+    await expect(
+      router.dispatcher.invoke(
+        dataContentApplicationCommands.sessionLoadHistoryPage,
+        invocation([request])
+      )
+    ).resolves.toBe(page)
+    expect(deps.sessions.loadHistoryPage).toHaveBeenCalledExactlyOnceWith(request)
+    expect(deps.withDataRootWrite).toHaveBeenCalledOnce()
+    deps.sessions.loadHistoryPage.mockRejectedValueOnce(new SessionHistoryCursorStaleError())
+    await expect(
+      router.dispatcher.invoke(
+        dataContentApplicationCommands.sessionLoadHistoryPage,
+        invocation([{ ...request, beforeCursor: 'stale' }])
+      )
+    ).rejects.toMatchObject({ code: 'SESSION_HISTORY_CURSOR_STALE' })
+    await expect(
+      router.dispatcher.invoke(
+        dataContentApplicationCommands.sessionLoadHistoryPage,
+        invocation([{ ...request, limit: 201 }])
+      )
+    ).rejects.toThrow()
+    expect(deps.sessions.loadHistoryPage).toHaveBeenCalledTimes(2)
+    expect(deps.sessions.loadOne).not.toHaveBeenCalled()
+  })
   it('routes explicit terminal retries to their exact Main execution and rejects malformed identity', async () => {
     const deps = createDependencies()
     const router = createApplicationCommandRouter()
@@ -444,6 +487,8 @@ describe('Data and content application commands', () => {
         'sessions:open-recovery-folder',
         'sessions:delete-session',
         'sessions:edit-details',
+        'sessions:rename',
+        'sessions:set-pinned',
         'sessions:export-conversation',
         'sessions:inspect-diagnostics',
         'sessions:export-diagnostics',
@@ -457,6 +502,7 @@ describe('Data and content application commands', () => {
         'sessions:list',
         'sessions:load-all',
         'sessions:load-one',
+        'sessions:load-history-page',
         'sessions:list-runtime-terminal-failures',
         'sessions:retry-runtime-terminal-commit',
         'sessions:search-messages',
@@ -755,6 +801,20 @@ describe('Data and content application commands', () => {
         key: 'artifactResolveVersionDescriptors',
         args: [request('artifact-version-descriptors')],
         owner: deps.artifacts.resolveVersionDescriptors
+      },
+      {
+        key: 'sessionRename',
+        args: [
+          { projectId: 'project-1', sessionId: 'session-1', expectedTitle: 'Session', title: 'New' }
+        ],
+        owner: deps.sessions.rename
+      },
+      {
+        key: 'sessionSetPinned',
+        args: [
+          { projectId: 'project-1', sessionId: 'session-1', expectedPinned: false, pinned: true }
+        ],
+        owner: deps.sessions.setPinned
       },
       { key: 'previewDelete', args: [request('preview-delete')], owner: deps.preview.delete },
       { key: 'previewLoad', args: [request('preview-load')], owner: deps.preview.load },
@@ -1552,6 +1612,46 @@ describe('Data and content application commands', () => {
       expect(dependencies.events.publish, mutation.label).not.toHaveBeenCalled()
     }
   })
+
+  it.each([
+    {
+      command: 'sessionRename' as const,
+      owner: 'rename' as const,
+      request: {
+        projectId: 'project-1',
+        sessionId: 'session-1',
+        expectedTitle: 'Before',
+        title: 'After'
+      }
+    },
+    {
+      command: 'sessionSetPinned' as const,
+      owner: 'setPinned' as const,
+      request: {
+        projectId: 'project-1',
+        sessionId: 'session-1',
+        expectedPinned: false,
+        pinned: true
+      }
+    }
+  ])(
+    'keeps a narrow $command request and preserves its field conflict',
+    async ({ command, owner, request }) => {
+      const router = createApplicationCommandRouter()
+      const deps = createDependencies()
+      registerDataContentApplicationCommands(router.registrar, deps.dependencies)
+      await expect(dispatchCommand(router, command, [request]).result).resolves.toEqual(
+        sessionMetadataReceipt(deps.session)
+      )
+      expect(deps.sessions.loadOne).not.toHaveBeenCalled()
+      expect(deps.sessions.saveSession).not.toHaveBeenCalled()
+      deps.sessions[owner].mockRejectedValueOnce(new SessionDetailsConflictError())
+      await expect(dispatchCommand(router, command, [request]).result).rejects.toMatchObject({
+        name: 'ApplicationCommandError',
+        code: 'session-details-conflict'
+      })
+    }
+  )
 
   it('preserves the Session details conflict code across the application command boundary', async () => {
     const router = createApplicationCommandRouter()

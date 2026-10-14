@@ -1,17 +1,29 @@
 import type { PersistedChatSession } from '../../shared/session-persistence'
+import type { RuntimeSessionChanges } from '../../shared/runtime-session-projection'
+
+// Main-only evidence from the reducer which produced this candidate. Never part of IPC options.
+export type MainSessionSaveOptions = {
+  runtimeChanges?: {
+    previous: PersistedChatSession
+    changes: RuntimeSessionChanges
+  }
+}
 
 type RevisionedSessionRepository = {
   saveSession(
     session: PersistedChatSession,
-    expectedRevision?: number
+    expectedRevision?: number,
+    options?: MainSessionSaveOptions
   ): Promise<PersistedChatSession>
 }
 
 export const saveSessionWithRevision = async (
   repository: RevisionedSessionRepository,
   session: PersistedChatSession,
-  expectedRevision?: number
+  expectedRevision?: number,
+  options?: MainSessionSaveOptions
 ): Promise<PersistedChatSession> => {
+  if (options) return repository.saveSession(session, expectedRevision, options)
   return expectedRevision === undefined
     ? repository.saveSession(session)
     : repository.saveSession(session, expectedRevision)

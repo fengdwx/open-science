@@ -7648,6 +7648,11 @@
     "Check the proxy used by Open-Science. A working browser connection may use different proxy settings.": "Проверьте прокси, используемый Open-Science. Рабочее подключение браузера может использовать другие настройки прокси.",
     "Reconnect the backend, then check again.": "Подключитесь к серверной части повторно и выполните проверку ещё раз.",
     "System uses the proxy configuration available to the backend. Browser and operating-system proxy settings may differ; choose Manual to set a fixed proxy.": "Системный режим использует настройки прокси, доступные серверной части. Настройки браузера и операционной системы могут отличаться. Выберите ручной режим, чтобы задать фиксированный прокси.",
-    "Backend defaults": "Настройки серверной части"
+    "Backend defaults": "Настройки серверной части",
+    "Loading earlier messages…": "Загрузка предыдущих сообщений…",
+    "Retry loading earlier messages": "Повторить загрузку предыдущих сообщений",
+    "Load full conversation": "Загрузить весь диалог",
+    "Load the complete conversation to access message revisions and subagents.": "Загрузите весь диалог, чтобы просмотреть редакции сообщений и субагентов.",
+    "Could not load conversation history.": "Не удалось загрузить историю диалога."
   }
 }
