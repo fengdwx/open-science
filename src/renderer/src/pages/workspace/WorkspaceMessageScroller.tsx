@@ -659,6 +659,28 @@ const WorkspaceMessageScrollerImpl = ({
           onError: onAnnotationError
         }
       : undefined
+  const activityAnnotationPort = useMemo<AnnotationPort | undefined>(
+    () =>
+      currentSessionId && onAddAnnotation && onAnnotationError
+        ? {
+            sessionId: currentSessionId,
+            activeAnnotations: activeTextAnnotations,
+            onAdd: handleAddTextAnnotation,
+            onUpdateNote: onUpdateAnnotationNote,
+            onRemove: onRemoveAnnotation,
+            onError: onAnnotationError
+          }
+        : undefined,
+    [
+      currentSessionId,
+      onAddAnnotation,
+      onAnnotationError,
+      activeTextAnnotations,
+      handleAddTextAnnotation,
+      onUpdateAnnotationNote,
+      onRemoveAnnotation
+    ]
+  )
   const revisionNavigationDisabledReason =
     activeSession &&
     (activeSession.activeRun ||
@@ -1565,20 +1587,23 @@ const WorkspaceMessageScrollerImpl = ({
   }
 
   // Records the user's explicit expansion choice for a single tool-activity detail row.
-  const toggleActivityRow = (activityId: string, nextExpanded: boolean): void => {
-    setActivityExpansionOverrideState((currentState) => {
-      const currentOverrides =
-        currentState.sessionId === currentSessionId ? currentState.overrides : {}
+  const toggleActivityRow = useCallback(
+    (activityId: string, nextExpanded: boolean): void => {
+      setActivityExpansionOverrideState((currentState) => {
+        const currentOverrides =
+          currentState.sessionId === currentSessionId ? currentState.overrides : {}
 
-      return {
-        sessionId: currentSessionId,
-        overrides: {
-          ...currentOverrides,
-          [activityId]: nextExpanded
+        return {
+          sessionId: currentSessionId,
+          overrides: {
+            ...currentOverrides,
+            [activityId]: nextExpanded
+          }
         }
-      }
-    })
-  }
+      })
+    },
+    [currentSessionId]
+  )
 
   // Opens the Session reviewer panel positioned at the finding the user clicked.
   // Only the "Go to transcript" button on a finding fires this; clicking the card itself does not.
@@ -2179,7 +2204,7 @@ const WorkspaceMessageScrollerImpl = ({
                     permission={activeSession?.runtimeContext?.permission}
                     jobsByActivityId={jobsByActivityId}
                     onOpenJobDetail={handleOpenJobDetail}
-                    annotationPort={annotationPortFor(activeTextAnnotations)}
+                    annotationPort={activityAnnotationPort}
                     revealRequest={
                       sessionItemRevealRequest?.itemType === 'tool-activity'
                         ? sessionItemRevealRequest

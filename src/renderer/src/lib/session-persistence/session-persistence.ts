@@ -2180,6 +2180,23 @@ const createStoreSaver = (
         ]
 
         const conversationCommands = pendingSessionConversationCommands(session.id)
+        const sourceAuthority = acknowledgedSessions.get(session.id)
+        // Main persists its runtime events at the streaming cadence. Observing those events or
+        // their receipts needs no renderer snapshot; leave any queued user edit untouched.
+        if (
+          !isForced &&
+          session.runtimeTranscriptOwner === 'main' &&
+          sourceAuthority?.runtimeTranscriptOwner === 'main' &&
+          conflictRebaseFields.length === 0 &&
+          conversationCommands.length === 0 &&
+          !selectionIntent &&
+          !session.unsavedTitle &&
+          !hasUnsavedContextReset &&
+          Boolean(session.branchContextResetRequired) ===
+            Boolean(sourceAuthority.branchContextResetRequired)
+        ) {
+          continue
+        }
         const writerOptions =
           conflictRebaseFields.length > 0 ||
           hasUnsavedContextReset ||
@@ -2196,7 +2213,6 @@ const createStoreSaver = (
                 ...(conversationCommands.length > 0 ? { conversationCommands } : {})
               }
             : undefined
-        const sourceAuthority = acknowledgedSessions.get(session.id)
         let submittedAuthority = sourceAuthority
         let rebasedBeforeSave = false
         const serializeSession = (): PersistedChatSession => {
