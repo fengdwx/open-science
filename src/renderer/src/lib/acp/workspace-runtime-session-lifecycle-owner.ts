@@ -264,9 +264,58 @@ const resumeInterruptedWorkspaceSession = async (
       return
     }
   }
-  const session = workspaceSession(sessionId)
+  let session = workspaceSession(sessionId)
 
-  if (!session) return
+  if (session?.contentLoaded === false) {
+    const source = session
+    const sourceBranchId = source.historyPage?.messageBranchId
+    const currentRecoverySource = (): ChatSession | undefined => {
+      const current = workspaceSession(sessionId)
+      const branchId =
+        current?.historyPage?.messageBranchId ??
+        current?.conversationGraph?.frames.find(
+          (frame) => frame.id === current.conversationGraph?.activeFrameId
+        )?.activeBranchId
+      return current?.projectId === source.projectId &&
+        current.createdAt === source.createdAt &&
+        (source.resumeRecovery?.promptMessageId === undefined ||
+          current.resumeRecovery?.promptMessageId === source.resumeRecovery.promptMessageId) &&
+        (sourceBranchId === undefined || branchId === sourceBranchId)
+        ? current
+        : undefined
+    }
+    // Indexed pages omit the graph. Load its authority before capturing the recovery identity,
+    // so attachment cannot turn an absent frame/branch into a false user selection change.
+    // Remember invalidation even if a shared in-flight history read later restores an old snapshot.
+    let invalidated = false
+    const unsubscribe = useSessionStore.subscribe(() => {
+      if (!currentRecoverySource()) invalidated = true
+    })
+    try {
+      await ensureSessionContentLoaded(
+        { projectId: source.projectId, sessionId },
+        {
+          loadOne: async (request) => {
+            const authority = await loadPersistedSession(request)
+            return !invalidated &&
+              currentRecoverySource() &&
+              authority?.createdAt === source.createdAt
+              ? authority
+              : undefined
+          }
+        }
+      )
+    } catch (error) {
+      if (!invalidated && currentRecoverySource())
+        reportWorkspaceOperationError(sessionId, resumeOperationMessage(error))
+      return
+    } finally {
+      unsubscribe()
+    }
+    session = invalidated ? undefined : currentRecoverySource()
+  }
+
+  if (!session || session.contentLoaded === false) return
   if (session.delegationPolicyAuthorityPending) {
     try {
       await confirmPendingDelegationPolicyAuthority(session)

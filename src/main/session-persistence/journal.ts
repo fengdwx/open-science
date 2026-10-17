@@ -92,7 +92,6 @@ type Prepared = {
   path: string
   previous: State
   records: readonly SessionBusinessRecord[]
-  legacyContents?: string
 }
 type HistoryObserver = { visit(value: JournalValue): void; record(): void }
 const nonnegative = (value: unknown): value is number =>
@@ -184,20 +183,14 @@ export class SessionJournalStore {
     const source = this.reads.get(previous)
     if (!source || source.path !== key)
       return fail("Prepared journal write requires this Session owner's authority read.")
-    const records =
-      source.state.format === 'journal'
-        ? diffSessionRecords(source.state.document, document, changes)
-        : []
+    if (source.state.format === 'legacy')
+      return fail('Legacy JSON must use the repository snapshot writer.')
+    const records = diffSessionRecords(source.state.document, document, changes)
     const result = Object.freeze({
-      document:
-        source.state.format === 'journal'
-          ? this.applyRecords(source.state.document, records)
-          : normalizeJournalValue(document)
+      document: this.applyRecords(source.state.document, records)
     })
     this.assertNextRevision(result.document, source.state.revision)
-    const legacyContents =
-      source.state.format === 'legacy' ? this.serializeLegacy(result.document) : undefined
-    this.prepared.set(result, { path: key, previous: source.state, records, legacyContents })
+    this.prepared.set(result, { path: key, previous: source.state, records })
     return result
   }
   writePrepared(
@@ -230,6 +223,8 @@ export class SessionJournalStore {
       const state = await this.readState(path)
       if ((state?.revision ?? 0) !== request.expectedRevision)
         throw new SessionJournalRevisionError(request.expectedRevision, state?.revision ?? 0)
+      if (state?.format === 'legacy')
+        return fail('Legacy JSON must use the repository snapshot writer.')
       if (
         prepared &&
         (prepared.previous.revision !== request.expectedRevision ||
@@ -237,18 +232,15 @@ export class SessionJournalStore {
       )
         return fail('Prepared journal authority changed before publication.')
       const records =
-        prepared?.records ??
-        (state?.format === 'journal' ? diffSessionRecords(state.document, request.document) : [])
+        prepared?.records ?? (state ? diffSessionRecords(state.document, request.document) : [])
       const document = prepared
         ? (request.document as JournalValue)
-        : state?.format === 'journal'
+        : state
           ? this.applyRecords(state.document, records)
           : normalizeJournalValue(request.document)
       this.assertNextRevision(document, request.expectedRevision)
       this.assertSize(document)
       if (!state) return this.publish(path, document)
-      if (state.format === 'legacy')
-        return this.replaceLegacy(path, document, state, prepared?.legacyContents)
       const contents =
         JSON.stringify({ type: 'session_update', revision: revisionOf(document), records }) + '\n'
       this.assertLineSize(Buffer.byteLength(contents))
@@ -286,37 +278,6 @@ export class SessionJournalStore {
       await this.retain(path, committed)
       return this.result(committed)
     })
-  }
-  private serializeLegacy(document: JournalValue): string {
-    const contents = `${JSON.stringify(document, null, 2)}\n`
-    if (Buffer.byteLength(contents) > this.options.maxBytes)
-      throw new SessionJournalSizeError(this.options.maxBytes)
-    return contents
-  }
-  private async replaceLegacy(
-    path: string,
-    document: JournalValue,
-    previous: State,
-    contents = this.serializeLegacy(document)
-  ): Promise<SessionJournalRead> {
-    if ((await this.fingerprint(path)) !== previous.fingerprint)
-      return fail('Session authority changed before JSON replacement.')
-    this.invalidate(path)
-    await writeDurableJsonFile(path, contents, this.dependencies)
-    const fingerprint = await this.fingerprint(path)
-    if (!fingerprint.startsWith('legacy:'))
-      return fail('Session authority changed during JSON replacement.')
-    const state: State = {
-      document,
-      revision: revisionOf(document),
-      format: 'legacy',
-      storageBytes: Buffer.byteLength(contents),
-      validBytes: Buffer.byteLength(contents),
-      fingerprint
-    }
-    // A different writer may have replaced the JSON after our rename. The next read must
-    // observe the file rather than bind our candidate to that replacement's fingerprint.
-    return this.result(state)
   }
   private async publish(path: string, document: JournalValue): Promise<SessionJournalRead> {
     await this.assertDirectory(path)

@@ -95,7 +95,7 @@ describe('Session business records', () => {
     after.session.messages[1].content = 'hello full new body'
     after.session.conversationGraph!.messages[1].content = 'hello full new body'
     after.session.activities![0].rawOutput.text = 'full new tool result'
-    const records = diffSessionRecords(before, after, { messages: ['active'] })
+    const records = diffSessionRecords(before, after)
     expect(replay(before, records)).toEqual(after)
     expect(JSON.stringify(records)).not.toContain('untouched historical body')
     expect(records).toContainEqual({
@@ -171,12 +171,12 @@ describe('Session business records', () => {
     expect(replay(full, diffSessionRecords(full, after))).toEqual(after)
   })
 
-  it('does not lose omitted dirty IDs and freezes prepared values against later mutation', () => {
+  it('retains historical edits and freezes prepared values against later mutation', () => {
     const before = document()
     const after = fixtureValue(structuredClone(before))
-    after.session.messages[0].content = 'unlisted change'
+    after.session.messages[0].content = 'historical edit'
     const expected = structuredClone(after)
-    const records = diffSessionRecords(before, after, { messages: ['active'] })
+    const records = diffSessionRecords(before, after)
     after.session.messages[0].content = 'late mutation'
     expect(replay(before, records)).toEqual(expected)
     expect(Object.isFrozen(records)).toBe(true)

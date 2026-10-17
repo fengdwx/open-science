@@ -12,8 +12,12 @@ const option = (name, fallback) => {
   const index = process.argv.indexOf(name)
   return index < 0 ? fallback : process.argv[index + 1]
 }
-const formalPath = resolve(option('--formal-report', ''))
-if (!option('--formal-report')) throw new Error('Provide the completed --formal-report')
+const formalOption = option('--formal-report')
+const preparedInputOption = option('--prepared-input')
+if (Boolean(formalOption) === Boolean(preparedInputOption))
+  throw new Error('Provide exactly one of --formal-report or --prepared-input')
+const formalPath = formalOption ? resolve(formalOption) : undefined
+const preparedInputPath = preparedInputOption ? resolve(preparedInputOption) : undefined
 const output = resolve(option('--output', '/tmp/open-science-runtime-benchmarks.json'))
 const repeats = Number(option('--repeats', '3'))
 if (!Number.isSafeInteger(repeats) || repeats < 1) throw new Error('Invalid repeat count')
@@ -29,11 +33,78 @@ const candidateRoot = option('--candidate-root')
   : undefined
 if (candidateRoot === (await realpath(workspace)))
   throw new Error('Copy the candidate into an independent frozen source directory first')
-const formal = JSON.parse(await readFile(formalPath, 'utf8'))
-if (formal.status !== 'complete' || !formal.equivalenceVerified || !formal.frozenSourceReverified)
-  throw new Error('The repository benchmark must finish and verify before runtime measurement')
-const preparedReport = `${formalPath}.logs/prepare.json`
-const prepared = JSON.parse(await readFile(preparedReport, 'utf8'))
+let reference
+let preparedReport
+let prepared
+if (formalPath) {
+  reference = JSON.parse(await readFile(formalPath, 'utf8'))
+  if (
+    reference.status !== 'complete' ||
+    !reference.equivalenceVerified ||
+    !reference.frozenSourceReverified
+  )
+    throw new Error('The repository benchmark must finish and verify before runtime measurement')
+  preparedReport = `${formalPath}.logs/prepare.json`
+  prepared = JSON.parse(await readFile(preparedReport, 'utf8'))
+} else {
+  // Preparation is a separate prerequisite, not a completed repository performance run.
+  const input = JSON.parse(await readFile(preparedInputPath, 'utf8'))
+  const validHash = (value) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
+  if (
+    input.kind !== 'open-science-runtime-prepared-input' ||
+    input.version !== 1 ||
+    typeof input.preparedReport !== 'string' ||
+    !input.preparedReport ||
+    !validHash(input.preparedReportSha256) ||
+    typeof input.baselineCommit !== 'string' ||
+    !/^[a-f0-9]{40}$/.test(input.baselineCommit) ||
+    typeof input.baselineRoot !== 'string' ||
+    !input.baselineRoot ||
+    !input.baselineSourceHashes ||
+    typeof input.baselineSourceHashes !== 'object' ||
+    Array.isArray(input.baselineSourceHashes) ||
+    Object.keys(input.baselineSourceHashes).length === 0 ||
+    !Object.entries(input.baselineSourceHashes).every(
+      ([path, hash]) =>
+        /^(src|scripts|e2e)\//.test(path) && !path.split('/').includes('..') && validHash(hash)
+    ) ||
+    !Array.isArray(input.sources?.cases) ||
+    input.sources.cases.length !== 3
+  )
+    throw new Error('Invalid prepared-input manifest')
+  preparedReport = resolve(dirname(preparedInputPath), input.preparedReport)
+  const contents = await readFile(preparedReport)
+  if (createHash('sha256').update(contents).digest('hex') !== input.preparedReportSha256)
+    throw new Error('Prepared report does not match its recorded hash')
+  prepared = JSON.parse(contents.toString('utf8'))
+  if (
+    prepared.phase !== 'prepare' ||
+    !Array.isArray(prepared.seeds) ||
+    prepared.seeds.length !== input.sources.cases.length ||
+    new Set(input.sources.cases.map((source) => source.id)).size !== input.sources.cases.length ||
+    new Set(prepared.seeds.map((seed) => seed.source?.id)).size !== prepared.seeds.length ||
+    !input.sources.cases.every((source) => {
+      const seed = prepared.seeds.find((item) => item.source?.id === source.id)
+      return (
+        typeof source.id === 'string' &&
+        source.id.length > 0 &&
+        validHash(source.sha256) &&
+        Number.isSafeInteger(source.bytes) &&
+        source.bytes > 0 &&
+        seed?.source.sha256 === source.sha256 &&
+        seed.source.bytes === source.bytes
+      )
+    })
+  )
+    throw new Error('Prepared report must contain the three verified source archives')
+  const baselineRoot = await realpath(resolve(dirname(preparedInputPath), input.baselineRoot))
+  reference = {
+    baselineCommit: input.baselineCommit,
+    sources: input.sources,
+    frozenSourceRoots: { 'original-json': baselineRoot },
+    frozenSourceHashes: { 'original-json': input.baselineSourceHashes }
+  }
+}
 const testFile = 'src/main/session-persistence/official-science-runtime-storage.benchmark.test.ts'
 const variants = ['original-json', 'current-legacy-json', 'current-jsonl']
 const isCurrent = (variant) => variant !== 'original-json'
@@ -486,13 +557,14 @@ const result = {
   frozenSourceReverified: false,
   description:
     'Three-path real-runtime 2s comparison: baseline JSON, current retained legacy JSON, current new JSONL. Same canonical starting histories; JSONL fixture setup excluded and no migration invoked. All canonical, business SQL and returned display fields checked outside timers. Warm OS cache; process startup, DB startup and compilation excluded. Legacy JSON complete-return without indexing; original JSON loads once before all in-memory display pages. No IPC, renderer, file index or provenance observers.',
-  baselineCommit: formal.baselineCommit,
+  baselineCommit: reference.baselineCommit,
   targetTurns,
   variants,
   repeatOrders: Array.from({ length: repeats }, (_, index) => orderForRepeat(index + 1)),
   repositoryBenchmark: formalPath,
+  preparedInput: preparedInputPath,
   preparedReport,
-  sourceArchives: formal.sources,
+  sourceArchives: reference.sources,
   frozenSourceRoots: rootsByVariant,
   frozenSourceHashes: {},
   candidateSource: { root: candidateRoot, hashes: candidateSourceHashes },
@@ -623,10 +695,10 @@ const verifyPages = (runs, modes = ['recent', 'all', 'legacy-first']) => {
 }
 try {
   for (const variant of variants) {
-    const inputRoot = isCurrent(variant) ? candidateRoot : formal.frozenSourceRoots[variant]
+    const inputRoot = isCurrent(variant) ? candidateRoot : reference.frozenSourceRoots[variant]
     const expectedHashes = isCurrent(variant)
       ? candidateSourceHashes
-      : formal.frozenSourceHashes[variant]
+      : reference.frozenSourceHashes[variant]
     await cp(inputRoot, rootsByVariant[variant], { recursive: true, verbatimSymlinks: true })
     ensure(
       JSON.stringify(await sourceInventory(rootsByVariant[variant])) ===

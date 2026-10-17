@@ -213,7 +213,7 @@ describe('SQLite Session display history', () => {
     ).rejects.toBeInstanceOf(SessionHistoryCursorStaleError)
   })
 
-  it('indexes the canonical active branch but withholds pages that would hide revision navigation', async () => {
+  it('removes unused branch indexes and rebuilds pages when the graph becomes linear again', async () => {
     const index = await setup()
     const original = [message('u1', 'user', 1), message('a1', 'agent', 2)]
     const graph = createLinearConversationGraph({
@@ -227,32 +227,27 @@ describe('SQLite Session display history', () => {
       [message('u2', 'user', 3), message('a2', 'agent', 4)],
       4
     )
-    const full = {
+    const linear = {
       ...session(0),
       messages: original,
-      conversationGraph: edited,
+      conversationGraph: graph,
       activityGroups: []
     }
+    await index.sync(linear, 'linear')
+    const first = (await index.readPage({ ...request, limit: 1 }, 'linear'))!
+    expect(first.hasMore).toBe(true)
+    expect(await client!.sessionHistoryItem.count()).toBeGreaterThan(0)
+
+    const full = { ...linear, revision: 2, conversationGraph: edited }
     await index.sync(full, 'edited')
     expect(await index.readPage(request, 'edited')).toBeUndefined()
-    const indexedMessages = async (): Promise<PersistedChatMessage[]> =>
-      (
-        await client!.sessionHistoryItem.findMany({
-          where: { sessionId: 'session-1', kind: 'message' },
-          orderBy: { ordinal: 'asc' }
-        })
-      ).map(({ payloadJson }) => JSON.parse(payloadJson))
-    expect((await indexedMessages()).map(({ id }) => id)).toEqual(['u2', 'a2'])
-    expect(
-      JSON.parse(
-        (await client!.sessionHistoryIndex.findUniqueOrThrow({ where: { sessionId: 'session-1' } }))
-          .scopeKey
-      )
-    ).toEqual([graph.activeFrameId, 'edited-branch', false])
+    expect(await index.readPage(request, 'linear')).toBeUndefined()
+    expect(await client!.sessionHistoryIndex.count()).toBe(0)
+    expect(await client!.sessionHistoryItem.count()).toBe(0)
     await index.sync(
       {
         ...full,
-        revision: 2,
+        revision: 3,
         conversationGraph: activateConversationBranch(edited, graph.branches[0]!.id)
       },
       'original',
@@ -262,8 +257,94 @@ describe('SQLite Session display history', () => {
       }
     )
     expect(await index.readPage(request, 'original')).toBeUndefined()
-    expect(await indexedMessages()).toEqual(original)
+    expect(await client!.sessionHistoryIndex.count()).toBe(0)
+    expect(await client!.sessionHistoryItem.count()).toBe(0)
+
+    await index.sync({ ...linear, revision: 4 }, 'linear-again', {
+      changes: { messages: [], activities: [], activityGroups: [], branches: [] },
+      sourceFingerprint: 'original'
+    })
+    expect(await index.readPage(request, 'linear-again')).toMatchObject({
+      revision: 4,
+      hasMore: false,
+      session: { messages: original }
+    })
     expect(await client!.sessionHistoryItem.count({ where: { kind: 'message' } })).toBe(2)
+    await expect(
+      index.readPage({ ...request, beforeCursor: first.beforeCursor }, 'linear-again')
+    ).rejects.toBeInstanceOf(SessionHistoryCursorStaleError)
+  })
+
+  it.each(['branch', 'frame'] as const)(
+    'does not inspect display records when the graph requires complete %s navigation',
+    async (kind) => {
+      const index = await setup()
+      let graph = createLinearConversationGraph({
+        sessionId: 'session-1',
+        messages: [message('u1', 'user', 1), message('a1', 'agent', 2)],
+        createdAt: 1,
+        updatedAt: 2
+      })
+      if (kind === 'branch') {
+        graph = forkEditedConversationMessage(graph, 'u1', 'edited-branch', 3)
+      } else {
+        graph.frames.push({
+          id: 'reviewer-frame',
+          kind: 'reviewer',
+          parentFrameId: graph.rootFrameId,
+          originMessageId: 'a1',
+          originBindingState: 'validated',
+          status: 'completed',
+          activeBranchId: 'reviewer-branch',
+          createdAt: 3
+        })
+        graph.branches.push({
+          id: 'reviewer-branch',
+          agentFrameId: 'reviewer-frame',
+          createdAt: 3,
+          updatedAt: 3
+        })
+      }
+      Object.defineProperty(graph, 'messages', {
+        get: () => {
+          throw new Error('Unused display history was projected')
+        }
+      })
+      await index.sync({ ...session(), conversationGraph: graph }, 'complex')
+      expect(await index.readPage(request, 'complex')).toBeUndefined()
+      expect(await client!.sessionHistoryIndex.count()).toBe(0)
+      expect(await client!.sessionHistoryItem.count()).toBe(0)
+    }
+  )
+
+  it('rolls back complex-history cleanup with its caller transaction', async () => {
+    const index = await setup()
+    const linear = session(1)
+    await index.sync(linear, 'before')
+    const graph = createLinearConversationGraph({
+      sessionId: linear.id,
+      messages: linear.messages,
+      createdAt: 1,
+      updatedAt: 200
+    })
+    const complex = {
+      ...linear,
+      revision: 2,
+      conversationGraph: forkEditedConversationMessage(graph, 'prompt', 'edited-branch', 201)
+    }
+    const before = await index.readPage(request, 'before')
+    await expect(
+      client!.$transaction(async (tx) => {
+        await index.sync(complex, 'after', undefined, tx)
+        expect(await tx.sessionHistoryIndex.count()).toBe(0)
+        expect(await tx.sessionHistoryItem.count()).toBe(0)
+        throw new Error('Abort parent projection')
+      })
+    ).rejects.toThrow('Abort parent projection')
+    expect(await index.readPage(request, 'before')).toEqual(before)
+    await index.sync(complex, 'after')
+    expect(await client!.sessionHistoryIndex.count()).toBe(0)
+    expect(await client!.sessionHistoryItem.count()).toBe(0)
   })
 
   it('updates only changed payloads and deletes only removed identities during ordinary saves', async () => {

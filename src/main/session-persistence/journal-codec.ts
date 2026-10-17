@@ -9,34 +9,32 @@ export type JournalValue =
   | { readonly [key: string]: JournalValue }
 const MAX_DEPTH = 96
 type Measurement = { bytes: number; depth: number }
-type EncodedString = { json: string; bytes: number }
 const sizes = new WeakMap<object, Measurement>()
 // Long text belongs to an immutable container, never a global string-keyed cache. The entry
 // disappears with its owner; path copies inherit only fields whose values did not change.
-const containerStrings = new WeakMap<object, Map<string | number, EncodedString>>()
+const containerStrings = new WeakMap<object, Map<string | number, number>>()
 // Schema keys and short enum values recur throughout a history. Keep a fixed-size cache only
 // for small strings, never messages, tool output, or an unbounded set of user strings.
-const scalarStrings = new Map<string, EncodedString>()
-const encodedString = (value: string): EncodedString => {
+const scalarStrings = new Map<string, number>()
+const encodedStringBytes = (value: string): number => {
   const cached = scalarStrings.get(value)
-  if (cached) return cached
-  const json = JSON.stringify(value)
-  const encoded = { json, bytes: Buffer.byteLength(json, 'utf8') }
-  if (value.length <= 64 && scalarStrings.size < 256) scalarStrings.set(value, encoded)
-  return encoded
+  if (cached !== undefined) return cached
+  const bytes = Buffer.byteLength(JSON.stringify(value), 'utf8')
+  if (value.length <= 64 && scalarStrings.size < 256) scalarStrings.set(value, bytes)
+  return bytes
 }
-const encodedChildString = (owner: object, key: string | number, value: string): EncodedString => {
-  if (value.length <= 64 || !Object.isFrozen(owner)) return encodedString(value)
+const encodedChildStringBytes = (owner: object, key: string | number, value: string): number => {
+  if (value.length <= 64 || !Object.isFrozen(owner)) return encodedStringBytes(value)
   let fields = containerStrings.get(owner)
   const cached = fields?.get(key)
-  if (cached) return cached
-  const encoded = encodedString(value)
+  if (cached !== undefined) return cached
+  const bytes = encodedStringBytes(value)
   if (!fields) {
     fields = new Map()
     containerStrings.set(owner, fields)
   }
-  fields.set(key, encoded)
-  return encoded
+  fields.set(key, bytes)
+  return bytes
 }
 const isObject = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -121,11 +119,11 @@ export const parseJournalValue = (contents: string, maxDepth = MAX_DEPTH): Journ
 // message visits new ancestors and that message; stable historical subtrees retain their sizes.
 const measureChild = (owner: object, key: string | number, child: JournalValue): Measurement =>
   typeof child === 'string'
-    ? { bytes: encodedChildString(owner, key, child).bytes, depth: 0 }
+    ? { bytes: encodedChildStringBytes(owner, key, child), depth: 0 }
     : measureJournalValue(child)
 
 const measureJournalValue = (value: JournalValue): Measurement => {
-  if (typeof value === 'string') return { bytes: encodedString(value).bytes, depth: 0 }
+  if (typeof value === 'string') return { bytes: encodedStringBytes(value), depth: 0 }
   if (value === null || typeof value !== 'object')
     return { bytes: JSON.stringify(value).length, depth: 0 }
   const cached = sizes.get(value)
@@ -144,7 +142,7 @@ const measureJournalValue = (value: JournalValue): Measurement => {
     const entries = Object.entries(value)
     bytes += Math.max(0, entries.length - 1)
     for (const [key, child] of entries) {
-      bytes += encodedString(key).bytes + 1
+      bytes += encodedStringBytes(key) + 1
       appendChild(key, child)
     }
   }
@@ -197,8 +195,8 @@ const retainUpdatedContainer = (
   return result
 }
 
-// Internal immutable construction for both codecs. These helpers carry exact measurements and
-// string encodings across known changes; they do not interpret persisted paths or operations.
+// Internal immutable construction for both codecs. These helpers carry exact measurements
+// across known changes; they do not interpret persisted paths or operations.
 // Inputs are already normalized Journal values; callers cannot mutate their cached subtrees.
 export const replaceJournalChild = (
   previous: JournalValue,

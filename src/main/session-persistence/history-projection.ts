@@ -225,6 +225,13 @@ export class SessionHistoryProjectionRepository {
     transaction?: Prisma.TransactionClient
   ): Promise<void> {
     const operation = async (tx: Prisma.TransactionClient): Promise<void> => {
+      const graph = session.conversationGraph
+      if (graph && (graph.frames.length !== 1 || graph.branches.length !== 1)) {
+        // These conversations use the complete reader for branch/Frame navigation. Remove
+        // any older display projection instead of maintaining rows that cannot be paginated.
+        await this.delete(session.id, tx)
+        return
+      }
       const { items, scopeKey } = historyItems(session)
       const revision = session.revision ?? 0
       const previous = await tx.sessionHistoryIndex.findUnique({ where: { sessionId: session.id } })

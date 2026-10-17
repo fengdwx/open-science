@@ -81,6 +81,7 @@ const RELIABLE_FAILURE_OBSERVE_PROMPT = 'Observe the reliable messaging post-fen
 const RELIABLE_FAIRNESS_PROMPT = 'Start the reliable messaging fairness journey.'
 const LONG_STREAM_PROMPT = 'Stream the long scroll journey.'
 const RUNTIME_RESOURCE_STRESS_PROMPT = 'Run the runtime resource stress journey.'
+const OFFICIAL_SCIENCE_UI_STREAM_PROMPT = 'Run the official science UI storage stream.'
 const MARKDOWN_PARSER_PROMPT = 'Run the native Markdown parser journey.'
 const QUEUE_GATE_PROMPT = 'Hold the queue until the reveal finishes.'
 const TOOL_ORDER_PROMPT = 'Run the ordered slow tool journey.'
@@ -1628,6 +1629,31 @@ if (process.argv.includes('--version')) {
       )
       const prompt = controlStart >= 0 ? rawPrompt.slice(controlStart) : rawPrompt
       await captureProviderPrompt(context.params.sessionId, prompt)
+      // Keep real imported history in the request, but route this opt-in performance turn before
+      // any historical text can match another fixture. This branch never executes a tool.
+      if (rawPrompt.includes(OFFICIAL_SCIENCE_UI_STREAM_PROMPT)) {
+        const messageId = `e2e-official-ui-${fixtureInstanceId}${nextMessageId++}`
+        for (let chunk = 0; chunk < 64; chunk += 1) {
+          const prefix =
+            chunk === 0
+              ? 'Official science UI stream begins.\n\n'
+              : `### Observation ${chunk + 1}\n\n`
+          const suffix = chunk === 63 ? '\n\nOfficial science UI stream complete.\n' : '\n\n'
+          const sentence = 'The recorded analysis remains available while this response is saved. '
+          const text =
+            prefix + sentence.repeat(10).slice(0, 512 - prefix.length - suffix.length) + suffix
+          await context.client.notify(acp.methods.client.session.update, {
+            sessionId: context.params.sessionId,
+            update: {
+              sessionUpdate: 'agent_message_chunk',
+              messageId,
+              content: { type: 'text', text }
+            }
+          })
+          await delay(250)
+        }
+        return { stopReason: 'end_turn' }
+      }
       if (
         !prompt.includes('Generate Session metadata only from the following JSON data:') &&
         (prompt.includes(PLAN_DISMISS_PROMPT) || prompt.includes(PLAN_RECOVERY_PROMPT))

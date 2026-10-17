@@ -4,7 +4,6 @@ import {
   mkdtemp,
   readFile,
   readdir,
-  rename,
   rm,
   symlink,
   writeFile
@@ -12,7 +11,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { defaultFileDurability } from '@aipoch/durable-files'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   SessionJournalStore,
   SessionJournalRevisionError,
@@ -130,7 +129,7 @@ describe('simple Session JSONL persistence', () => {
     expect((await fresh().read(path))?.document).toEqual(doc(3, 'external'))
   })
 
-  it('reads legacy JSON unchanged and keeps consecutive saves in the original JSON format', async () => {
+  it('reads legacy JSON unchanged and leaves writes to the repository snapshot writer', async () => {
     const { root, path, store } = await fixture()
     const original = JSON.stringify(doc(1), null, 2) + '\n'
     await writeFile(path, original)
@@ -138,14 +137,15 @@ describe('simple Session JSONL persistence', () => {
     expect((await store.read(path))?.format).toBe('legacy')
     expect(await readdir(root)).toEqual(['s.json'])
     expect((await lstat(path)).mtimeMs).toBe(stat.mtimeMs)
-    await write(store, path, 2, 'continued')
-    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(doc(2, 'continued'))
-    await write(fresh(), path, 3, 'continued again')
+    await expect(write(store, path, 2, 'continued')).rejects.toThrow('snapshot writer')
+    await expect(write(fresh(), path, 2, 'continued again')).rejects.toThrow('snapshot writer')
+    expect(await readFile(path, 'utf8')).toBe(original)
+    expect((await lstat(path)).mtimeMs).toBe(stat.mtimeMs)
     expect(await readdir(root)).toEqual(['s.json'])
     expect(await fresh().read(path)).toMatchObject({
       format: 'legacy',
-      document: doc(3, 'continued again'),
-      revision: 3
+      document: doc(1),
+      revision: 1
     })
   })
   it.each([null, '12', -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
@@ -157,9 +157,10 @@ describe('simple Session JSONL persistence', () => {
       await writeFile(path, original)
       expect(await store.read(path)).toMatchObject({ format: 'legacy', revision: 0, document })
       expect(await readFile(path, 'utf8')).toBe(original)
-      await write(store, path, 1, 'continued')
+      await expect(write(store, path, 1, 'continued')).rejects.toThrow('snapshot writer')
       expect(await readdir(root)).toEqual(['s.json'])
-      expect((await fresh().read(path))?.document).toEqual(doc(1, 'continued'))
+      expect((await fresh().read(path))?.document).toEqual(document)
+      expect(await readFile(path, 'utf8')).toBe(original)
 
       // Retained data from a previous migration must not hide corrupt JSONL authority.
       await writeFile(sessionLegacyBackupPath(path), original)
@@ -265,78 +266,35 @@ describe('simple Session JSONL persistence', () => {
     await write(fresh(), path, 2, 'recovered')
     expect((await fresh().read(path))?.document).toEqual(doc(2, 'recovered'))
   })
-  it('leaves legacy authority usable when an atomic JSON replacement fails', async () => {
-    const { path } = await fixture()
-    const original = JSON.stringify(doc(1))
-    await writeFile(path, original)
-    const failing = new SessionJournalStore({
-      maxBytes: 1024 * 1024,
-      dependencies: {
-        rename: async (from, to) => {
-          if (to === path) throw new Error('publish failed')
-          await rename(from, to)
-        }
-      }
+  it.each([0, 1])('rejects legacy revision %i before any storage mutation', async (revision) => {
+    const mutation = vi.fn(async () => {
+      throw new Error('unexpected storage mutation')
     })
-    await expect(write(failing, path, 2)).rejects.toThrow('publish failed')
-    expect((await fresh().read(path))?.document).toEqual(doc(1))
+    const { root, path, store } = await fixture({
+      rename: mutation,
+      appendFile: mutation,
+      truncate: mutation,
+      syncFile: mutation,
+      syncDirectory: mutation
+    })
+    const original = JSON.stringify(doc(revision))
+    await writeFile(path, original)
+    await expect(write(store, path, revision + 1)).rejects.toThrow('snapshot writer')
+    expect(mutation).not.toHaveBeenCalled()
+    expect((await fresh().read(path))?.document).toEqual(doc(revision))
     expect(await readFile(path, 'utf8')).toBe(original)
     await expect(readFile(sessionLegacyBackupPath(path))).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(readFile(sessionJournalPath(path))).rejects.toMatchObject({ code: 'ENOENT' })
-    await write(fresh(), path, 2)
-    expect(await fresh().read(path)).toMatchObject({ format: 'legacy', revision: 2 })
-  })
-  it('recognizes the committed JSON revision when directory sync fails after atomic replacement', async () => {
-    const { root, path } = await fixture()
-    await writeFile(path, JSON.stringify(doc(1)))
-    let published = false
-    let failSync = true
-    const flaky = new SessionJournalStore({
-      maxBytes: 1024 * 1024,
-      dependencies: {
-        rename: async (from, to) => {
-          await rename(from, to)
-          if (to === path) published = true
-        },
-        syncDirectory: async (directory) => {
-          if (published && failSync) {
-            failSync = false
-            throw new Error('directory sync failed')
-          }
-          await defaultFileDurability.syncDirectory(directory)
-        }
-      }
-    })
-    await expect(write(flaky, path, 2, 'committed')).rejects.toThrow('directory sync failed')
-    const evidence = await readFile(path, 'utf8')
-    expect(await fresh().read(path)).toMatchObject({
-      format: 'legacy',
-      revision: 2,
-      document: doc(2, 'committed')
-    })
-    await expect(write(flaky, path, 2, 'retry')).rejects.toBeInstanceOf(SessionJournalRevisionError)
-    expect(await readFile(path, 'utf8')).toBe(evidence)
-    await write(fresh(), path, 3, 'continued after recovery')
-    expect((await fresh().read(path))?.document).toEqual(doc(3, 'continued after recovery'))
     expect(await readdir(root)).toEqual(['s.json'])
   })
-  it('does not cache its JSON candidate against an external replacement after rename', async () => {
-    const { root, path } = await fixture()
+  it('observes external JSON replacements and rejects both stale and current journal writes', async () => {
+    const { root, path, store } = await fixture()
     await writeFile(path, JSON.stringify(doc(1)))
-    const external = doc(3, 'external writer committed after rename')
+    const external = doc(3, 'external writer committed')
     const externalBytes = JSON.stringify(external, null, 2) + '\n'
-    const owner = new SessionJournalStore({
-      maxBytes: 1024 * 1024,
-      dependencies: {
-        rename: async (from, to) => {
-          await rename(from, to)
-          if (to === path) await writeFile(to, externalBytes)
-        }
-      }
-    })
-    expect((await owner.read(path))?.revision).toBe(1)
-    await write(owner, path, 2, 'local candidate')
-    for (const reader of [owner, fresh()]) {
+    expect((await store.read(path))?.revision).toBe(1)
+    await writeFile(path, externalBytes)
+    for (const reader of [store, fresh()]) {
       expect(await reader.read(path)).toMatchObject({
         format: 'legacy',
         revision: 3,
@@ -347,9 +305,23 @@ describe('simple Session JSONL persistence', () => {
         expectedRevision: 2,
         actualRevision: 3
       })
+      await expect(write(reader, path, 4, 'current overwrite')).rejects.toThrow('snapshot writer')
     }
     expect(await readFile(path, 'utf8')).toBe(externalBytes)
     expect(await readdir(root)).toEqual(['s.json'])
+  })
+  it('rejects a journal append when its authority has become legacy JSON', async () => {
+    const { root, path, store } = await fixture()
+    await write(store, path, 1)
+    const external = doc(1, 'external legacy authority')
+    const evidence = JSON.stringify(external, null, 2) + '\n'
+    await rm(sessionJournalPath(path))
+    await writeFile(path, evidence)
+    await expect(write(store, path, 2, 'stale journal update')).rejects.toThrow('snapshot writer')
+    expect(await readFile(path, 'utf8')).toBe(evidence)
+    expect(await readdir(root)).toEqual(['s.json'])
+    for (const reader of [store, fresh()])
+      expect(await reader.read(path)).toMatchObject({ format: 'legacy', document: external })
   })
   it('keeps existing JSONL authority when a redundant legacy file and backup coexist', async () => {
     const { path } = await fixture()

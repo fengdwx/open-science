@@ -22,6 +22,7 @@ import {
   SessionSizeLimitError,
   createEmptySessionManifest,
   createSessionFile,
+  decodeSessionEnvelope,
   decodeSessionFile,
   normalizeSessionManifest,
   sanitizeSessionUploadedAttachments,
@@ -940,16 +941,25 @@ class SessionRepository {
   private async loadSessionSaveAuthority(
     projectId: string,
     sessionId: string,
-    includePendingImport: boolean
+    includePendingImport: boolean,
+    runtimeAuthority?: PersistedChatSession
   ): Promise<SessionLoadDiagnostic> {
-    if (!includePendingImport) return loadSessionMutationAuthority(this, projectId, sessionId)
+    const reusableAuthority =
+      !includePendingImport &&
+      runtimeAuthority &&
+      this.runtimeAuthorityFingerprints.has(runtimeAuthority)
+        ? runtimeAuthority
+        : undefined
+    if (!includePendingImport && !reusableAuthority)
+      return loadSessionMutationAuthority(this, projectId, sessionId)
     // The pending import directory hides publication from ordinary readers, not from its
     // serialized writer's CAS. Recovery must compare against already committed physical history.
     return this.readSessionAuthority(
       projectId,
       sessionId,
       { mode: 'read-only', preserveRuntimeState: true },
-      true
+      includePendingImport,
+      reusableAuthority
     )
   }
 
@@ -957,7 +967,8 @@ class SessionRepository {
     projectId: string,
     sessionId: string,
     options: SessionScanOptions,
-    includePendingImport = false
+    includePendingImport = false,
+    runtimeAuthority?: PersistedChatSession
   ): Promise<SessionLoadDiagnostic> {
     const safeProjectId = assertSafeSegment(projectId)
     const safeSessionId = assertSafeSegment(sessionId)
@@ -972,7 +983,8 @@ class SessionRepository {
       safeProjectId,
       {
         quarantineInvalidFiles: options.mode !== 'read-only',
-        preserveRuntimeState: options.preserveRuntimeState
+        preserveRuntimeState: options.preserveRuntimeState,
+        runtimeAuthority
       }
     )
     if (!read.isComplete || read.wasQuarantined) return { status: 'unreadable' }
@@ -1192,7 +1204,12 @@ class SessionRepository {
     )
     const importedAuthority =
       session.id.startsWith('import-') || session.projectId.startsWith('import-')
-        ? await this.loadSessionSaveAuthority(session.projectId, session.id, pendingImport)
+        ? await this.loadSessionSaveAuthority(
+            session.projectId,
+            session.id,
+            pendingImport,
+            options.runtimeChanges?.previous
+          )
         : undefined
     if (importedAuthority?.status === 'unreadable')
       throw new Error('Cannot modify unreadable imported research history.')
@@ -1224,7 +1241,12 @@ class SessionRepository {
       // the next save must load again so revision and readonly checks never use a stale cache.
       const current =
         importedAuthority ??
-        (await this.loadSessionSaveAuthority(session.projectId, session.id, pendingImport))
+        (await this.loadSessionSaveAuthority(
+          session.projectId,
+          session.id,
+          pendingImport,
+          options.runtimeChanges?.previous
+        ))
       if (current.status === 'unreadable') {
         throw new Error('Cannot compare Session revision because durable JSON is unreadable.')
       }
@@ -2199,6 +2221,7 @@ class SessionRepository {
       quarantineInvalidFiles?: boolean
       scanMetrics?: SessionScanMetrics
       preserveRuntimeState?: boolean
+      runtimeAuthority?: PersistedChatSession
     } = {}
   ): Promise<{
     session?: PersistedChatSession
@@ -2228,13 +2251,33 @@ class SessionRepository {
       if (logBoundary === 'valid') {
         const current = await this.journal.read(filePath)
         if (!current) throw new SessionJournalCorruptionError('Session JSONL disappeared.')
-        const value = this.decodeSessionDocument(
-          filePath,
-          projectId,
-          current.document,
-          current.storageBytes,
-          options.preserveRuntimeState
-        )
+        // The reducer already decoded this authority. Reuse it only within its save, after
+        // the ordinary boundary checks and a fresh journal fingerprint check. External changes
+        // and all other reads still run the full decoder, including tool-result redaction.
+        const prior = options.runtimeAuthority
+        const envelope = prior ? decodeSessionEnvelope(current.document) : undefined
+        const value =
+          options.preserveRuntimeState === true &&
+          current.format === 'journal' &&
+          prior &&
+          // Imported projects also contain writable forks. The durable origin, not a mutable
+          // caller object, decides whether the full imported-history comparison is required.
+          envelope?.status === 'ok' &&
+          envelope.session.packageOrigin === undefined &&
+          prior.packageOrigin === undefined &&
+          prior.id === basename(filePath, '.json') &&
+          prior.projectId === projectId &&
+          sessionRevision(prior) === current.revision &&
+          this.runtimeAuthorityFingerprints.get(prior) ===
+            this.journal.authorityFingerprint(current)
+            ? { session: prior, bytes: current.storageBytes }
+            : this.decodeSessionDocument(
+                filePath,
+                projectId,
+                current.document,
+                current.storageBytes,
+                options.preserveRuntimeState
+              )
         if (options.preserveRuntimeState === true)
           this.runtimeAuthorityFingerprints.set(
             value.session,

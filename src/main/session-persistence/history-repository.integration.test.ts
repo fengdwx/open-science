@@ -284,7 +284,10 @@ it('reads indexed JSONL pages without loading the complete conversation', async 
 it.each(['branch', 'frame'] as const)(
   'keeps the complete JSONL graph when a cold display read needs %s navigation',
   async (kind) => {
-    const repository = await setup()
+    await setup()
+    const projection = new SessionProjectionRepository(async () => client)
+    const sync = vi.spyOn(projection.history, 'sync')
+    const repository = new SessionRepository(root, {}, projection)
     const source = materializeSessionConversationGraph(fixture())
     let graph = source.conversationGraph!
     if (kind === 'branch') {
@@ -318,19 +321,36 @@ it.each(['branch', 'frame'] as const)(
       ...resolveActiveConversationActivities(graph)
     })
     const expected = await repository.loadSession('project', 'session')
-    const projection = new SessionProjectionRepository(async () => client)
-    const sync = vi.spyOn(projection.history, 'sync')
+    const sourceFingerprint = sync.mock.calls[0]![1]
+    expect(await client.sessionHistoryIndex.count()).toBe(0)
+    expect(await client.sessionHistoryItem.count()).toBe(0)
+    sync.mockClear()
     const cold = new SessionRepository(root, {}, projection)
     const fullRead = vi.spyOn(cold, 'loadSession')
     for (let attempt = 0; attempt < 2; attempt++) {
       if (attempt === 1) {
-        // An older derived index cannot prove whether its display page hides other branches.
-        const index = await client.sessionHistoryIndex.findUniqueOrThrow({
-          where: { sessionId: 'session' }
-        })
-        await client.sessionHistoryIndex.update({
-          where: { sessionId: 'session' },
-          data: { scopeKey: JSON.stringify(JSON.parse(index.scopeKey).slice(0, 2)) }
+        // Simulate an index retained from the version that indexed complex graphs. Its older
+        // scope cannot prove that a display page preserves all branch/Frame navigation.
+        await client.sessionHistoryIndex.create({
+          data: {
+            sessionId: 'session',
+            projectId: 'project',
+            revision: BigInt(expected!.revision!),
+            sourceFingerprint,
+            scopeKey: JSON.stringify([
+              graph.activeFrameId,
+              graph.frames.find(({ id }) => id === graph.activeFrameId)!.activeBranchId
+            ]),
+            headerJson: JSON.stringify({
+              ...expected,
+              messages: undefined,
+              activities: undefined,
+              activityGroups: undefined,
+              artifacts: undefined,
+              conversationGraph: undefined
+            }),
+            totalItems: expected!.messages.length + (expected!.activities?.length ?? 0)
+          }
         })
       }
       const page = (await cold.loadSessionHistoryPage({ ...request, limit: 1 }))!

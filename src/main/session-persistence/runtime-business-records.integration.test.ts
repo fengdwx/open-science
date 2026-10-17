@@ -39,8 +39,11 @@ const fullFile = (session: PersistedChatSession): JournalValue =>
     )
   )
 
-const load = async (repository: SessionRepository): Promise<PersistedChatSession> => {
-  const result = await loadSessionMutationAuthority(repository, 'p', 's')
+const load = async (
+  repository: SessionRepository,
+  projectId = 'p'
+): Promise<PersistedChatSession> => {
+  const result = await loadSessionMutationAuthority(repository, projectId, 's')
   expect(result.status).toBe('found')
   if (result.status !== 'found') throw new Error('Expected durable session')
   return result.session
@@ -55,7 +58,9 @@ const readBatches = async (path: string): Promise<WireBatch[]> => {
     .filter((record) => record.type === 'session_update')
 }
 
-const fixture = async (): Promise<{
+const fixture = async (
+  projectId = 'p'
+): Promise<{
   root: string
   path: string
   session: PersistedChatSession
@@ -67,7 +72,7 @@ const fixture = async (): Promise<{
   initDataRoot(root)
   const session = sessionCodec.materializeSessionConversationGraph({
     id: 's',
-    projectId: 'p',
+    projectId,
     title: 'Research',
     cwd: '/workspace',
     agentFrameworkId: 'codex',
@@ -99,10 +104,10 @@ const fixture = async (): Promise<{
   const prompt = session.conversationGraph!.messages.find(({ id }) => id === 'prompt')!
   return {
     root,
-    path: join(root, 'sessions', 'p', 's.json'),
+    path: join(root, 'sessions', projectId, 's.json'),
     session,
     scope: {
-      projectId: 'p',
+      projectId,
       sessionId: 's',
       promptMessageId: 'prompt',
       executionId: 'execution',
@@ -130,14 +135,37 @@ const event = (fields: Partial<AcpRuntimeEvent> = {}): AcpRuntimeEvent =>
   }) as AcpRuntimeEvent
 
 describe('Runtime business records through the real repository', () => {
-  it.each(['legacy', 'journal'] as const)(
-    'coalesces partial text on the default 2-second schedule and preserves %s storage',
-    async (format) => {
-      const { root, path, session, scope, repository } = await fixture()
+  it.each([
+    ['legacy', 'p'],
+    ['journal', 'p'],
+    ['legacy', 'import-p'],
+    ['journal', 'import-p']
+  ] as const)(
+    'coalesces partial text on the default 2-second schedule and preserves %s storage in %s',
+    async (format, projectId) => {
+      const { root, path, session, scope, repository } = await fixture(projectId)
+      const historical = applyRuntimeSessionEvents(session, scope, [
+        event({
+          kind: 'tool',
+          id: 'historical-tool-event',
+          timestamp: 2,
+          toolCallId: 'historical-tool',
+          status: 'completed',
+          rawInput: { query: 'prior input', apiKey: 'runtime-test-secret-old-input' },
+          rawOutput: { result: 'prior result', authorization: 'runtime-test-secret-old-output' }
+        })
+      ])
+      // Seed historical credentials without a read first: the initial mutation must still run
+      // the full decoder before its authority can be reused by the revision check.
+      const document = fullFile({ ...historical, revision: 1 })
       if (format === 'legacy') {
         await mkdir(dirname(path), { recursive: true })
-        await writeFile(path, JSON.stringify(fullFile({ ...session, revision: 1 })))
-      } else await repository.saveSession(session, 0)
+        await writeFile(path, JSON.stringify(document))
+      } else
+        await new SessionJournalStore({ maxBytes: 1024 * 1024 }).write(path, {
+          document,
+          expectedRevision: 0
+        })
       const stateOwner = new SessionPersistenceStateOwner({
         repository,
         fileIndex: { syncSession: async () => [] },
@@ -148,7 +176,7 @@ describe('Runtime business records through the real repository', () => {
       })
       const scheduled: Array<{ flush: () => void; delayMs: number }> = []
       const owner = new RuntimeSessionOwner({
-        loadSession: async () => load(repository),
+        loadSession: async () => load(repository, projectId),
         mutateSession: (turn, mutate, options) =>
           stateOwner.mutateRuntimeSession(turn, mutate, options),
         finalizeArtifacts: async () => [],
@@ -161,31 +189,64 @@ describe('Runtime business records through the real repository', () => {
       await owner.begin(scope)
       const authority = format === 'legacy' ? path : sessionJournalPath(path)
       const before = await readFile(authority, 'utf8')
-      const previous = await load(new SessionRepository(root))
+      const previous = await load(new SessionRepository(root), projectId)
       owner.accept(event({ text: 'Partial' }))
       owner.accept(event({ id: 'chunk-2', timestamp: 4, text: ' evidence' }))
+      owner.accept(
+        event({
+          kind: 'tool',
+          id: 'new-tool-event',
+          timestamp: 4,
+          toolCallId: 'new-tool',
+          status: 'completed',
+          rawInput: { query: 'new input', apiKey: 'runtime-test-secret-new-input' },
+          rawOutput: { result: 'new result', authorization: 'runtime-test-secret-new-output' }
+        })
+      )
       expect(scheduled).toHaveLength(1)
       expect(scheduled[0].delayMs).toBe(2_000)
       expect(await readFile(authority, 'utf8')).toBe(before)
       expect(
-        (await load(new SessionRepository(root))).messages.some(({ role }) => role === 'agent')
+        (await load(new SessionRepository(root), projectId)).messages.some(
+          ({ role }) => role === 'agent'
+        )
       ).toBe(false)
 
       // Exercise the production callback and real filesystem without waiting two wall-clock
       // seconds. This verifies the requested scheduling delay, not physical timer precision.
+      const decode = vi.spyOn(sessionCodec, 'decodeSessionFile')
+      decode.mockClear()
       scheduled[0].flush()
+      // The empty flush joins the serialized turn tail. Assert before fresh readers add calls.
+      await owner.flush('s', 'prompt')
+      expect(decode).toHaveBeenCalledTimes(format === 'journal' ? 1 : 2)
       const readAnswer = async (): Promise<string | undefined> =>
-        (await load(new SessionRepository(root))).messages.find(({ role }) => role === 'agent')
-          ?.content
+        (await load(new SessionRepository(root), projectId)).messages.find(
+          ({ role }) => role === 'agent'
+        )?.content
       await expect.poll(readAnswer, { interval: 10, timeout: 2_000 }).toBe('Partial evidence')
-      const committed = await load(new SessionRepository(root))
+      const committed = await load(new SessionRepository(root), projectId)
       expect(committed.revision).toBe(previous.revision! + 1)
       expect(committed.messages.find(({ role }) => role === 'agent')).toMatchObject({
         content: 'Partial evidence',
         status: 'streaming',
         eventIds: ['chunk-1', 'chunk-2']
       })
-      const cold = await new SessionRepository(root).loadSession('p', 's')
+      expect(committed.activities).toEqual([
+        expect.objectContaining({
+          id: 'historical-tool',
+          rawInput: { query: 'prior input', apiKey: '[redacted]' },
+          rawOutput: { result: 'prior result', authorization: '[redacted]' }
+        }),
+        expect.objectContaining({
+          id: 'new-tool',
+          rawInput: { query: 'new input', apiKey: '[redacted]' },
+          rawOutput: { result: 'new result', authorization: '[redacted]' }
+        })
+      ])
+      expect((await load(repository, projectId)).activities).toEqual(committed.activities)
+      expect(JSON.stringify(committed.activities)).not.toContain('runtime-test-secret')
+      const cold = await new SessionRepository(root).loadSession(projectId, 's')
       expect(cold?.messages.find(({ role }) => role === 'agent')).toMatchObject({
         content: 'Partial evidence',
         status: 'error'
@@ -195,11 +256,16 @@ describe('Runtime business records through the real repository', () => {
       owner.accept(event({ id: 'chunk-3', timestamp: 5, text: ' continued' }))
       expect(scheduled).toHaveLength(2)
       expect(scheduled[1].delayMs).toBe(2_000)
+      decode.mockClear()
       scheduled[1].flush()
+      await owner.flush('s', 'prompt')
+      expect(decode).toHaveBeenCalledTimes(format === 'journal' ? 1 : 2)
       await expect
         .poll(readAnswer, { interval: 10, timeout: 2_000 })
         .toBe('Partial evidence continued')
-      expect((await load(new SessionRepository(root))).revision).toBe(previous.revision! + 2)
+      expect((await load(new SessionRepository(root), projectId)).revision).toBe(
+        previous.revision! + 2
+      )
       expect((await new SessionJournalStore({ maxBytes: 1024 * 1024 }).read(path))?.format).toBe(
         format
       )
@@ -391,42 +457,128 @@ describe('Runtime business records through the real repository', () => {
     expect(restarted?.messages.find(({ id }) => id === 'history')?.content).toBe(history)
   })
 
-  it('rejects stale source evidence after an external replacement at the same revision', async () => {
-    const { root, path, session, scope, repository } = await fixture()
-    await repository.saveSession(session, 0)
-    const previous = await load(repository)
-    const result = applyRuntimeSessionEventsWithChanges(previous, scope, [event()])
-    expect(result.changes).toBeDefined()
-    const external = {
-      ...previous,
-      messages: previous.messages.map((message) =>
-        message.id === 'history' ? { ...message, content: 'External committed history' } : message
-      ),
-      conversationGraph: {
-        ...previous.conversationGraph!,
-        messages: previous.conversationGraph!.messages.map((message) =>
+  it.each(['same-revision', 'advanced-revision', 'corrupt'] as const)(
+    'rejects stale source evidence after a %s external replacement',
+    async (replacement) => {
+      const { root, path, session, scope, repository } = await fixture()
+      await repository.saveSession(session, 0)
+      const previous = await load(repository)
+      const result = applyRuntimeSessionEventsWithChanges(previous, scope, [event()])
+      expect(result.changes).toBeDefined()
+      const external = {
+        ...previous,
+        revision: previous.revision! + (replacement === 'advanced-revision' ? 1 : 0),
+        messages: previous.messages.map((message) =>
           message.id === 'history' ? { ...message, content: 'External committed history' } : message
-        )
+        ),
+        conversationGraph: {
+          ...previous.conversationGraph!,
+          messages: previous.conversationGraph!.messages.map((message) =>
+            message.id === 'history'
+              ? { ...message, content: 'External committed history' }
+              : message
+          )
+        }
       }
+      // A previously decoded object must not authorize changes against a replaced authority,
+      // including an unreadable log or different history that reuses the same revision.
+      const externalText =
+        replacement === 'corrupt'
+          ? '{invalid-json}\n'
+          : JSON.stringify({ type: 'session_snapshot', document: fullFile(external) }) + '\n'
+      await writeFile(sessionJournalPath(path), externalText)
+      await expect(
+        repository.saveSession(result.session, previous.revision, {
+          runtimeChanges: { previous, changes: result.changes! }
+        })
+      ).rejects.toThrow(
+        replacement === 'same-revision'
+          ? 'Runtime Session authority changed after its read.'
+          : replacement === 'advanced-revision'
+            ? sessionCodec.SessionRevisionConflictError
+            : 'Cannot compare Session revision because durable JSON is unreadable.'
+      )
+      expect(await readFile(sessionJournalPath(path), 'utf8')).toBe(externalText)
+      if (replacement === 'corrupt') {
+        expect(await loadSessionMutationAuthority(new SessionRepository(root), 'p', 's')).toEqual({
+          status: 'unreadable'
+        })
+        return
+      }
+      const restored = await load(new SessionRepository(root))
+      expect(restored.messages.find(({ id }) => id === 'history')?.content).toBe(
+        'External committed history'
+      )
+      expect(restored.messages.some(({ role }) => role === 'agent')).toBe(false)
+      expect(restored.revision).toBe(external.revision)
     }
-    // Replace the actual JSONL authority with a valid initial record at the exact same revision.
-    // The cached previous read must not authorize changes against externally replaced history.
-    const externalText =
-      JSON.stringify({ type: 'session_snapshot', document: fullFile(external) }) + '\n'
-    await writeFile(sessionJournalPath(path), externalText)
-    await expect(
-      repository.saveSession(result.session, previous.revision, {
+  )
+
+  it.each(['foreign-repository', 'modified-revision'] as const)(
+    'decodes current authority instead of trusting %s runtime evidence',
+    async (evidence) => {
+      const { root, path, session, scope, repository } = await fixture()
+      await repository.saveSession(session, 0)
+      const previous = await load(repository)
+      if (evidence === 'modified-revision') previous.revision! += 1
+      const result = applyRuntimeSessionEventsWithChanges(previous, scope, [event()])
+      expect(result.changes).toBeDefined()
+      const writer = evidence === 'foreign-repository' ? new SessionRepository(root) : repository
+      const before = await readFile(sessionJournalPath(path), 'utf8')
+      const decode = vi.spyOn(sessionCodec, 'decodeSessionFile')
+      const save = writer.saveSession(result.session, previous.revision, {
         runtimeChanges: { previous, changes: result.changes! }
       })
-    ).rejects.toThrow('Runtime Session authority changed after its read.')
-    expect(await readFile(sessionJournalPath(path), 'utf8')).toBe(externalText)
-    const restored = await load(new SessionRepository(root))
-    expect(restored.messages.find(({ id }) => id === 'history')?.content).toBe(
-      'External committed history'
-    )
-    expect(restored.messages.some(({ role }) => role === 'agent')).toBe(false)
-    expect(restored.revision).toBe(previous.revision)
-  })
+      if (evidence === 'modified-revision')
+        await expect(save).rejects.toBeInstanceOf(sessionCodec.SessionRevisionConflictError)
+      else await save
+      expect(decode).toHaveBeenCalledOnce()
+      if (evidence === 'modified-revision')
+        expect(await readFile(sessionJournalPath(path), 'utf8')).toBe(before)
+      else
+        expect((await load(new SessionRepository(root))).messages).toContainEqual(
+          expect.objectContaining({ role: 'agent', content: 'Answer' })
+        )
+    }
+  )
+
+  it.each(['removed-origin', 'changed-body'] as const)(
+    'does not trust %s runtime evidence to overwrite imported read-only history',
+    async (mutation) => {
+      const { root, path, session, scope, repository } = await fixture('import-p')
+      await repository.saveSession(
+        {
+          ...session,
+          packageOrigin: {
+            importId: 'import',
+            sourceProjectId: 'source-project',
+            sourceSessionId: 'source-session',
+            importedAt: 1,
+            manifestChecksum: 'a'.repeat(64)
+          }
+        },
+        0
+      )
+      const previous = await load(repository, 'import-p')
+      const result = applyRuntimeSessionEventsWithChanges(previous, scope, [event()])
+      expect(result.changes).toBeDefined()
+      // The object is registered, but its mutable contents are not durable read-only authority.
+      if (mutation === 'removed-origin') delete previous.packageOrigin
+      else Object.assign(previous, result.session)
+      const before = await readFile(sessionJournalPath(path), 'utf8')
+      const decode = vi.spyOn(sessionCodec, 'decodeSessionFile')
+      await expect(
+        repository.saveSession(result.session, previous.revision, {
+          runtimeChanges: { previous, changes: result.changes! }
+        })
+      ).rejects.toThrow('Imported research history is read-only.')
+      expect(decode).toHaveBeenCalledOnce()
+      expect(await readFile(sessionJournalPath(path), 'utf8')).toBe(before)
+      const restored = await load(new SessionRepository(root), 'import-p')
+      expect(restored.packageOrigin).toBeDefined()
+      expect(restored.messages.some(({ role }) => role === 'agent')).toBe(false)
+    }
+  )
 
   it('matches the full codec when the runtime scope is on an inactive branch', async () => {
     const { root, path, session, scope, repository } = await fixture()

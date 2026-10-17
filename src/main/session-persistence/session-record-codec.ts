@@ -30,7 +30,7 @@ export type SessionTextEvent = {
   readonly text: string
   readonly timestamp: number
 }
-export type SessionRecordChanges = Partial<Record<SessionRecordCollection, readonly string[]>> & {
+export type SessionRecordChanges = {
   // Accepted runtime events, never text reconstructed by comparing two snapshots.
   readonly textEvents?: readonly SessionTextEvent[]
 }
@@ -255,8 +255,8 @@ const partition = (document: unknown): Parts | undefined => {
   }
 }
 
-// Hints never authorize dropping a changed record. Reference-equal immutable entities skip
-// comparison; otherwise even unlisted IDs are compared as complete normalized business values.
+// Reference-equal immutable entities skip comparison; changed entities are compared as complete
+// normalized business values.
 // Compatibility snapshot callers therefore still scan entity arrays, but never compute a tree
 // patch or split text. Callers can preserve old immutable entity references on their hot path.
 export const diffSessionRecords = (
@@ -283,12 +283,11 @@ export const diffSessionRecords = (
       records.push({ type: 'entities', collection: name, upserts: [], order: null })
       continue
     }
-    const hints = new Set(changes?.[name])
     const upserts: ObjectValue[] = []
     for (const [key, value] of newValues) {
       if ((name === 'messages' || name === 'graphMessages') && textMessageIds.has(key)) continue
       const previousValue = oldValues?.get(key)
-      if (previousValue === value && !hints.has(key)) continue
+      if (previousValue === value) continue
       const normalized = normalizeJournalValue(value) as ObjectValue
       if (!isDeepStrictEqual(previousValue, normalized)) upserts.push(normalized)
     }
