@@ -4,6 +4,8 @@ export type DarwinProcessIdentity = {
   pgid: number
   sid: number
   uniqueId: string
+  // Optional kernel resource coalition; absence never proves non-ownership.
+  coalitionId?: string
   parentUniqueId: string
 }
 
@@ -13,6 +15,7 @@ export type DarwinProcessTable = {
 }
 
 export function getDarwinProcess(pid: number): DarwinProcessIdentity | null
+export function getDarwinProcessArguments(pid: number): string[] | null
 export function getDarwinEnvironmentValue(pid: number, name: string): string | false | null
 export function listDarwinProcesses(): DarwinProcessTable | null
 
@@ -26,4 +29,6 @@ export function spawnWindowsOwnedProcess(
   verbatimArguments: boolean
 ): { handle: object; pid: number; fds: [number, number, number] }
 export function windowsOwnedProcessExitCode(handle: object): number | null
+export function windowsOwnedJobProcessIds(handle: object): number[]
+export function windowsCurrentProcessDescendants(): number[]
 export function reapWindowsOwnedJob(jobName: string): boolean

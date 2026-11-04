@@ -6,7 +6,7 @@ import { hasNativeNonTableLayout } from './literature-pdf-native-non-table-layou
 import { joinHorizontalTableRules, classifyTableRuleEdge } from './literature-pdf-table-rules.mjs'
 import { groupSourceRowsWithScripts } from './literature-pdf-source-records.mjs'
 import { proveNativeClosedLeafHeader } from './literature-pdf-native-header-grid.mjs'
-import { groupPageLines } from './literature-pdf-caption-group.mjs'
+import { captionKind, groupPageLines } from './literature-pdf-caption-group.mjs'
 
 // Complete first-page name/institution/contact lanes plus an independent
 // larger Abstract heading identify metadata without an institution dictionary.
@@ -540,7 +540,12 @@ function nativeForeignFrameDuplicateIndices(tables, associations, items, rules) 
 // Tighten a detector crop only when an independently closed native frame owns
 // every assigned glyph and every native glyph within it. Neighboring panel
 // ink cannot lend a wider boundary to this complete source grid.
-export function proveNativeAssignedClosedTableFrame(table, items, rules) {
+export function proveNativeAssignedClosedTableFrame(
+  table,
+  items,
+  rules,
+  allowRuleOverhang = false
+) {
   const valid = (r) => r?.length === 4 && r.every(Number.isFinite) && r[2] > r[0] && r[3] > r[1]
   const crop = table.cropRect
   if (
@@ -579,8 +584,7 @@ export function proveNativeAssignedClosedTableFrame(table, items, rules) {
     (r) =>
       r.every(Number.isFinite) &&
       r[1] === r[3] &&
-      r[0] >= crop[0] - 0.02 &&
-      r[2] <= crop[2] + 0.02 &&
+      (allowRuleOverhang || (r[0] >= crop[0] - 0.02 && r[2] <= crop[2] + 0.02)) &&
       r[1] >= crop[1] - 0.02 &&
       r[1] <= crop[3] + 0.02 &&
       r[0] <= x0 + 0.02 &&
@@ -2327,6 +2331,154 @@ export function isFigureOwnedPartialTable(table, figures, scale = 1.5) {
   })
 }
 
+// Assigned text can cross a detector crop without appearing in `unassigned`.
+// Reject that fragment only when the unique captioned figure retains every
+// whole native owner. No cell reconstruction or enlargement follows from this.
+export function isNativeFigureOwnedClippedTable(table, figures, scale, evidence) {
+  const valid = (r) =>
+      Array.isArray(r) && r.length === 4 && r.every(Number.isFinite) && r[2] > r[0] && r[3] > r[1],
+    contains = (a, b) => b.every((n, i) => (i < 2 ? n >= a[i] - 1e-6 : n <= a[i] + 1e-6)),
+    same = (a, b) => valid(a) && valid(b) && a.every((n, i) => Math.abs(n - b[i]) < 1e-6),
+    key = (s) => `${s.pageNumber}:${s.index}`,
+    items = evidence?.items
+  if (
+    !valid(table?.cropRect) ||
+    !Number.isFinite(scale) ||
+    scale <= 0 ||
+    !Array.isArray(figures) ||
+    !Array.isArray(items) ||
+    table.caption ||
+    evidence.caption ||
+    table.parts ||
+    table.cropRects ||
+    !table.issues?.includes('native-table-structure-ambiguous') ||
+    table.unassigned?.length ||
+    !table.cells?.length
+  )
+    return false
+  const references = new Map(),
+    active = new Set()
+  let remaining = 100000
+  const count = (value) => {
+    if (--remaining < 0) return false
+    if (!value || typeof value !== 'object') return true
+    if (active.has(value)) return false
+    active.add(value)
+    if (Number.isSafeInteger(value.pageNumber) && Number.isSafeInteger(value.index))
+      references.set(key(value), (references.get(key(value)) ?? 0) + 1)
+    for (const child of Object.values(value)) if (!count(child)) return false
+    active.delete(value)
+    return true
+  }
+  if (!count(items)) return false
+  const owned = [],
+    keys = new Set()
+  for (const cell of table.cells) {
+    if (
+      !cell.text?.trim() &&
+      !cell.sourceItems?.length &&
+      !cell.sourceRects?.length &&
+      !cell.sourceSegments?.length &&
+      !cell.sourceTokens?.length
+    )
+      continue
+    if (
+      cell.sourceSegments?.length ||
+      !cell.sourceItems?.length ||
+      cell.sourceItems.length !== cell.sourceRects?.length
+    )
+      return false
+    const fonts = []
+    for (const source of cell.sourceItems) {
+      if (
+        !Number.isSafeInteger(source.pageNumber) ||
+        source.pageNumber !== table.page ||
+        !Number.isSafeInteger(source.index) ||
+        source.index < 0 ||
+        typeof source.text !== 'string' ||
+        !source.text.trim() ||
+        keys.has(key(source)) ||
+        references.get(key(source)) !== 1
+      )
+        return false
+      const matches = items.filter(
+        (item) => item.sourceItem && key(item.sourceItem) === key(source)
+      )
+      if (matches.length !== 1) return false
+      const item = matches[0]
+      if (
+        item.text !== source.text ||
+        item.sourceItem.text !== source.text ||
+        !item.horizontal ||
+        !Number.isFinite(item.height) ||
+        item.height <= 0 ||
+        !valid(item.rect)
+      )
+        return false
+      keys.add(key(source))
+      fonts.push(item)
+      owned.push(item)
+    }
+    if (cell.sourceTokens !== undefined) {
+      if (!Array.isArray(cell.sourceTokens) || cell.sourceTokens.length !== fonts.length)
+        return false
+      const matched = new Set()
+      for (const token of cell.sourceTokens) {
+        const matches = fonts.filter(
+          (f) =>
+            token?.text === f.text &&
+            same(token.rect, f.rect) &&
+            token.height === f.height &&
+            token.baseline === f.baseline &&
+            (token.horizontal === undefined || token.horizontal === f.horizontal) &&
+            (token.sourceItem === undefined ||
+              navigationSourceExact(token.sourceItem, f.sourceItem)) &&
+            !token.sourceToken &&
+            !token.sourceSegment
+        )
+        if (matches.length !== 1 || matched.has(matches[0])) return false
+        matched.add(matches[0])
+      }
+    }
+    if (
+      cell.sourceRects.some((r) => fonts.filter((f) => same(f.rect, r)).length !== 1) ||
+      fonts.some((f) => cell.sourceRects.filter((r) => same(f.rect, r)).length !== 1) ||
+      cell.text?.replace(/\s/gu, '') !==
+        fonts
+          .map((f) => f.text)
+          .join('')
+          .replace(/\s/gu, '')
+    )
+      return false
+  }
+  if (
+    owned.length < 3 ||
+    !owned.some(
+      (f) =>
+        intersection(f.rect, table.cropRect) > 0 &&
+        (f.rect[0] < table.cropRect[0] - f.height || f.rect[2] > table.cropRect[2] + f.height)
+    )
+  )
+    return false
+  const crop = table.cropRect.map((n) => n / scale),
+    sourceRects = owned.map((f) => f.rect.map((n) => n / scale)),
+    intersecting = figures.filter((f) => valid(f?.rect) && intersection(f.rect, crop) > 0)
+  if (intersecting.length !== 1) return false
+  const figure = intersecting[0],
+    caption = figure.caption
+  return (
+    !!caption &&
+    caption.page === table.page &&
+    valid(caption.rect) &&
+    typeof caption.lines?.[0] === 'string' &&
+    captionKind(caption.lines[0]) === 'figure' &&
+    intersection(caption.rect, figure.rect) === 0 &&
+    contains(figure.rect, crop) &&
+    area(crop) / area(figure.rect) < 0.8 &&
+    sourceRects.every((r) => contains(figure.rect, r))
+  )
+}
+
 function isCaptionedNarrativeCard(table, caption) {
   if (!caption || !table.grid.length || !table.unassigned?.length) return false
   const text = table.grid.flat().join(' ')
@@ -3576,8 +3728,41 @@ function nativeClosedTableReferenceItems(table, items, rules) {
     table.cells?.length !== table.grid.length * table.grid[0].length
   )
     return
-  const proof = proveNativeAssignedClosedTableFrame(table, items, rules)
+  // A detector can stop before a rule endpoint while retaining every printed
+  // field. The native frame still must uniquely enclose all and only the
+  // assigned fonts; use it solely to localize the bibliography evidence below.
+  const proof = proveNativeAssignedClosedTableFrame(table, items, rules, true)
   if (!proof) return
+  if (
+    proof.sourceTokens.some((item) => {
+      const origin = item.sourceItem
+      return (
+        !origin ||
+        origin.text !== item.text ||
+        !Number.isSafeInteger(origin.pageNumber) ||
+        origin.pageNumber < 1 ||
+        !Number.isSafeInteger(origin.index) ||
+        origin.index < 0 ||
+        item.sourceSegment ||
+        item.sourceToken ||
+        items.some(
+          (other) =>
+            other !== item &&
+            [
+              other.sourceItem,
+              other.sourceSegment,
+              other.sourceToken,
+              other.sourceToken?.sourceItem,
+              other.sourceToken?.sourceSegment
+            ].some(
+              (reference) =>
+                reference?.pageNumber === origin.pageNumber && reference?.index === origin.index
+            )
+        )
+      )
+    })
+  )
+    return
   const same = (a, b) =>
     a?.length === 4 && b?.length === 4 && a.every((v, n) => Math.abs(v - b[n]) < 0.02)
   const literal = (text) => text.replace(/\s/gu, '')
@@ -3625,14 +3810,14 @@ function nativeClosedTableReferenceItems(table, items, rules) {
     Math.max(...fonts.map((font) => font.rect[3]))
   ])
   if (nativeRows.some((row, index) => index && row[0] <= nativeRows[index - 1][1] + 0.02)) return
-  // A padded detector may touch a complete note below the closing line. It
+  // A padded detector may touch a complete label or note outside the frame. It
   // cannot exclude a partial native font or text crossing the source frame.
   if (
     (table.clipped ?? []).some(
       (item) =>
         item.rect?.length !== 4 ||
         !item.rect.every(Number.isFinite) ||
-        item.rect[1] <= proof.cropRect[3] + 0.02 ||
+        !(item.rect[3] < proof.cropRect[1] - 0.02 || item.rect[1] > proof.cropRect[3] + 0.02) ||
         !items.some(
           (font) => font.horizontal && same(font.rect, item.rect) && font.text === item.text
         )
@@ -3646,9 +3831,205 @@ function nativeClosedTableReferenceItems(table, items, rules) {
 // content-supported row/column refinement, require evidence from source text.
 // ponytail: uncaptioned single-column or single-row tables remain ambiguous with lists;
 // retain them only with a reliable table caption until richer layout evidence is available.
-export function hasTableEvidence(table, caption, pageItems = [], sourceRules, sourceGraphics = []) {
+// Local PDF links and the independently resolved outline can prove navigation
+// without recognizing the heading's wording. Every native row and every claimed
+// table source must close over that directory; an unrelated data row defeats it.
+function isLinkedNativeDirectory(table, caption, items, rules, graphics, navigation) {
+  const valid = (r) =>
+      Array.isArray(r) && r.length === 4 && r.every(Number.isFinite) && r[0] < r[2] && r[1] < r[3],
+    compact = (s) => s.replace(/\s/gu, '')
+  if (
+    caption ||
+    !Array.isArray(rules) ||
+    rules.length ||
+    !Array.isArray(graphics) ||
+    graphics.length ||
+    !Number.isSafeInteger(navigation?.pageNumber) ||
+    !Number.isSafeInteger(navigation.documentPages) ||
+    navigation.pageNumber < 1 ||
+    navigation.pageNumber > navigation.documentPages ||
+    !Array.isArray(navigation.links) ||
+    navigation.links.length < 3 ||
+    !Array.isArray(navigation.outline) ||
+    !Array.isArray(table.cells) ||
+    !valid(table.cropRect)
+  )
+    return false
+  const source = items.filter((i) => i.text?.trim()),
+    byIndex = new Map()
+  for (const item of source) {
+    const s = item.sourceItem
+    if (
+      !item.horizontal ||
+      !valid(item.rect) ||
+      !Number.isFinite(item.height) ||
+      item.height <= 0 ||
+      !Number.isFinite(item.baseline) ||
+      s?.pageNumber !== navigation.pageNumber ||
+      !Number.isSafeInteger(s.index) ||
+      s.index < 0 ||
+      s.text !== item.text ||
+      item.sourceSegment ||
+      item.sourceToken ||
+      item.sourceItems ||
+      byIndex.has(s.index)
+    )
+      return false
+    byIndex.set(s.index, item)
+  }
+  const rows = []
+  for (const item of [...source].sort((a, b) => a.baseline - b.baseline || a.rect[0] - b.rect[0])) {
+    const row = rows.at(-1)
+    if (row && Math.abs(row[0].baseline - item.baseline) < 0.02) row.push(item)
+    else rows.push([item])
+  }
+  const linked = [],
+    linkedItems = new Set()
+  for (const link of navigation.links) {
+    if (
+      !valid(link.rect) ||
+      link.destination == null ||
+      !Number.isSafeInteger(link.targetPage) ||
+      link.targetPage < 1 ||
+      link.targetPage > navigation.documentPages
+    )
+      return false
+    const matches = rows.filter(
+      (row) => row[0].baseline >= link.rect[1] && row[0].baseline <= link.rect[3]
+    )
+    if (matches.length !== 1 || linked.includes(matches[0])) return false
+    const row = matches[0],
+      last = row.at(-1),
+      labels = row.slice(0, -1),
+      ordinal = row[0],
+      label = /^([A-Z])\s+(.+)$/u.exec(labels.map((i) => i.text).join(' '))
+    if (
+      row.length < 2 ||
+      !label ||
+      !/^[1-9]\d*$/u.test(last.text) ||
+      Number(last.text) !== link.targetPage ||
+      labels.some((i) => i.rect[0] < link.rect[0] || i.rect[2] > link.rect[2]) ||
+      last.rect[0] <= link.rect[2] ||
+      row.some((i) => Math.abs(i.height - ordinal.height) > 0.02) ||
+      row.some((i, n) => n && i.rect[0] < row[n - 1].rect[2])
+    )
+      return false
+    const title = compact(label[2]),
+      outline = navigation.outline.filter(
+        (o) =>
+          typeof o.title === 'string' &&
+          compact(o.title) === title &&
+          o.page === link.targetPage &&
+          navigationSourceExact(o.destination, link.destination)
+      )
+    if (outline.length !== 1) return false
+    linked.push(row)
+    for (const i of row) linkedItems.add(i)
+  }
+  linked.sort((a, b) => a[0].baseline - b[0].baseline)
+  if (
+    linked.some(
+      (row, i) =>
+        (i > 0 && row[0].text.charCodeAt(0) !== linked[i - 1][0].text.charCodeAt(0) + 1) ||
+        Math.abs(row[0].rect[0] - linked[0][0].rect[0]) > 0.02 ||
+        Math.abs(row.at(-1).rect[2] - linked[0].at(-1).rect[2]) > 0.02
+    )
+  )
+    return false
+  const remainder = source.filter((i) => !linkedItems.has(i))
+  if (
+    remainder.length !== 2 ||
+    remainder[0].rect[3] >= linked[0][0].rect[1] ||
+    remainder[0].height < linked[0][0].height * 1.1 ||
+    !/^\p{L}[\p{L}\s]+$/u.test(remainder[0].text) ||
+    remainder[1].text !== String(navigation.pageNumber) ||
+    remainder[1].rect[1] <= linked.at(-1)[0].rect[3]
+  )
+    return false
+  const claimed = new Set()
+  for (const cell of table.cells) {
+    if (
+      cell.sourceSegments?.length ||
+      (cell.sourceItems?.length ?? 0) !== (cell.sourceRects?.length ?? 0)
+    )
+      return false
+    const native = []
+    for (const [n, claim] of (cell.sourceItems ?? []).entries()) {
+      const item = byIndex.get(claim.index)
+      if (
+        !item ||
+        !linkedItems.has(item) ||
+        claimed.has(item) ||
+        !navigationSourceExact(claim, item.sourceItem) ||
+        !navigationSourceExact(cell.sourceRects[n], item.rect)
+      )
+        return false
+      native.push(item)
+      claimed.add(item)
+    }
+    if (
+      typeof cell.text !== 'string' ||
+      compact(cell.text) !== compact(native.map((i) => i.text).join(''))
+    )
+      return false
+  }
+  return (
+    claimed.size >= 6 &&
+    linked.filter((row) => row.some((i) => claimed.has(i))).length >= 3 &&
+    (table.unassigned ?? []).every((text) => source.some((i) => i.text === text))
+  )
+}
+
+export function hasTableEvidence(
+  table,
+  caption,
+  pageItems = [],
+  sourceRules,
+  sourceGraphics = [],
+  nativeNavigation
+) {
   const populatedRows = table.grid.map((row) => row.filter((text) => text.trim()).length)
   if (!populatedRows.some((count) => count > 0)) return false
+  if (
+    isLinkedShortNativeContents(
+      table,
+      caption,
+      pageItems,
+      sourceRules,
+      sourceGraphics,
+      nativeNavigation
+    )
+  )
+    return false
+  if (
+    isLinkedNativeDirectory(
+      table,
+      caption,
+      pageItems,
+      sourceRules,
+      sourceGraphics,
+      nativeNavigation
+    )
+  )
+    return false
+  // A detector can attach a nearby prose continuation to a caption-like
+  // cross-reference (for example, "Table 7 and Figure 11").  A one-row crop
+  // with at most two populated cells and several unresolved narrative lines is
+  // not a table; retain the source text in the surrounding body instead.
+  const captionText = [caption?.text, ...(caption?.lines ?? [])].filter(Boolean).join(' ')
+  const unresolved = (table.unassigned ?? []).map((item) =>
+    typeof item === 'string' ? item : String(item?.text ?? '')
+  )
+  if (
+    table.grid.length <= 2 &&
+    populatedRows.reduce((sum, count) => sum + count, 0) <= 2 &&
+    unresolved.length >= 3 &&
+    /\b(?:table|tab\.)\s*\d+\b[^.]{0,80}\b(?:and|with)\b\s*(?:figure|fig\.)\s*\d+\b/iu.test(
+      captionText
+    ) &&
+    unresolved.filter((text) => /\p{L}{3,}/u.test(text) && /\s/u.test(text.trim())).length >= 3
+  )
+    return false
   if (isNativeTitledProcedure(table, caption, pageItems, sourceRules)) return false
   if (isNativeProseFootnoteOverlap(table, caption, pageItems, sourceRules ?? [])) return false
   const nativeCaption = caption?.rect
@@ -4903,4 +5284,258 @@ export function hasTableEvidence(table, caption, pageItems = [], sourceRules, so
   )
     return false
   return populatedRows.filter((count) => count >= 2).length >= 2
+}
+
+// The fonts must be original whole native tokens, uniquely referenced across the
+// complete page inventory. Source-bearing aliases outside a crop still compete.
+export function proveNativeUniqueWholeFonts(fonts, inventory) {
+  if (!Array.isArray(fonts) || !fonts.length || !Array.isArray(inventory)) return false
+  const identity = (o) =>
+    o &&
+    Number.isInteger(o.pageNumber) &&
+    o.pageNumber > 0 &&
+    Number.isInteger(o.index) &&
+    o.index >= 0
+  const key = (o) => `${o.pageNumber}:${o.index}`
+  const sourceKeys = new Set([
+    'sourceItem',
+    'sourceItems',
+    'sourceSegment',
+    'sourceSegments',
+    'sourceToken',
+    'sourceTokens'
+  ])
+  const walk = (value, visit, ancestors = new Set(), depth = 0) => {
+    if (!value || typeof value !== 'object') return true
+    if (depth > 16 || ancestors.has(value)) return false
+    const next = new Set(ancestors)
+    next.add(value)
+    return visit(value) && Object.values(value).every((v) => walk(v, visit, next, depth + 1))
+  }
+  const counts = new Map()
+  for (const item of inventory) {
+    if (
+      !walk(item, (o) => {
+        if (identity(o)) counts.set(key(o), (counts.get(key(o)) ?? 0) + 1)
+        return true
+      })
+    )
+      return false
+  }
+  const present = new Set(inventory),
+    used = new Set()
+  return fonts.every((font) => {
+    const origin = font?.sourceItem
+    if (
+      !present.has(font) ||
+      !identity(origin) ||
+      typeof origin.text !== 'string' ||
+      !origin.text.trim() ||
+      font.text !== origin.text ||
+      counts.get(key(origin)) !== 1 ||
+      used.has(key(origin)) ||
+      !Array.isArray(font.rect) ||
+      font.rect.length !== 4 ||
+      !font.rect.every(Number.isFinite) ||
+      font.rect[2] <= font.rect[0] ||
+      font.rect[3] <= font.rect[1] ||
+      !font.horizontal ||
+      !Number.isFinite(font.baseline) ||
+      !Number.isFinite(font.height) ||
+      font.height <= 0
+    )
+      return false
+    if (
+      !Object.entries(font).every(
+        ([name, value]) =>
+          name === 'sourceItem' ||
+          (!sourceKeys.has(name) &&
+            walk(value, (o) => !Object.keys(o).some((k) => sourceKeys.has(k)) && !identity(o)))
+      )
+    )
+      return false
+    used.add(key(origin))
+    return true
+  })
+}
+
+// A short first-page contents tail is closed by its native links and resolved
+// outline, not by the detector's empty page-number cells or a heading alone.
+function isLinkedShortNativeContents(table, caption, items, rules, graphics, navigation) {
+  if (
+    caption ||
+    !Array.isArray(rules) ||
+    !Array.isArray(graphics) ||
+    navigation?.links?.length !== 2 ||
+    !Array.isArray(navigation.outline) ||
+    !Number.isSafeInteger(navigation.pageNumber) ||
+    !Number.isSafeInteger(navigation.documentPages) ||
+    !Array.isArray(table.cells) ||
+    table.grid?.length !== 2 ||
+    table.grid.some((row) => row.length !== 3) ||
+    !Array.isArray(table.cropRect)
+  )
+    return false
+  const valid = (r) =>
+      Array.isArray(r) && r.length === 4 && r.every(Number.isFinite) && r[0] < r[2] && r[1] < r[3],
+    compact = (s) => s.replace(/\s/gu, ''),
+    source = items.filter((i) => i.text?.trim()),
+    byIndex = new Map()
+  if (!valid(table.cropRect)) return false
+  for (const f of source) {
+    const s = f.sourceItem
+    if (
+      !(
+        Array.isArray(f.rect) &&
+        f.rect.length === 4 &&
+        f.rect.every(Number.isFinite) &&
+        f.rect[0] <= f.rect[2] &&
+        f.rect[1] < f.rect[3]
+      ) ||
+      !(f.height > 0) ||
+      !Number.isFinite(f.baseline) ||
+      s?.pageNumber !== navigation.pageNumber ||
+      !Number.isSafeInteger(s.index) ||
+      s.index < 0 ||
+      s.text !== f.text ||
+      f.sourceSegment ||
+      f.sourceToken ||
+      byIndex.has(s.index)
+    )
+      return false
+    byIndex.set(s.index, f)
+  }
+  const linked = []
+  for (const link of navigation.links) {
+    if (
+      !valid(link.rect) ||
+      link.destination == null ||
+      !Number.isSafeInteger(link.targetPage) ||
+      link.targetPage < 1 ||
+      link.targetPage > navigation.documentPages
+    )
+      return false
+    const row = source
+      .filter((f) => f.baseline >= link.rect[1] && f.baseline <= link.rect[3])
+      .sort((a, b) => a.rect[0] - b.rect[0])
+    if (
+      row.length !== 3 ||
+      row.some((f) => !f.horizontal || !valid(f.rect)) ||
+      linked.some((p) => p.row.some((f) => row.includes(f)))
+    )
+      return false
+    const [ordinal, title, target] = row,
+      h = ordinal.height
+    if (
+      !/^\d+$/u.test(ordinal.text) ||
+      !/\p{L}{2}/u.test(title.text) ||
+      target.text !== String(link.targetPage) ||
+      Math.abs(title.height - h) > h * 0.02 ||
+      Math.abs(target.height - h) > h * 0.02 ||
+      row.some((f) => Math.abs(f.baseline - ordinal.baseline) > h * 0.02) ||
+      title.rect[0] <= ordinal.rect[2] ||
+      target.rect[0] - title.rect[2] < h * 2 ||
+      target.rect[0] < table.cropRect[0] + (table.cropRect[2] - table.cropRect[0]) * 0.8 ||
+      ordinal.rect[0] < link.rect[0] ||
+      title.rect[2] > link.rect[2]
+    )
+      return false
+    const outline = navigation.outline.filter(
+      (o) =>
+        typeof o.title === 'string' &&
+        compact(o.title) === compact(title.text) &&
+        o.page === link.targetPage &&
+        navigationSourceExact(o.destination, link.destination)
+    )
+    if (outline.length !== 1) return false
+    linked.push({ row, ordinal: Number(ordinal.text), title, target, h })
+  }
+  linked.sort((a, b) => a.row[0].baseline - b.row[0].baseline)
+  if (
+    linked[1].ordinal !== linked[0].ordinal + 1 ||
+    Number(linked[1].target.text) < Number(linked[0].target.text) ||
+    Math.abs(linked[1].row[0].rect[0] - linked[0].row[0].rect[0]) > linked[0].h * 0.02 ||
+    Math.abs(linked[1].target.rect[2] - linked[0].target.rect[2]) > linked[0].h * 0.02
+  )
+    return false
+  const first = linked[0].row[0],
+    headings = source.filter(
+      (f) =>
+        /^Contents$/iu.test(f.text) &&
+        f.horizontal &&
+        valid(f.rect) &&
+        f.height > first.height * 1.1 &&
+        f.baseline < first.rect[1] &&
+        first.rect[1] - f.baseline < first.height * 3 &&
+        Math.abs(f.rect[0] - first.rect[0]) < first.height * 0.1
+    )
+  if (headings.length !== 1) return false
+  const directory = [
+    Math.min(headings[0].rect[0], ...linked.flatMap((p) => p.row.map((f) => f.rect[0]))),
+    headings[0].rect[1],
+    Math.max(headings[0].rect[2], ...linked.flatMap((p) => p.row.map((f) => f.rect[2]))),
+    Math.max(...linked.flatMap((p) => p.row.map((f) => f.rect[3])))
+  ]
+  const hit = (a, b) => a[0] < b[2] && a[2] > b[0] && a[1] < b[3] && a[3] > b[1]
+  if (
+    rules.some(
+      (r) =>
+        !Array.isArray(r) ||
+        r.length !== 4 ||
+        !r.every(Number.isFinite) ||
+        hit(
+          [
+            Math.min(r[0], r[2]) - 0.01,
+            Math.min(r[1], r[3]) - 0.01,
+            Math.max(r[0], r[2]) + 0.01,
+            Math.max(r[1], r[3]) + 0.01
+          ],
+          directory
+        )
+    ) ||
+    graphics.some((g) => !valid(g.rect) || hit(g.rect, directory)) ||
+    source.some(
+      (f) => f !== headings[0] && !linked.some((p) => p.row.includes(f)) && hit(f.rect, directory)
+    )
+  )
+    return false
+  const claimed = new Set(),
+    prefixes = new Set(linked.flatMap((p) => p.row.slice(0, 2)))
+  for (const c of table.cells) {
+    if (
+      c.sourceSegments?.length ||
+      (c.sourceItems?.length ?? 0) !== (c.sourceRects?.length ?? 0) ||
+      c.rowSpan !== 1 ||
+      c.colSpan !== 1
+    )
+      return false
+    const fonts = []
+    for (const [n, s] of (c.sourceItems ?? []).entries()) {
+      const f = byIndex.get(s.index)
+      if (
+        !f ||
+        !prefixes.has(f) ||
+        claimed.has(f) ||
+        !navigationSourceExact(s, f.sourceItem) ||
+        !navigationSourceExact(c.sourceRects[n], f.rect)
+      )
+        return false
+      claimed.add(f)
+      fonts.push(f)
+    }
+    if (
+      typeof c.text !== 'string' ||
+      compact(c.text) !== compact(fonts.map((f) => f.text).join(''))
+    )
+      return false
+  }
+  return (
+    claimed.size === prefixes.size &&
+    linked.every(
+      (p, r) =>
+        table.grid[r][0] === String(p.ordinal) &&
+        compact(table.grid[r][1]) === compact(p.title.text) &&
+        table.grid[r][2] === ''
+    )
+  )
 }

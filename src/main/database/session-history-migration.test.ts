@@ -1,10 +1,12 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { PrismaClient } from '@prisma/client'
 import { afterEach, expect, it } from 'vitest'
+import { createDatabaseAtReleasedManifest } from '../../../test/fixtures/application-database'
 import { createProjectDbClient } from '../projects/prisma-client'
-import { migrateApplicationDatabase } from './migration-service'
+import { MIGRATION_MANIFEST, migrateApplicationDatabase } from './migration-service'
+import { legacySessionHistoryMigration } from './migrations/legacy-session-history'
 
 let root: string | undefined
 let client: PrismaClient | undefined
@@ -12,7 +14,7 @@ afterEach(async () => {
   await client?.$disconnect()
   if (root) await rm(root, { recursive: true, force: true })
 })
-it('upgrades 0050 with an empty derived history index and preserves existing application data', async () => {
+it('upgrades 0054 with an empty derived history index and preserves existing application data', async () => {
   root = await mkdtemp(join(tmpdir(), 'history-migration-'))
   client = createProjectDbClient(root)
   await migrateApplicationDatabase(client)
@@ -23,12 +25,12 @@ it('upgrades 0050 with an empty derived history index and preserves existing app
   await client.$executeRawUnsafe('DROP TABLE SessionHistoryIndex')
   await client.$executeRawUnsafe(
     'DELETE FROM _open_science_migrations WHERE id = ?',
-    '0051_session_history'
+    '0055_session_history'
   )
   expect(await migrateApplicationDatabase(client)).toMatchObject({
-    from: '0050_literature_translation',
-    to: '0051_session_history',
-    applied: ['0051_session_history']
+    from: '0054_slurm_job_reliability',
+    to: '0055_session_history',
+    applied: ['0055_session_history']
   })
   expect(await client.project.findUnique({ where: { id: project.id } })).toEqual(project)
   expect(await client.sessionHistoryIndex.count()).toBe(0)
@@ -43,3 +45,110 @@ it('upgrades 0050 with an empty derived history index and preserves existing app
     plan.some(({ detail }) => detail.includes('SessionHistoryItem_sessionId_ordinal_idx'))
   ).toBe(true)
 })
+
+// This checksum is from the published fork, not recomputed from the implementation under test.
+const releasedForkHistory = {
+  ...legacySessionHistoryMigration,
+  checksum: '72e7ec8c0f5f48310f586c1d5487e1734db4aab08765614bc5bbb7e184445fcb',
+  backupOnApply: 'required',
+  backupRetention: 'retain'
+} as const
+
+const createForkDatabase = async (): Promise<PrismaClient> => {
+  root = await mkdtemp(join(tmpdir(), 'fork-history-migration-'))
+  client = createProjectDbClient(root)
+  await createDatabaseAtReleasedManifest(client, [
+    ...MIGRATION_MANIFEST.filter(({ id }) => id <= '0050_literature_translation'),
+    releasedForkHistory
+  ])
+  await client.project.create({ data: { id: 'existing', name: 'Existing project' } })
+  await client.sessionHistoryIndex.create({
+    data: {
+      sessionId: 'existing-session',
+      projectId: 'existing',
+      revision: 7,
+      sourceFingerprint: 'preserved',
+      scopeKey: 'linear',
+      headerJson: '{}',
+      totalItems: 1,
+      items: {
+        create: {
+          kind: 'message',
+          itemId: 'message-1',
+          ordinal: 0,
+          payloadJson: '{"content":"preserved history"}'
+        }
+      }
+    }
+  })
+  return client
+}
+
+it.each([false, true])(
+  'upgrades the released fork ledger with a backup and preserves history (interrupted=%s)',
+  async (interrupted) => {
+    const db = await createForkDatabase()
+    const before = await db.sessionHistoryIndex.findMany({ include: { items: true } })
+    if (interrupted) {
+      await expect(
+        migrateApplicationDatabase(db, {
+          onProgress: (progress) => {
+            if (
+              progress.phase === 'migrating' &&
+              progress.migrationId === '0052_literature_personal_note_search'
+            )
+              throw new Error('simulated restart')
+          }
+        })
+      ).rejects.toThrow('simulated restart')
+    }
+    const result = await migrateApplicationDatabase(db)
+    expect(result).toMatchObject({
+      from: interrupted ? '0051_literature_reading_status' : '0051_session_history',
+      to: '0055_session_history'
+    })
+    expect(await db.project.findUnique({ where: { id: 'existing' } })).toMatchObject({
+      name: 'Existing project'
+    })
+    expect(await db.sessionHistoryIndex.findMany({ include: { items: true } })).toEqual(before)
+    expect(await db.$queryRawUnsafe('SELECT id FROM _open_science_migrations ORDER BY id')).toEqual(
+      MIGRATION_MANIFEST.map(({ id }) => ({ id }))
+    )
+    expect(await readdir(root!)).toContain(
+      'open-science.db.before-0051_literature_reading_status.backup'
+    )
+    expect(await migrateApplicationDatabase(db)).toMatchObject({ applied: [] })
+  }
+)
+
+it.each(['checksum', 'missing-prefix', 'unknown-suffix'])(
+  'rejects a modified fork ledger before touching it (%s)',
+  async (damage) => {
+    const db = await createForkDatabase()
+    if (damage === 'checksum')
+      await db.$executeRawUnsafe(
+        'UPDATE _open_science_migrations SET checksum = ? WHERE id = ?',
+        '0'.repeat(64),
+        releasedForkHistory.id
+      )
+    else if (damage === 'missing-prefix')
+      await db.$executeRawUnsafe(
+        "DELETE FROM _open_science_migrations WHERE id = '0050_literature_translation'"
+      )
+    else
+      await db.$executeRawUnsafe(
+        'INSERT INTO _open_science_migrations (id, checksum) VALUES (?, ?)',
+        '0052_unknown_fork_change',
+        '0'.repeat(64)
+      )
+    const before = await db.$queryRawUnsafe('SELECT * FROM _open_science_migrations ORDER BY id')
+    await expect(migrateApplicationDatabase(db)).rejects.toMatchObject({
+      code: 'database_history_invalid'
+    })
+    expect(await db.$queryRawUnsafe('SELECT * FROM _open_science_migrations ORDER BY id')).toEqual(
+      before
+    )
+    expect((await readdir(root!)).filter((name) => name.endsWith('.backup'))).toEqual([])
+    expect(await db.sessionHistoryItem.count()).toBe(1)
+  }
+)

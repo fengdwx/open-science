@@ -1,10 +1,11 @@
+import { desktopRuntimeWritable } from '../../../stores/desktop-runtime-recovery-store'
 import { useContext, useEffect, useRef, useState } from 'react'
 import { PreviewInitialPosition } from './PreviewInitialPosition'
 import { usePreviewResourceGeneration } from './usePreviewResourceGeneration'
 
 import type { ArtifactPreviewResult } from '../../../../../shared/artifacts'
 import type { ManagedPreviewResource } from '../../../../../shared/preview-resources'
-import type { PreviewFileSource } from '@/stores/preview-workbench-store'
+import type { PreviewFileSource } from '@/stores/preview-workbench-contract'
 
 import { createManagedPreviewRequest } from './preview-file-reader'
 import { isManagedFilePublicationPendingError, isUnavailableFileError } from './preview-errors'
@@ -238,6 +239,8 @@ export const usePreviewFileContent = ({
   }, [fileKey])
 
   useEffect(() => {
+    if (!desktopRuntimeWritable()) return
+
     let canceled = false
     const abortController = new AbortController()
 

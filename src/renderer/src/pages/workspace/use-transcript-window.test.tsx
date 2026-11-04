@@ -36,6 +36,39 @@ describe('useTranscriptWindow', () => {
     act(() => root.unmount())
   })
 
+  it('retains paused rows after a collapse reaches bottom until deliberate following resumes', () => {
+    const root = createRoot(document.createElement('div'))
+    const viewport = document.createElement('div')
+    Object.defineProperties(viewport, {
+      clientHeight: { value: 100 },
+      clientWidth: { value: 600 },
+      scrollHeight: { writable: true, value: 840 },
+      scrollTop: { writable: true, value: 740 }
+    })
+    let current!: ReturnType<typeof useTranscriptWindow>
+    const Harness = ({ paused, rows = items }: { paused: boolean; rows?: typeof items }): null => {
+      current = useTranscriptWindow('session', rows, -1, { current: viewport }, paused)
+      return null
+    }
+    const appended = [...items, { ...items[0], id: 'latest' }]
+    try {
+      act(() => root.render(<Harness paused={false} />))
+      act(() => root.render(<Harness paused />))
+      act(() => current.expandAtScrollEdge(880))
+      act(() => root.render(<Harness paused rows={appended} />))
+      expect(current.entries[0].item.id).toBe('message-41')
+      expect(current.entries.at(-1)?.item.id).toBe('message-120')
+      expect(current.isFollowingEnd).toBe(false)
+      act(() => root.render(<Harness paused={false} rows={appended} />))
+      expect(current.isFollowingEnd).toBe(false)
+      act(() => current.followEnd())
+      expect(current.entries.at(-1)?.item.id).toBe('latest')
+      expect(current.isFollowingEnd).toBe(true)
+    } finally {
+      act(() => root.unmount())
+    }
+  })
+
   it.each(['movement', 'height', 'width', 'contentHeight', 'contentGrowth', 'anchoredGrowth'])(
     'handles delayed input with %s',
     (change) => {
@@ -563,6 +596,7 @@ describe('useTranscriptWindow', () => {
       { id: 'message-2', type: 'message' },
       { id: 'session-config-change-message-3', type: 'session-config-change' },
       { id: 'message-3', type: 'message' },
+      { id: 'runtime-switch', type: 'session-config-change', followsLiveActivity: true },
       { id: 'activity-1', type: 'activity' }
     ] as WorkspaceConversationTimelineItem[]
     const result = {
@@ -577,6 +611,7 @@ describe('useTranscriptWindow', () => {
     expect(result.current.entries.map((entry) => entry.item.id)).toEqual([
       'message-1',
       'message-2',
+      'runtime-switch',
       'activity-1'
     ])
 

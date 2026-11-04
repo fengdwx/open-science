@@ -157,11 +157,15 @@ describe('AcpSessionReplacementWorkflow', () => {
     })
   })
 
-  it.each(['attached', 'connection-detached'] as const)(
-    'replaces a %s Claude provider Session in its original Project',
-    async (state) => {
+  it.each([
+    ['claude-code', 'attached'],
+    ['claude-code', 'connection-detached'],
+    ['codex', 'connection-detached']
+  ] as const)(
+    'replaces a %s %s provider Session in its original Project',
+    async (frameworkId, state) => {
       const registry = new AcpSessionRegistry()
-      publishSession(registry, 'app-session', attachedSession('provider-session'))
+      publishSession(registry, 'app-session', attachedSession('provider-session'), frameworkId)
       if (state === 'connection-detached') {
         registry.detach(registry.lookup('app-session')!.attachment!, 'connection')
         expect(registry.entries(true)).toEqual([])
@@ -171,14 +175,14 @@ describe('AcpSessionReplacementWorkflow', () => {
       const adopt = vi.fn(async () => ({
         sessionId: 'app-session',
         cwd: '/old-workspace',
-        frameworkId: 'claude-code' as const,
+        frameworkId,
         contextReset: true as const
       }))
       const workflow = new AcpSessionReplacementWorkflow({
         defaultCwd: '/default-workspace',
         defaultProjectId: 'default-project',
         currentCwd: () => '/current-workspace',
-        currentFrameworkId: () => 'claude-code',
+        currentFrameworkId: () => frameworkId,
         assertSkillScopeRefreshSupported: vi.fn(),
         ensureConnected: vi.fn(async () => connection),
         assertCurrentConnection: vi.fn(),
@@ -351,7 +355,7 @@ describe('AcpSessionReplacementWorkflow', () => {
     expect(registerSessionSpecialist).not.toHaveBeenCalled()
   })
 
-  it.each(['prompt', 'newer-binding'] as const)(
+  it.each(['prompt', 'newer-binding', 'writer-release'] as const)(
     'does not apply a delayed Codex switch after %s wins',
     async (winner) => {
       const registry = new AcpSessionRegistry()
@@ -362,12 +366,17 @@ describe('AcpSessionReplacementWorkflow', () => {
       const pending = Promise.withResolvers<{ append: string; prefix: string }>()
       const current = vi.fn()
       const reconfigureSession = vi.fn()
+      let writerReleasePending = false
+      const assertSkillScopeRefreshSupported = vi.fn((sessionId: string) => {
+        if (sessionId === 'app-session' && writerReleasePending)
+          throw new Error('writer release pending')
+      })
       const workflow = new AcpSessionReplacementWorkflow({
         defaultCwd: '/workspace',
         defaultProjectId: 'project',
         currentCwd: vi.fn(),
         currentFrameworkId: () => 'codex',
-        assertSkillScopeRefreshSupported: vi.fn(),
+        assertSkillScopeRefreshSupported,
         ensureConnected: vi.fn(),
         assertCurrentConnection: vi.fn(),
         registry,
@@ -387,6 +396,7 @@ describe('AcpSessionReplacementWorkflow', () => {
       const switched = workflow.switchSpecialist('app-session', 'requested')
       const rejected = expect(switched).rejects.toThrow()
       if (winner === 'prompt') current.mockReturnValue({ kind: 'prompt' })
+      else if (winner === 'writer-release') writerReleasePending = true
       else {
         aggregate.setSpecialistId('newer')
         aggregate.setSpecialistPrefix('Newer prefix')
@@ -395,7 +405,9 @@ describe('AcpSessionReplacementWorkflow', () => {
       await rejected
       expect(reconfigureSession).not.toHaveBeenCalled()
       expect(dispose).not.toHaveBeenCalled()
-      expect(aggregate.snapshot().specialistId).toBe(winner === 'prompt' ? 'initial' : 'newer')
+      expect(aggregate.snapshot().specialistId).toBe(
+        winner === 'newer-binding' ? 'newer' : 'initial'
+      )
       expect(aggregate.snapshot().specialistPrefix).not.toBe('Obsolete prefix')
     }
   )

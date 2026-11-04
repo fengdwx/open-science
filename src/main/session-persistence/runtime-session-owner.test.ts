@@ -380,7 +380,7 @@ describe('Main terminal commit recovery', () => {
           interruptionCause: 'terminal-commit-failed',
           terminalCommitFailure: failure,
           terminalCommitError: message,
-          errorReportable: false
+          failure: { category: 'session' as const, reason: 'session/interrupted', diagnostics: {} }
         })
       )
       expect(h.sessions.get(turn.sessionId)?.status).toBe('running') // live result is never written
@@ -1092,6 +1092,21 @@ describe('RuntimeSessionOwner', () => {
     expect(receipt.artifacts).toContainEqual(expect.objectContaining({ versionId: 'version-1' }))
   })
 
+  it('rejects replacing a live execution even when a newer durable run exists', async () => {
+    const first = scope()
+    const { owner, sessions } = harness()
+    await owner.begin(first)
+    sessions.get(first.sessionId)!.activeRun = {
+      promptMessageId: first.promptMessageId,
+      startedAt: 10
+    }
+
+    await expect(owner.begin({ ...first, executionId: 'rival-execution' })).rejects.toThrow(
+      'Runtime Session turn is already owned by another execution.'
+    )
+    expect(sessions.get(first.sessionId)?.runtimeSessionAdmissions).toHaveLength(1)
+  })
+
   it('admits a resumed execution only after a newer durable run and fences stale output', async () => {
     const first = scope()
     const { owner, sessions } = harness()
@@ -1164,19 +1179,31 @@ describe('RuntimeSessionOwner', () => {
     {
       recoverable: 'context-overflow' as const,
       text: 'request too large',
-      providerError: false,
+      failure: {
+        category: 'input' as const,
+        reason: 'input/context-overflow' as const,
+        diagnostics: {}
+      },
       contextReset: false
     },
     {
       recoverable: undefined,
       text: 'API Error: Connection closed mid-response',
-      providerError: true,
+      failure: {
+        category: 'service' as const,
+        reason: 'service/response-interrupted' as const,
+        diagnostics: {}
+      },
       contextReset: false
     },
     {
       recoverable: undefined,
       text: 'API Error: Connection closed mid-response',
-      providerError: true,
+      failure: {
+        category: 'service' as const,
+        reason: 'service/response-interrupted' as const,
+        diagnostics: {}
+      },
       contextReset: true
     }
   ])(
@@ -1200,7 +1227,7 @@ describe('RuntimeSessionOwner', () => {
       const interrupted = sessions.get(turn.sessionId)!
       expect(interrupted.activeRun).toBeUndefined()
       expect(interrupted.messages.at(-1)?.status).toBe('error')
-      if (failure.providerError) {
+      if (failure.failure.category === 'service') {
         expect(interrupted.resumeRecovery).toEqual({
           kind: 'resume-required',
           cause: 'connection-lost',
@@ -1225,7 +1252,8 @@ describe('RuntimeSessionOwner', () => {
           run: { promptMessageId: turn.promptMessageId, startedAt: 10 }
         }
       ])
-      if (failure.providerError) expect(prepared.resumeRecovery).toEqual(interrupted.resumeRecovery)
+      if (failure.failure.category === 'service')
+        expect(prepared.resumeRecovery).toEqual(interrupted.resumeRecovery)
       sessions.set(turn.sessionId, prepared)
       const admitRetry = async (): Promise<void> => {
         await owner.begin({
@@ -1234,7 +1262,7 @@ describe('RuntimeSessionOwner', () => {
           executionId: 'retry-execution'
         })
       }
-      if (failure.providerError) {
+      if (failure.failure.category === 'service') {
         await continueInterruptedTurn(
           {
             loadSession: async () => structuredClone(sessions.get(turn.sessionId)),
@@ -1488,7 +1516,9 @@ describe('RuntimeSessionOwner', () => {
       first.owner.accept(questionEvent(resumed, 'pending', 11))
       first.owner.accept(stopEvent(resumed, 12))
       await first.owner.flush(original.sessionId, original.promptMessageId)
-      first.owner.accept(questionEvent(resumed, 'answered', 13))
+      const answer = questionEvent(resumed, 'answered', 13)
+      answer.elicitation!.continuationPending = true
+      first.owner.accept(answer)
       await first.owner.flush(original.sessionId, original.promptMessageId)
       const durable = first.sessions.get(original.sessionId)!
       // The production persistence coordinator stamps the settled run before its next admission.
@@ -1569,6 +1599,30 @@ describe('RuntimeSessionOwner', () => {
     })
   })
 
+  it('rejects a late continuation after the saved question wait has ended', async () => {
+    const turn = scope()
+    const { owner, sessions } = harness([{ ...session(turn), runtimeTranscriptOwner: 'main' }])
+    await owner.begin(turn)
+    owner.accept(questionEvent(turn, 'pending', 2))
+    owner.accept(stopEvent(turn, 3))
+    await owner.flush(turn.sessionId, turn.promptMessageId)
+    owner.accept(questionEvent(turn, 'answered', 4))
+    await owner.flush(turn.sessionId, turn.promptMessageId)
+    const ended = sessions.get(turn.sessionId)!
+    ended.status = 'idle'
+    ended.runtimeTranscriptLastRun = { promptMessageId: turn.promptMessageId, startedAt: 1 }
+    // Ending preserves the answer and timestamp but revokes its continuation receipt.
+    for (const activity of [
+      ...(ended.activities ?? []),
+      ...(ended.conversationGraph?.activities ?? [])
+    ]) {
+      if (activity.elicitation) delete activity.elicitation.continuationPending
+    }
+    await expect(owner.begin({ ...turn, executionId: 'late-after-end' })).rejects.toThrow()
+    expect(sessions.get(turn.sessionId)?.status).toBe('idle')
+    expect(sessions.get(turn.sessionId)?.activeRun).toBeUndefined()
+  })
+
   it('flushes an answer queued after terminal settlement before admitting its continuation', async () => {
     const turn = scope()
     const { owner, sessions } = harness([session(turn)])
@@ -1592,13 +1646,20 @@ describe('RuntimeSessionOwner', () => {
     owner.accept(stopEvent(turn, 3))
     await owner.flush(turn.sessionId, turn.promptMessageId)
     const answer = questionEvent(turn, 'answered', 4)
+    answer.elicitation!.answers = [{ fieldId: 'answer', value: 'Saved dataset' }]
     answer.elicitation!.continuationPending = true
     owner.accept(answer)
     await owner.begin({ ...turn, executionId: 'execution-answer' })
 
     const notAccepted = normalizeSessionFile(structuredClone(sessions.get(turn.sessionId)))!
     expect(notAccepted.status).toBe('waiting-for-user')
-    expect(notAccepted.activities?.[0].elicitation?.state).toBe('pending')
+    expect(notAccepted.activities?.[0].elicitation).toMatchObject({
+      state: 'answered',
+      answers: answer.elicitation!.answers,
+      respondedAt: answer.elicitation!.respondedAt,
+      continuationPending: true,
+      continuationRecovery: { error: 'The task could not continue. Your response is saved.' }
+    })
 
     const nextAnswer = questionEvent(turn, 'answered', 11)
     nextAnswer.id = 'next-answer'
@@ -1633,7 +1694,7 @@ describe('RuntimeSessionOwner', () => {
     expect(restarted.sessions.get(turn.sessionId)?.status).toBe('running')
   })
 
-  it('admits a recorded answer after disk normalization clears the waiting status', async () => {
+  it('does not replay an answer without a continuation receipt after disk normalization', async () => {
     const turn = scope()
     const { owner, sessions } = harness([session(turn)])
     await owner.begin(turn)
@@ -1648,8 +1709,8 @@ describe('RuntimeSessionOwner', () => {
     const restored = normalizeSessionFile(JSON.parse(JSON.stringify(value)))!
     expect(restored.status).toBe('idle')
     const restarted = harness([restored])
-    await restarted.owner.begin({ ...turn, executionId: 'restarted' })
-    expect(restarted.sessions.get(turn.sessionId)?.status).toBe('running')
+    await expect(restarted.owner.begin({ ...turn, executionId: 'restarted' })).rejects.toThrow()
+    expect(restarted.sessions.get(turn.sessionId)?.status).toBe('idle')
   })
 
   it.each([
@@ -1759,7 +1820,7 @@ describe('RuntimeSessionOwner', () => {
               promptMessageId: turn.promptMessageId,
               timestamp: 3,
               text: 'Provider unavailable',
-              providerError: true
+              failure: { category: 'service' as const, diagnostics: {} }
             }
       )
       await owner.flush(turn.sessionId, turn.promptMessageId)

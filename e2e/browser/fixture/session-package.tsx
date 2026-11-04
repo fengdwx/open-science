@@ -46,6 +46,7 @@ usePackageOperationStore.getState().receive({
   progress: { phase: 'selecting' },
   summary: {
     metadataBytes: 7987,
+    pdfNotesAvailable: new URLSearchParams(location.search).has('pdf-notes'),
     retainedFiles: new URLSearchParams(location.search).has('retained')
       ? [
           {
@@ -106,7 +107,17 @@ if (mode) {
       isExample: false,
       createdAt: 1,
       updatedAt: 1
-    }
+    },
+    ...(new URLSearchParams(location.search).has('many-projects')
+      ? Array.from({ length: 30 }, (_, index) => ({
+          id: `project-${index}`,
+          name: `Research project ${index + 1} — longitudinal analysis and supporting evidence`,
+          description: '',
+          isExample: false,
+          createdAt: 1,
+          updatedAt: 1
+        }))
+      : [])
   ]
   const preview = {
     title: 'Nanomaterials and tumour immunity',
@@ -127,15 +138,15 @@ if (mode) {
       }
     ]
   }
-  const operation: PackageOperationSnapshot = {
+  let operation: PackageOperationSnapshot = {
     id: 'import-fixture',
     kind: 'import',
     state:
       mode === 'error' || mode === 'update-required'
         ? 'failed'
-        : mode === 'cleanup'
+        : mode === 'cleanup' || mode === 'success'
           ? 'succeeded'
-          : mode === 'progress'
+          : ['progress', 'checking', 'validating'].includes(mode)
             ? 'running'
             : 'awaiting-selection',
     error:
@@ -147,21 +158,37 @@ if (mode) {
           ? 'The package could not be imported.'
           : undefined,
     cleanupPending: mode === 'cleanup',
+    result:
+      mode === 'success' || mode === 'cleanup'
+        ? { imported: { projectId: 'cancer', sessionId: 'imported' } }
+        : undefined,
+    ioBytesPerSecond: mode === 'checking' || mode === 'validating' ? 32 * 1024 ** 2 : undefined,
     importQueueFull: new URLSearchParams(location.search).has('queue-full'),
     importRequestId: 'file-open',
     importFilename: 'tumour-immunity.science',
     importTarget: mode === 'project' ? undefined : { projectId: 'cancer' },
     importPreview: mode === 'review' ? preview : undefined,
     progress:
-      mode === 'update-required'
-        ? { phase: 'validating' }
-        : mode === 'error' || mode === 'cleanup'
-          ? { phase: mode === 'cleanup' ? 'cleaning' : 'importing' }
-          : mode === 'progress'
-            ? { phase: 'importing', completedBytes: 18 * 1024 ** 2, totalBytes: 42 * 1024 ** 2 }
-            : { phase: mode === 'review' ? 'confirming' : 'selecting' },
+      mode === 'checking'
+        ? { phase: 'copying', completedBytes: 18 * 1024 ** 2, totalBytes: 42 * 1024 ** 2 }
+        : mode === 'update-required' || mode === 'validating'
+          ? { phase: 'validating' }
+          : mode === 'error' || mode === 'cleanup'
+            ? { phase: mode === 'cleanup' ? 'cleaning' : 'importing' }
+            : mode === 'progress'
+              ? { phase: 'importing', completedBytes: 18 * 1024 ** 2, totalBytes: 42 * 1024 ** 2 }
+              : { phase: mode === 'review' ? 'confirming' : 'selecting' },
     pendingImports: [{ id: 'next', filename: 'follow-up-study.science' }]
   }
+  window.addEventListener('package-fixture-inspected', () => {
+    operation = {
+      ...operation,
+      state: 'awaiting-selection',
+      importPreview: preview,
+      progress: { phase: 'confirming' }
+    }
+    usePackageOperationStore.getState().receive(operation)
+  })
   useProjectStore.setState({
     projects,
     isLoaded: true,
@@ -212,6 +239,17 @@ if (mode) {
                 totalBytes: 42 * 1024 ** 2
               }
             })
+          if (request.action === 'cancel') operation.state = 'cancelling'
+          if (request.action === 'next-import')
+            Object.assign(operation, {
+              id: 'next-import',
+              state: 'awaiting-selection',
+              result: undefined,
+              importFilename: 'follow-up-study.science',
+              importTarget: undefined,
+              progress: { phase: 'selecting' },
+              pendingImports: []
+            })
           usePackageOperationStore.getState().receive({ ...operation })
           return operation
         }
@@ -220,10 +258,89 @@ if (mode) {
   })
   usePackageOperationStore.getState().receive(operation)
 }
+const exportMode = new URLSearchParams(location.search).get('export')
+// Feed consecutive owner snapshots to exercise the real dialog without native filesystem writes.
+window.addEventListener('package-fixture-progress', (event) => {
+  const current = usePackageOperationStore.getState().operation!
+  const update = (event as CustomEvent<Partial<PackageOperationSnapshot>>).detail
+  usePackageOperationStore.getState().receive({ ...current, ...update })
+})
+if (exportMode) {
+  const current = usePackageOperationStore.getState().operation!
+  usePackageOperationStore.getState().receive({
+    ...current,
+    state: exportMode === 'success' ? 'succeeded' : 'running',
+    files: undefined,
+    progress:
+      exportMode === 'creating'
+        ? { phase: 'compressing' }
+        : { phase: 'saving', completedBytes: 18 * 1024 ** 2, totalBytes: 42 * 1024 ** 2 },
+    result:
+      exportMode === 'success'
+        ? { filePath: '/Users/researcher/Documents/tumour-immunity.science' }
+        : undefined
+  })
+}
 const menuMode = new URLSearchParams(location.search).has('menu')
+if (new URLSearchParams(location.search).has('transfers')) {
+  const current = usePackageOperationStore.getState().operation!
+  usePackageOperationStore.getState().receive({
+    ...current,
+    browserTransfers: Array.from({ length: 4 }, (_, index) => ({
+      id: `transfer-${index}`,
+      filename: `research-package-${index}.science`,
+      state: 'receiving',
+      completedBytes: 18 * 1024 ** 2,
+      totalBytes: 42 * 1024 ** 2
+    }))
+  })
+}
+if (new URLSearchParams(location.search).has('evidence')) {
+  const current = usePackageOperationStore.getState().operation!
+  usePackageOperationStore.getState().receive({
+    ...current,
+    state: 'failed',
+    error:
+      'Sensitive content detected at session.json @37746. Check: Credential-like assignment. Review it before exporting the Session package.',
+    sensitiveContent: Array.from({ length: 20 }, (_, index) => ({
+      location: `research-file-${index}.txt`,
+      offset: 0,
+      rule: 'field',
+      matchLength: 8,
+      leftBoundary: 'start',
+      rightBoundary: 'end',
+      context: 'Redacted fixture evidence',
+      valueHash: 'fixture'
+    }))
+  })
+}
 if (menuMode) usePackageOperationStore.getState().setOpen(false)
 const background = new URLSearchParams(location.search)
 const backgroundMode = background.has('background')
+if (!mode && !backgroundMode) {
+  Object.defineProperty(window, 'api', {
+    configurable: true,
+    value: {
+      sessions: {
+        packageOperation: async (request: { action: string; bytesPerSecond?: number | null }) => {
+          const current = usePackageOperationStore.getState().operation!
+          const operation: PackageOperationSnapshot = {
+            ...current,
+            ...(request.action === 'select'
+              ? { state: 'running', files: undefined, progress: { phase: 'choosing-location' } }
+              : request.action === 'cancel'
+                ? { state: 'cancelling', progress: { phase: 'cleaning' } }
+                : request.action === 'set-speed'
+                  ? { transferBytesPerSecond: request.bytesPerSecond ?? undefined }
+                  : {})
+          }
+          usePackageOperationStore.getState().receive(operation)
+          return operation
+        }
+      }
+    }
+  })
+}
 const homeSurface = background.get('surface') === 'home'
 const newConversationSurface = background.get('surface') === 'new-conversation'
 if (backgroundMode) {
@@ -245,6 +362,7 @@ if (backgroundMode) {
         onChanged: () => noop
       },
       sessions: {
+        importPackage: async () => null,
         packageOperation: async (request: { action: string }) => {
           const current = usePackageOperationStore.getState().operation!
           if (request.action === 'cancel')
@@ -346,11 +464,16 @@ void localeReady.then(() =>
               {newConversationSurface ? 'New conversation' : 'Nanomaterials and tumour immunity'}
             </h1>
             <PackageExportProgressButton />
+            <PackageOperationIndicator />
           </header>
-          <PackageOperationIndicator />
         </div>
       ) : null}
       {mode === 'early-error' ? <SessionPackageImportError /> : <SessionPackageOperation />}
+      {mode && !backgroundMode ? (
+        <div className="mx-auto flex max-w-3xl justify-end p-4">
+          <PackageOperationIndicator />
+        </div>
+      ) : null}
     </>
   )
 )

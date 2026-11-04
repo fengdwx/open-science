@@ -13,7 +13,8 @@ import {
   selectVisionRelayAvailable,
   useSettingsStore
 } from '@/stores/settings-store'
-import { useSessionStore, type ChatSession } from '@/stores/session-store'
+import { useSessionStore } from '@/stores/session-store'
+import type { ChatSession } from '@/stores/session-store-contract'
 import { ensureSessionContentLoaded } from '@/lib/session-persistence/session-history'
 import { reportWorkspaceOperationError } from '@/lib/acp/workspace-operation-error'
 

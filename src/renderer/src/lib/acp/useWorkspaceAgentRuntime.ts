@@ -35,10 +35,11 @@ import type { AgentFrameworkId, SessionAgentConfiguration } from '../../../../sh
 import { createPreviewFileItemFromPdfContext } from '../../pages/workspace/preview-file-item'
 import {
   pendingPdfContextSelections,
-  usePreviewWorkbenchStore,
-  type PendingPdfContext
+  usePreviewWorkbenchStore
 } from '../../stores/preview-workbench-store'
-import { useSessionStore, type ChatSession } from '../../stores/session-store'
+import type { PendingPdfContext } from '../../stores/preview-workbench-contract'
+import { useSessionStore } from '../../stores/session-store'
+import type { ChatSession } from '../../stores/session-store-contract'
 import { ensureSessionContentLoaded } from '../session-persistence/session-history'
 import { selectVisionRelayAvailable, useSettingsStore } from '../../stores/settings-store'
 import { isRuntimeWriter } from './runtime-writer-client'
@@ -66,10 +67,8 @@ import {
   refreshDelegatedWorkSessions,
   subscribeWorkspacePermissionLifecycle,
   syncWorkspaceContextUsage,
-  syncWorkspaceElicitationState,
   syncWorkspaceInteractionState,
   syncWorkspaceInteractionStateFromSnapshot,
-  syncWorkspacePermissionState,
   useWorkspaceRuntimeEventDrain,
   useWorkspaceRuntimeEventIngest
 } from './workspace-runtime-event-owner'
@@ -193,6 +192,7 @@ const useOwnedWorkspaceAgentRuntime = (
         const permission = session.runtimeContext?.permission
         return [
           session.id,
+          session.runtimeContext?.networkApprovals,
           permission?.state === 'pending'
             ? [session.runtimeContext?.revision, permission.request.requestId, session.status]
             : null
@@ -302,9 +302,8 @@ const useOwnedWorkspaceAgentRuntime = (
   ])
 
   useEffect(() => {
-    syncWorkspaceElicitationState(runtime.state.pendingElicitations ?? [])
-    syncWorkspacePermissionState(pendingPermissions)
-  }, [pendingPermissions, runtime.state.pendingElicitations])
+    syncWorkspaceInteractionStateFromSnapshot(runtime.state)
+  }, [restoredPermissionProjectionKey, runtime.state])
 
   useEffect(() => {
     syncWorkspaceContextUsage(runtime.state.sessionIds, runtime.state.contextUsageBySession)

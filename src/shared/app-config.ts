@@ -18,6 +18,7 @@ export const APP = {
     website: 'https://www.aipoch.com/open-science',
     docs: 'https://www.aipoch.com/docs/',
     githubRepo: GITHUB_REPO_URL,
+    security: `${GITHUB_REPO_URL}/blob/main/SECURITY.md`,
     license: `${GITHUB_REPO_URL}/blob/main/LICENSE`,
     githubReleases: `${GITHUB_REPO_URL}/releases`,
     githubApi: `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}`,
@@ -29,7 +30,7 @@ export const APP = {
   copyright: '© 2026 AIPOCH',
   update: {
     manifestUrl: `${CDN_BASE_URL}/app/stable/version.json`,
-    downloadPage: 'https://www.aipoch.com/open-science'
+    downloadPage: 'https://aipoch.com/open-science/download'
   }
 } as const
 
@@ -37,3 +38,6 @@ export const APP = {
 // translated homepages use a locale subdirectory. Callers supply the already-resolved app locale.
 export const getDocumentationUrl = (locale: Locale): string =>
   `${APP.links.docs}${locale === DEFAULT_LOCALE ? '' : `${locale}/`}`
+
+export const getInstallationDocumentationUrl = (locale: Locale): string =>
+  `${getDocumentationUrl(locale)}guides/installation/#manual-update`

@@ -5,7 +5,6 @@ import {
   ACP_RESTORED_PERMISSION_REARM_FAILED_EVENT_TITLE,
   ACP_RESTORED_PERMISSION_SETTLED_EVENT_TITLE,
   MAX_ACP_RUNTIME_EVENTS,
-  isDurableAgentUserChoiceRequest,
   type AcpRuntimeEvent,
   type AcpSessionAgentTarget,
   type AcpStateSnapshot,
@@ -16,13 +15,18 @@ import type { AcpContextUsage } from '../../../../shared/acp-usage-contract'
 import type { HistoryReplayDescriptor } from '../../../../shared/history-replay-contract'
 import { useSessionStore } from '../../stores/session-store'
 import {
+  assertDesktopRuntimeWrite,
+  getDesktopRuntimeEpoch
+} from '../../stores/desktop-runtime-recovery-store'
+import {
   loadPersistedSession,
   saveSessionInOrder
 } from '../session-persistence/session-persistence'
 import { isBufferableAssistantTextEvent } from './chat-events'
 import {
   acceptAcpRuntimeSnapshotRevision,
-  resetAcpRuntimeSnapshotRevision
+  getAcpRuntimeSnapshotScope,
+  resetAcpRuntimeSnapshotRevisionForTests
 } from './runtime-snapshot-revision-owner'
 import {
   ensureRuntimeWriter,
@@ -460,12 +464,14 @@ const subscribeWorkspacePermissionLifecycle = (
   return () => permissionLifecycleObservers.delete(observer)
 }
 
-const createLiveWorkspaceRuntimeEventProcessor = (): WorkspaceRuntimeEventProcessor =>
-  createWorkspaceRuntimeEventProcessor(
+const createLiveWorkspaceRuntimeEventProcessor = (): WorkspaceRuntimeEventProcessor => {
+  const scope = getAcpRuntimeSnapshotScope()
+  const isCurrentService = (): boolean => scope === getAcpRuntimeSnapshotScope()
+  return createWorkspaceRuntimeEventProcessor(
     async (event) => {
       const startedAt = performance.now()
       try {
-        if (!(await ensureRuntimeWriter())) return true
+        if (!(await ensureRuntimeWriter()) || !isCurrentService()) return true
         const permissionLifecycleEvent = isWorkspacePermissionLifecycleEvent(event)
           ? event
           : undefined
@@ -480,6 +486,7 @@ const createLiveWorkspaceRuntimeEventProcessor = (): WorkspaceRuntimeEventProces
         const writerOptions = runtimeWriterSaveOptions()
         const applied = await applyWorkspaceRuntimeEvent(event, {
           canProject: () =>
+            isCurrentService() &&
             isRuntimeWriter() &&
             runtimeWriterSaveOptions()?.runtimeWriterToken === writerOptions?.runtimeWriterToken,
           saveSession: (session) =>
@@ -503,11 +510,14 @@ const createLiveWorkspaceRuntimeEventProcessor = (): WorkspaceRuntimeEventProces
       applyEventBatch: async (events) => {
         const startedAt = performance.now()
         try {
-          if (!(await ensureRuntimeWriter())) return true
+          if (!(await ensureRuntimeWriter()) || !isCurrentService()) return true
           const token = runtimeWriterSaveOptions()?.runtimeWriterToken
           return applyWorkspaceRuntimeEventBatch(
             events,
-            () => isRuntimeWriter() && runtimeWriterSaveOptions()?.runtimeWriterToken === token
+            () =>
+              isCurrentService() &&
+              isRuntimeWriter() &&
+              runtimeWriterSaveOptions()?.runtimeWriterToken === token
           )
         } finally {
           measureRendererRuntime(RENDERER_RUNTIME_EVENT_APPLY_TIMING, startedAt)
@@ -516,10 +526,12 @@ const createLiveWorkspaceRuntimeEventProcessor = (): WorkspaceRuntimeEventProces
       presentation: liveWorkspaceRuntimePresentation
     }
   )
+}
 
 let liveWorkspaceRuntimeEventProcessor = createLiveWorkspaceRuntimeEventProcessor()
 let writerBacklog: AcpRuntimeEvent[] = []
 setRuntimeWriterActivation(async () => {
+  const epoch = getDesktopRuntimeEpoch()
   // Start from durable authority before replaying the bounded host event window. A newly elected
   // writer must not publish the old snapshots it retained while it was an observer.
   const loaded = useSessionStore
@@ -530,12 +542,13 @@ setRuntimeWriterActivation(async () => {
       projectId: session.projectId,
       sessionId: session.id
     })
+    assertDesktopRuntimeWrite(epoch)
     if (durable) useSessionStore.getState().upsertPersistedSession(durable)
   }
   const snapshot = await window.api.acp.getState()
+  assertDesktopRuntimeWrite(epoch)
   writerBacklog = [...snapshot.events]
   liveWorkspaceRuntimeEventProcessor = createLiveWorkspaceRuntimeEventProcessor()
-  resetAcpRuntimeSnapshotRevision()
 })
 const drainWriterBacklog = async (): Promise<void> => {
   const backlog = writerBacklog
@@ -572,21 +585,16 @@ const syncWorkspaceAgentFirstOutputState = (sessionIds: string[]): void => {
 
 // Keeps store permission state aligned with the runtime's current pending request set.
 const syncWorkspacePermissionState = (requests: AcpPermissionRequest[]): void => {
-  if (!isRuntimeWriter()) return
+  const liveProjection = isRuntimeWriter() ? 'writer' : 'observer'
   const nextSessionIds = new Set(requests.map((request) => request.sessionId))
   const store = useSessionStore.getState()
-  for (const session of store.sessions) {
-    if (session.runtimeContext?.permission?.state === 'pending') {
-      nextSessionIds.add(session.id)
-    }
-  }
 
   for (const sessionId of nextSessionIds) {
-    store.setPermissionPending(sessionId)
+    store.setPermissionPending(sessionId, { liveProjection })
   }
 
   for (const sessionId of pendingPermissionSessionIds) {
-    if (!nextSessionIds.has(sessionId)) store.clearPermissionPending(sessionId)
+    if (!nextSessionIds.has(sessionId)) store.clearPermissionPending(sessionId, { liveProjection })
   }
 
   pendingPermissionSessionIds.clear()
@@ -598,13 +606,19 @@ const syncWorkspacePermissionState = (requests: AcpPermissionRequest[]): void =>
 // detached; requiring the waiting status prevents a stale pending activity from re-arming after
 // its answer has synchronously returned the Session to running.
 const syncWorkspaceElicitationState = (requests: PendingElicitationRequest[]): void => {
-  if (!isRuntimeWriter()) return
+  const liveProjection = isRuntimeWriter() ? 'writer' : 'observer'
   const store = useSessionStore.getState()
-  const nextSessionIds = new Set(
-    requests.filter(isDurableAgentUserChoiceRequest).map((request) => request.sessionId)
-  )
+  const nextSessionIds = new Set(requests.map((request) => request.sessionId))
+  for (const sessionId of nextSessionIds) {
+    store.setElicitationPending(sessionId, true, { liveProjection })
+  }
+  for (const sessionId of pendingElicitationSessionIds) {
+    if (!nextSessionIds.has(sessionId))
+      store.setElicitationPending(sessionId, false, { liveProjection })
+  }
   for (const session of store.sessions) {
     if (
+      liveProjection === 'writer' &&
       (session.status === 'waiting-for-user' || session.status === 'waiting-permission') &&
       session.interactionState?.elicitation !== false &&
       session.activities?.some(
@@ -613,16 +627,8 @@ const syncWorkspaceElicitationState = (requests: PendingElicitationRequest[]): v
           activity.elicitation.durable?.kind === 'agent-user-choice'
       )
     ) {
-      nextSessionIds.add(session.id)
+      store.setElicitationPending(session.id, true)
     }
-  }
-
-  for (const sessionId of nextSessionIds) {
-    store.setElicitationPending(sessionId, true)
-  }
-
-  for (const sessionId of pendingElicitationSessionIds) {
-    if (!nextSessionIds.has(sessionId)) store.setElicitationPending(sessionId, false)
   }
 
   pendingElicitationSessionIds.clear()
@@ -645,7 +651,9 @@ const resetWorkspaceRuntimeEventOwnerForTests = (): void => {
   pendingElicitationSessionIds.clear()
   firstOutputWaitingSessionIds.clear()
   agentPromptOwnershipSessionIds = new Set()
-  resetAcpRuntimeSnapshotRevision()
+  resetAcpRuntimeSnapshotRevisionForTests()
+  liveWorkspaceRuntimeEventProcessor = createLiveWorkspaceRuntimeEventProcessor()
+  writerBacklog = []
 }
 
 // Accepts Main snapshots once in construction order. This gate is shared by React subscription and
@@ -666,8 +674,11 @@ const ingestWorkspaceRuntimeSnapshot = async (
   snapshot: WorkspaceRuntimeEventSnapshot,
   syncFirstOutput: boolean
 ): Promise<boolean> => {
-  if (!(await ensureRuntimeWriter())) return false
+  const epoch = getDesktopRuntimeEpoch()
+  if (!acceptWorkspaceRuntimeSnapshot(snapshot) || !(await ensureRuntimeWriter())) return false
+  if (epoch !== getDesktopRuntimeEpoch()) return false
   await drainWriterBacklog()
+  if (epoch !== getDesktopRuntimeEpoch()) return false
   if (!acceptWorkspaceRuntimeSnapshot(snapshot)) return false
   if (syncFirstOutput) {
     syncWorkspaceAgentFirstOutputState(snapshot.agentPromptInFlightSessionIds ?? [])
@@ -688,10 +699,13 @@ const processIncrementalWorkspaceRuntimeEvents = (
   events: readonly AcpRuntimeEvent[]
 ): Promise<void> => {
   const startedAt = performance.now()
+  const scope = getAcpRuntimeSnapshotScope()
   return ensureRuntimeWriter().then(async (owner) => {
-    if (!owner) return
+    if (!owner || scope !== getAcpRuntimeSnapshotScope()) return
     try {
       await drainWriterBacklog()
+      // The backlog may span service replacement. Never hand the old batch to its new processor.
+      if (scope !== getAcpRuntimeSnapshotScope()) return
       await liveWorkspaceRuntimeEventProcessor.processIncremental(events)
     } finally {
       measureRendererRuntime(RENDERER_RUNTIME_EVENT_BATCH_TIMING, startedAt)
@@ -786,10 +800,9 @@ const useWorkspaceRuntimeEventIngest = <Runtime extends WorkspaceRuntimeEventIng
   }, [processLifecycleEvents, subscribeRuntimeEvents])
 
   useEffect(() => {
-    if (!subscribeRuntimeEvents || !acceptWorkspaceRuntimeSnapshot({ revision: snapshotRevision }))
-      return
+    if (!subscribeRuntimeEvents || !acceptWorkspaceRuntimeSnapshot(runtime.state)) return
     syncWorkspaceAgentFirstOutputState(agentPromptInFlightSessionIds)
-  }, [agentPromptInFlightSessionIds, snapshotRevision, subscribeRuntimeEvents])
+  }, [agentPromptInFlightSessionIds, snapshotRevision, subscribeRuntimeEvents, runtime.state])
 
   return Boolean(subscribeRuntimeEvents)
 }
@@ -826,7 +839,9 @@ const drainWorkspaceRuntimeEventsForPersistence = async (
   sessionId?: string,
   reconcileRuntimeSnapshot?: (snapshot: AcpStateSnapshot) => void
 ): Promise<void> => {
+  const epoch = getDesktopRuntimeEpoch()
   const snapshot = await window.api.acp.getState()
+  assertDesktopRuntimeWrite(epoch)
   const accepted = await ingestWorkspaceRuntimeSnapshot(snapshot, false)
   await liveWorkspaceRuntimeEventProcessor.drain(sessionId)
   if (accepted) syncWorkspaceContextUsage(snapshot.sessionIds, snapshot.contextUsageBySession)

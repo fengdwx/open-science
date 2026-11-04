@@ -156,7 +156,7 @@ test('reports accessibility violations in core dialog and workspace surfaces', a
   await expect(page.getByRole('heading', { name: 'New conversation' })).toBeVisible()
   await scanAccessibility(page, 'Workspace')
 
-  const settings = await openSettingsPage(page, 'General')
+  const settings = await openSettingsPage(page, 'Appearance')
   await expect(settings.getByRole('heading', { name: 'Appearance' })).toBeVisible()
   await scanAccessibility(page, 'Settings')
 })
@@ -523,6 +523,7 @@ for (const theme of ['Light', 'Dark'] as const) {
     await submitPromptViaUi(page, 'Request fixture permission.')
     await page.getByRole('button', { name: 'Deny', exact: true }).click()
     await expect(page.getByText('Fixture permission denied.', { exact: true })).toBeVisible()
+    await page.getByTestId('tool-group-header').click()
     await checkContrast(
       page.getByText('Declined by you: tool', { exact: true }),
       'Declined tool 767px'

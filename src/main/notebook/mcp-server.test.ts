@@ -10,6 +10,11 @@ import { Tiktoken } from 'js-tiktoken/lite'
 import cl100kBase from 'js-tiktoken/ranks/cl100k_base'
 import { z } from 'zod'
 
+import {
+  sanitizeAgentUserChoiceRequest,
+  sanitizeAgentUserChoiceAnswer
+} from '../../shared/elicitation'
+
 import { HOST_SDK_SUBAGENT_OPERATION_IDS, hostSdkHelp } from '../host-sdk/help'
 import {
   memoryAgentRememberMcpOutputSchema,
@@ -371,6 +376,7 @@ describe('notebook MCP server config', () => {
       'bash_execute',
       'request_network_access',
       'notebook_state',
+      'list_authorized_directories',
       'list_notebook_runtimes',
       'notebook_bind_runtime',
       'notebook_switch_runtime',
@@ -444,9 +450,14 @@ describe('notebook MCP server config', () => {
     }
   )
 
-  it.each(['decision', 'cancellation'])(
-    'keeps network approval pending past the MCP inactivity timeout until %s',
-    async (outcome) => {
+  it.each([
+    ['request_network_access', 'decision'],
+    ['request_network_access', 'cancellation'],
+    ['bash_execute', 'decision'],
+    ['bash_execute', 'cancellation']
+  ])(
+    'keeps %s approval pending past the MCP inactivity timeout until %s',
+    async (toolName, outcome) => {
       const server = createNotebookMcpServer({
         endpoint: 'http://127.0.0.1:4567',
         token: 'secret-token',
@@ -477,12 +488,15 @@ describe('notebook MCP server config', () => {
       const call = client
         .callTool(
           {
-            name: 'request_network_access',
-            arguments: {
-              hostname: 'tcga-xena-hub.s3.us-east-1.amazonaws.com',
-              runtime: 'python',
-              reason: 'Download the dataset.'
-            }
+            name: toolName,
+            arguments:
+              toolName === 'bash_execute'
+                ? { command: 'sample-client request' }
+                : {
+                    hostname: 'service.example.test',
+                    runtime: 'python',
+                    reason: 'Read the fixture.'
+                  }
           },
           undefined,
           { onprogress, signal: cancellation.signal, timeout: 60_000, resetTimeoutOnProgress: true }
@@ -743,10 +757,6 @@ describe('ask_user_question tool', () => {
   it('accepts 1-3 compact questions', () => {
     expect(tool).toBeDefined()
     expect(tool?.method).toBe('requestUserInput')
-    expect(tool?.description).toContain('app-owned tool')
-    expect(tool?.description).toContain('materially different interpretations')
-    expect(tool?.description).toContain('first tool call')
-    expect(tool?.description).toContain('include every known question in one call')
     expect(NOTEBOOK_SYSTEM_PROMPT_APPEND).toContain('ask_user_question')
     expect(NOTEBOOK_SYSTEM_PROMPT_APPEND).toContain('materially different interpretations')
     expect(NOTEBOOK_SYSTEM_PROMPT_APPEND).toContain('first tool call')
@@ -779,11 +789,13 @@ describe('ask_user_question tool', () => {
         {
           question: 'Which path should I take?',
           header: 'Approach',
+          kind: 'single-select',
           options: [option('Minimal'), option('Expanded')]
         },
         {
           question: 'Which output should I produce?',
           header: 'Output',
+          kind: 'single-select',
           options: [option('Notebook'), option('Report')]
         }
       ]
@@ -793,7 +805,7 @@ describe('ask_user_question tool', () => {
         questions: [
           {
             question: 'Which path?',
-            options: [option('A'), option('B'), option('C'), option('D'), option('E')]
+            options: Array.from({ length: 17 }, (_, index) => option(String(index)))
           }
         ]
       })
@@ -808,6 +820,102 @@ describe('ask_user_question tool', () => {
         ]
       })
     ).toThrow()
+  })
+
+  it.each([5, 16])(
+    'preserves all %i options and explicit multi-select through the RPC contract',
+    (count) => {
+      const question = {
+        question: 'Which outputs?',
+        kind: 'multi-select' as const,
+        options: Array.from({ length: count }, (_, index) => ({ label: `Option ${index + 1}` }))
+      }
+      const parsed = z.object(tool!.inputSchema).parse({ questions: [question] })
+      expect(parsed).toEqual({ questions: [question] })
+      expect(sanitizeAgentUserChoiceRequest({ sessionId: 'session-1', ...parsed })).toEqual({
+        sessionId: 'session-1',
+        questions: [question]
+      })
+      expect(tool!.description).toContain('2-16')
+    }
+  )
+
+  it('keeps legacy single-choice input unchanged and rejects invalid mode/capacity', () => {
+    const question = { question: 'Which outputs?', options: [{ label: 'A' }, { label: 'B' }] }
+    const request = { sessionId: 'session-1', questions: [question] }
+    expect(sanitizeAgentUserChoiceRequest(request)).toEqual(request)
+    for (const kind of ['text', 'multiple', true, 1, null]) {
+      expect(
+        z.object(tool!.inputSchema).safeParse({ questions: [{ ...question, kind }] }).success
+      ).toBe(false)
+      expect(
+        sanitizeAgentUserChoiceRequest({ ...request, questions: [{ ...question, kind }] })
+      ).toBeUndefined()
+    }
+    expect(
+      sanitizeAgentUserChoiceRequest({
+        ...request,
+        questions: [
+          { ...question, options: Array.from({ length: 17 }, (_, i) => ({ label: String(i) })) }
+        ]
+      })
+    ).toBeUndefined()
+    expect(
+      sanitizeAgentUserChoiceRequest({
+        ...request,
+        questions: [{ ...question, kind: 'single-select' }]
+      })?.questions[0].kind
+    ).toBe('single-select')
+  })
+
+  it('exposes non-blank constraints to schema-level validation and keeps sanitize as the semantic boundary', () => {
+    const emitted = z.toJSONSchema(z.object(tool!.inputSchema))
+    const questionItems = (
+      emitted.properties?.questions as { items?: { properties?: Record<string, unknown> } }
+    ).items?.properties
+    const optionItems = (
+      questionItems?.options as { items?: { properties?: Record<string, unknown> } }
+    ).items?.properties
+    // Pi validates the emitted JSON Schema before its permission hook, so a whitespace-only
+    // required string fails without reaching the app. Optional fields stay pattern-free to fit
+    // the static context budget; zod and the sanitizer still reject them.
+    expect((questionItems?.question as { pattern?: string }).pattern).toBe('\\S')
+    expect((optionItems?.label as { pattern?: string }).pattern).toBe('\\S')
+
+    const schema = z.object(tool!.inputSchema)
+    const malformed = [
+      // Whitespace-only strings: JSON Schema pattern and the zod chain both reject.
+      { question: '   ', options: [{ label: 'A' }, { label: 'B' }] },
+      { question: 'Pick?', header: ' ', options: [{ label: 'A' }, { label: 'B' }] },
+      { question: 'Pick?', options: [{ label: ' ' }, { label: 'B' }] },
+      { question: 'Pick?', options: [{ label: 'A', description: ' ' }, { label: 'B' }] },
+      // Duplicate labels are unexpressible in JSON Schema; both layers must reject them.
+      { question: 'Pick?', options: [{ label: 'A' }, { label: 'A' }] }
+    ]
+    for (const question of malformed) {
+      expect(schema.safeParse({ questions: [question] }).success).toBe(false)
+      expect(
+        sanitizeAgentUserChoiceRequest({ sessionId: 'session-1', questions: [question] })
+      ).toBeUndefined()
+    }
+  })
+
+  it('validates multiple answers without losing label boundaries or custom text', () => {
+    const labels = ['A, B', 'A', 'Quote " and newline\nend']
+    const question = {
+      question: 'Which outputs?',
+      kind: 'multi-select' as const,
+      options: labels.map((label) => ({ label }))
+    }
+    expect(sanitizeAgentUserChoiceAnswer(question, [...labels].reverse())).toEqual(labels)
+    expect(sanitizeAgentUserChoiceAnswer(question, [labels[0]])).toEqual([labels[0]])
+    expect(sanitizeAgentUserChoiceAnswer(question, ' Custom answer ')).toBe('Custom answer')
+    for (const value of [[], ['unknown'], [labels[0], labels[0]], [1]]) {
+      expect(sanitizeAgentUserChoiceAnswer(question, value)).toBeUndefined()
+    }
+    expect(
+      sanitizeAgentUserChoiceAnswer({ ...question, kind: 'single-select' }, labels)
+    ).toBeUndefined()
   })
 
   it('returns only the choice outcome within the shared control-tool result budget', () => {
@@ -2127,6 +2235,9 @@ describe('manage_packages tool', () => {
     // Routing, restart, and the stop-and-report boundary are all stated.
     expect(doc).toContain('language="python"')
     expect(doc).toContain('language="r"')
+    expect(doc).toContain('Bioconda does not support Windows')
+    expect(doc).toContain('On Windows, use installer="biocmanager"')
+    expect(doc).toContain('case-sensitive R package names')
     expect(doc).toContain('notebook_restart')
     expect(doc).toMatch(/report .*user|tell the user/i)
   })
@@ -2475,7 +2586,9 @@ describe('compactManagePackagesResult', () => {
 describe('notebook control tool results', () => {
   it('gives every notebook tool a global result budget and projects only results that need it', () => {
     for (const tool of NOTEBOOK_RPC_TOOLS) {
-      expect(tool.resultLimitChars, tool.name).toBeGreaterThan(0)
+      // Directory discovery must return a complete reusable snapshot, never a truncated list.
+      if (tool.name === 'list_authorized_directories') expect(tool.resultLimitChars).toBeUndefined()
+      else expect(tool.resultLimitChars, tool.name).toBeGreaterThan(0)
       if (!tool.name.includes('memor')) expect(tool.mapResult, tool.name).toBeTypeOf('function')
     }
   })

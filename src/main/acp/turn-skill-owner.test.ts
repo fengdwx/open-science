@@ -6,6 +6,8 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { codeBuddyFramework, codexFramework, opencodeFramework } from '../agent-framework'
 import { ClaudeCodeSkillMaterializer } from '../skills/materializer'
 import { AcpTurnSkillOwner, followUpPromptText } from './turn-skill-owner'
+import { runShellCommand } from '../notebook/shell-process'
+import * as skillRuntime from '../skills/runtime-mcp-server'
 
 const reloadTestScope = {
   kind: 'specialist' as const,
@@ -43,7 +45,7 @@ describe('AcpTurnSkillOwner', () => {
       const handle = await owner.authorize({ specialistId: 'specialist' })
       expect(needForceLoad).toHaveBeenCalledWith(['enabled', 'disabled'])
       expect(handle.reloadDecision).toEqual({ kind: 'reload' })
-      expect(owner.backendPreparation()).toEqual({ forcedSkillIds: ['disabled'] })
+      expect(owner.backendPreparation()).toMatchObject({ forcedSkillIds: ['disabled'] })
       const prepared = await handle.prepareProvider({
         frameworkId: 'codex',
         selectionText: 'continue',
@@ -57,6 +59,106 @@ describe('AcpTurnSkillOwner', () => {
       expect(requestSkillsReload).toHaveBeenCalledOnce()
     }
   )
+
+  it.each(['completed', 'failed', 'cancelled', 'reload-restored'] as const)(
+    'carries a Connector-only Specialist scope across reconnect and clears it on %s',
+    async (outcome) => {
+      const reload = vi.fn()
+      const owner = new AcpTurnSkillOwner({
+        resolveSpecialistSkills: async () => ({
+          kind: 'specialist',
+          skillIds: [],
+          frameworkNames: ['mcp-orphadata'],
+          missingSkillIds: []
+        }),
+        skills: { needForceLoad: async () => ['mcp-orphadata'], namesForIds: async () => [] },
+        requestSkillsReload: reload
+      })
+      const handle = await owner.authorize({
+        specialistId: 'orphan-diseases',
+        frameworkId: 'opencode',
+        nativeSkillScope: ['mcp-genes']
+      })
+      expect(owner.backendPreparation()).toEqual({
+        forcedSkillIds: [],
+        skillWhitelist: ['mcp-orphadata']
+      })
+      const provider = await handle.prepareProvider({
+        frameworkId: 'codex',
+        selectionText: 'continue',
+        promptText: 'continue'
+      })
+      expect(provider.codexSkillInputs).toEqual([])
+      handle.close(outcome)
+      expect(owner.backendPreparation()).toEqual({ forcedSkillIds: [] })
+      expect(reload).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each(['claude-code', 'codex', 'codebuddy', 'opencode'] as const)(
+    'reconciles a Connector-only scope without unnecessary shared-process reloads on %s',
+    async (frameworkId) => {
+      const reload = vi.fn()
+      const owner = new AcpTurnSkillOwner({
+        resolveSpecialistSkills: async () => ({
+          kind: 'specialist',
+          skillIds: [],
+          frameworkNames: ['mcp-orphadata'],
+          missingSkillIds: []
+        }),
+        skills: { needForceLoad: async () => ['mcp-orphadata'], namesForIds: async () => [] },
+        requestSkillsReload: reload
+      })
+      const handle = await owner.authorize({
+        frameworkId,
+        nativeSkillScope: frameworkId === 'opencode' ? ['mcp-genes'] : undefined,
+        specialistId: 'orphan-diseases'
+      })
+      expect(handle.reloadDecision.kind).toBe(frameworkId === 'opencode' ? 'reload' : 'continue')
+      handle.close('completed')
+      expect(reload).not.toHaveBeenCalled()
+      await expect(
+        owner.authorize({ frameworkId, selectedSkillIds: ['mcp-orphadata'] })
+      ).rejects.toThrow('not available to Main Agent')
+    }
+  )
+
+  it('reuses an identical OpenCode scope across turns and reconciles Main exactly once', async () => {
+    const reload = vi.fn()
+    const owner = new AcpTurnSkillOwner({
+      resolveSpecialistSkills: async () => ({
+        kind: 'specialist',
+        skillIds: [],
+        frameworkNames: ['mcp-orphadata'],
+        missingSkillIds: []
+      }),
+      requestSkillsReload: reload
+    })
+    const context = { frameworkId: 'opencode' as const, mainSkillScope: ['mcp-genes'] }
+    const first = await owner.authorize({
+      ...context,
+      specialistId: 'specialist',
+      nativeSkillScope: ['mcp-genes']
+    })
+    expect(first.reloadDecision.kind).toBe('reload')
+    expect(owner.backendPreparation().skillWhitelist).toEqual(['mcp-orphadata'])
+    first.close('completed')
+    const next = await owner.authorize({
+      ...context,
+      specialistId: 'specialist',
+      nativeSkillScope: ['mcp-orphadata', 'mcp-orphadata']
+    })
+    expect(next.reloadDecision.kind).toBe('continue')
+    next.close('completed')
+    const main = await owner.authorize({ ...context, nativeSkillScope: ['mcp-orphadata'] })
+    expect(main.reloadDecision.kind).toBe('reload')
+    expect(owner.backendPreparation()).toEqual({ forcedSkillIds: [] })
+    main.close('completed')
+    const mainAgain = await owner.authorize({ ...context, nativeSkillScope: ['mcp-genes'] })
+    expect(mainAgain.reloadDecision.kind).toBe('continue')
+    mainAgain.close('completed')
+    expect(reload).not.toHaveBeenCalled()
+  })
 
   it('discards unused forced authorization without scheduling a provider reload', async () => {
     const requestSkillsReload = vi.fn()
@@ -162,7 +264,7 @@ describe('AcpTurnSkillOwner', () => {
     await expect(
       owner.authorize({ specialistId: 'specialist-1', selectedSkillIds: ['stale-skill'] })
     ).rejects.toThrow('Skill "stale-skill" is not available to the active specialist.')
-    expect(resolveSpecialistSkills).toHaveBeenCalledWith('specialist-1')
+    expect(resolveSpecialistSkills).toHaveBeenCalledWith('specialist-1', undefined)
 
     await expect(
       owner.authorize({
@@ -240,15 +342,15 @@ describe('AcpTurnSkillOwner', () => {
     await vi.waitFor(() => expect(completions.has('newer')).toBe(true))
     completions.get('newer')?.(['newer'])
     const newer = await newerAuthorization
-    expect(owner.backendPreparation()).toEqual({ forcedSkillIds: ['newer'] })
+    expect(owner.backendPreparation()).toMatchObject({ forcedSkillIds: ['newer'] })
 
     completions.get('older')?.(['older'])
     const older = await olderAuthorization
     expect(older.reloadDecision).toEqual({ kind: 'continue' })
-    expect(owner.backendPreparation()).toEqual({ forcedSkillIds: ['newer'] })
+    expect(owner.backendPreparation()).toMatchObject({ forcedSkillIds: ['newer'] })
 
     older.close('failed')
-    expect(owner.backendPreparation()).toEqual({ forcedSkillIds: ['newer'] })
+    expect(owner.backendPreparation()).toMatchObject({ forcedSkillIds: ['newer'] })
     newer.close('completed')
     expect(requestSkillsReload).toHaveBeenCalledOnce()
   })
@@ -283,7 +385,7 @@ describe('AcpTurnSkillOwner', () => {
     completions.get('first-session')?.(['first-session'])
     const first = await firstSession
     expect(first.reloadDecision).toEqual({ kind: 'reload' })
-    expect(owner.backendPreparation()).toEqual({ forcedSkillIds: ['first-session'] })
+    expect(owner.backendPreparation()).toMatchObject({ forcedSkillIds: ['first-session'] })
   })
 
   it.each(['cancelled', 'reload-restored'] as const)(
@@ -307,8 +409,8 @@ describe('AcpTurnSkillOwner', () => {
         specialistId: 'specialist-1',
         selectedSkillIds: ['disabled']
       })
-      expect(owner.backendPreparation()).toEqual({ forcedSkillIds: ['disabled'] })
-      expect(owner.backendPreparation()).toEqual({ forcedSkillIds: ['disabled'] })
+      expect(owner.backendPreparation()).toMatchObject({ forcedSkillIds: ['disabled'] })
+      expect(owner.backendPreparation()).toMatchObject({ forcedSkillIds: ['disabled'] })
 
       handle.close(outcome)
       handle.close(outcome)
@@ -332,8 +434,8 @@ describe('AcpTurnSkillOwner', () => {
 
     const firstConnect = owner.backendPreparation()
     const reconnect = owner.backendPreparation()
-    expect(firstConnect).toEqual({ forcedSkillIds: ['disabled'] })
-    expect(reconnect).toEqual({ forcedSkillIds: ['disabled'] })
+    expect(firstConnect).toMatchObject({ forcedSkillIds: ['disabled'] })
+    expect(reconnect).toMatchObject({ forcedSkillIds: ['disabled'] })
 
     handle.close('completed')
     expect(owner.backendPreparation()).toEqual({ forcedSkillIds: [] })
@@ -701,7 +803,7 @@ describe('AcpTurnSkillOwner', () => {
       }
     })
 
-    expect(catalogForCodeBuddyRoot).toHaveBeenCalledWith(root)
+    expect(catalogForCodeBuddyRoot).toHaveBeenCalledWith(root, undefined)
     expect(selectSkills).toHaveBeenCalledWith(requestText, [biomart, pubmed], undefined, undefined)
     expect(prepared.skillRuntimeAllowlist).toEqual([])
     expect(prepared.codexSkillInputs).toEqual([])
@@ -710,13 +812,12 @@ describe('AcpTurnSkillOwner', () => {
     expect(prepared.skillScopeGuidance).toContain('already loaded by Open-Science')
     expect(prepared.skillScopeGuidance).toContain('PUBMED_ROUTE_SENTINEL')
     expect(prepared.skillScopeGuidance).toContain(
-      'PACKAGE_DIR=${CODEBUDDY_CONFIG_DIR}/skill-runtime/.claude/skills/mcp-pubmed'
+      `PACKAGE_DIR=${join(root, '.claude', 'skills', 'mcp-pubmed')}`
     )
     expect(prepared.skillScopeGuidance).toContain(
       'Resolve every relative reference, script, or asset path'
     )
     expect(prepared.skillScopeGuidance).not.toContain('${CLAUDE_SKILL_DIR}')
-    expect(prepared.skillScopeGuidance).not.toContain(root)
     expect(prepared.skillScopeGuidance).not.toContain(
       'Before any Notebook or Connector call, call `mcp__skills__load_skill`'
     )
@@ -781,6 +882,109 @@ describe('AcpTurnSkillOwner', () => {
     expect(prepared.skillActivityInputs).toEqual([{ name: 'paper-review', path: projectedPath }])
     expect(prepared.skillScopeGuidance).toContain('PROJECTED_SKILL_SENTINEL')
   })
+
+  it('can read a routed CodeBuddy Skill resource through the Notebook shell', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'codebuddy-resource-'))
+    onTestFinished(() => rm(root, { recursive: true, force: true }))
+    const skillDir = join(root, '.claude', 'skills', 'paper-review')
+    await mkdir(join(skillDir, 'references'), { recursive: true })
+    await writeFile(join(skillDir, 'references', 'probe.txt'), 'SKILL_RESOURCE_SENTINEL')
+    await writeFile(
+      join(skillDir, 'SKILL.md'),
+      '---\nname: paper-review\ndescription: Review papers.\n---\nRead references/probe.txt.'
+    )
+    const owner = new AcpTurnSkillOwner({
+      skills: { needForceLoad: async () => [], namesForIds: async () => ['paper-review'] },
+      requestSkillsReload: vi.fn()
+    })
+    const handle = await owner.authorize({ selectedSkillIds: ['paper-review'] })
+    const prepared = await handle.prepareProvider({
+      frameworkId: 'codebuddy',
+      selectionText: 'review papers',
+      promptText: 'review papers',
+      codebuddy: { root, selectorAvailable: false, selectSkills: async () => [] }
+    })
+    const resourceRoot = prepared.skillScopeGuidance!.match(/resource-root="([^"]+)"/)![1]
+    const resource = `${resourceRoot}/references/probe.txt`
+    const result = await runShellCommand({
+      command:
+        process.platform === 'win32' ? `Get-Content -Raw "${resource}"` : `cat "${resource}"`,
+      cwd: root,
+      handoffDir: root,
+      runtimeRoot: join(root, 'runtime'),
+      sessionId: 'codebuddy-resource',
+      projectId: 'codebuddy-resource',
+      timeoutMs: 5_000
+    })
+    expect(result.stderr).toBe('')
+    expect(result.stdout.trim()).toBe('SKILL_RESOURCE_SENTINEL')
+    expect(result.exitCode).toBe(0)
+  })
+
+  it.skipIf(process.platform === 'win32')(
+    'reads CodeBuddy Skill resources in the WSL guest without replacing the native host root',
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'codebuddy-wsl-resource-'))
+      onTestFinished(() => rm(root, { recursive: true, force: true }))
+      const skillDir = join(root, '.claude', 'skills', 'paper-review')
+      await mkdir(skillDir, { recursive: true })
+      await writeFile(join(skillDir, 'probe.txt'), 'WSL_RESOURCE_SENTINEL')
+      // Only host UNC document access is simulated; the mapped guest file is read by a real shell.
+      const hostRoot = `\\\\wsl.localhost\\FixtureDistro${root.replaceAll('/', '\\')}`
+      const loadDocument = vi
+        .spyOn(skillRuntime, 'loadSkillDocumentContent')
+        .mockResolvedValue('Read probe.txt from the Skill directory.')
+      onTestFinished(() => loadDocument.mockRestore())
+      const owner = new AcpTurnSkillOwner({
+        skills: { needForceLoad: async () => [], namesForIds: async () => ['paper-review'] },
+        requestSkillsReload: vi.fn()
+      })
+      const handle = await owner.authorize({ selectedSkillIds: ['paper-review'] })
+      const codebuddy = {
+        root: hostRoot,
+        selectorAvailable: false,
+        selectSkills: async () => [],
+        shellRuntime: {
+          kind: 'wsl2-bash' as const,
+          profileId: 'fixture',
+          distro: 'FixtureDistro',
+          user: 'researcher'
+        }
+      }
+      const prepared = await handle.prepareProvider({
+        frameworkId: 'codebuddy',
+        selectionText: 'review papers',
+        promptText: 'review papers',
+        codebuddy
+      })
+      const guidance = prepared.skillScopeGuidance!
+      const hostResourceRoot = guidance.match(/ resource-root="([^"]+)"/)![1]
+      const shellResourceRoot =
+        guidance.match(/ shell-resource-root="([^"]+)"/)?.[1] ?? hostResourceRoot
+      const result = await runShellCommand({
+        command: `cat "${shellResourceRoot}/probe.txt"`,
+        cwd: root,
+        handoffDir: root,
+        runtimeRoot: join(root, 'runtime'),
+        sessionId: 'wsl-resource',
+        projectId: 'wsl-resource',
+        timeoutMs: 5_000
+      })
+      expect(result.stderr).toBe('')
+      expect(result.stdout).toBe('WSL_RESOURCE_SENTINEL')
+      expect(result.exitCode).toBe(0)
+      expect(hostResourceRoot).toBe(join(hostRoot, '.claude', 'skills', 'paper-review'))
+      expect(prepared.skillActivityInputs?.[0].path).toBe(join(hostResourceRoot, 'SKILL.md'))
+      const followUp = await owner.presentFollowUp({
+        frameworkId: 'codebuddy',
+        text: 'also read probe.txt',
+        selectedSkillIds: ['paper-review'],
+        codebuddy
+      })
+      expect(followUp.skillScopeGuidance).toContain(`shell-resource-root="${shellResourceRoot}"`)
+      expect(followUp.skillActivityInputs).toEqual(prepared.skillActivityInputs)
+    }
+  )
 
   it('stops CodeBuddy before dispatch when its projected Skill document cannot be loaded', async () => {
     const pubmed = {

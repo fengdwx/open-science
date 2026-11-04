@@ -52,7 +52,11 @@ it('upgrades historical permissions without inferring descriptions or changing a
         '0048_pdf_annotation_sharing',
         '0049_pascalcase_table_names',
         '0050_literature_translation',
-        '0051_session_history'
+        '0051_literature_reading_status',
+        '0052_literature_personal_note_search',
+        '0053_literature_doi_identity',
+        '0054_slurm_job_reliability',
+        '0055_session_history'
       ]
     })
     const after = await client.$queryRawUnsafe<Array<Record<string, unknown>>>(

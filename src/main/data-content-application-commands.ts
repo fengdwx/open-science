@@ -3,6 +3,12 @@ import {
   SessionHistoryCursorStaleError,
   loadSessionHistoryPageRequestSchema
 } from '../shared/session-history'
+import type { UseCaseCatalog } from './session-package/use-case-catalog'
+import {
+  useCaseCatalogContract,
+  useCaseIntroductionContract,
+  type UseCase
+} from '../shared/use-cases'
 import type { OfficePreviewCommands } from './office-preview/application-commands'
 import type { FileSaveCommands } from './file-save'
 import type { ArtifactReproducibilityCommands } from './artifacts/artifact-reproducibility-commands'
@@ -105,6 +111,7 @@ type PreviewApplicationCommandOwner = Readonly<{
 }>
 
 type SessionApplicationCommandOwner = Omit<SessionPersistenceHandlers, 'deleteSession'> & {
+  deleteRecoveryFile(request: SessionPersistence.DeleteSessionRecoveryFileRequest): Promise<void>
   bindTaskSession(
     request: SessionPersistence.BindTaskSessionRequest
   ): Promise<SessionPersistence.PersistedChatSession>
@@ -170,11 +177,13 @@ type ElectronDataContentApplicationCommandAdapter = InvocationOwner<{
     request: SessionPackage.SessionPackageRequest
   ) => Promise<SessionPackage.SessionPackageRequest | null>
   exportSessionPackage: (
-    request: SessionPackage.SessionPackageRequest
+    request: SessionPackage.SessionPackageRequest,
+    destinationPath?: string
   ) => Promise<SessionPackage.SessionPackageExportResult>
   importSessionPackage: (
     request?: SessionPackage.SessionPackageImportRequest,
-    sourcePath?: string
+    sourcePath?: string | import('../shared/use-cases').UseCaseSource,
+    options?: { readonly nonInteractive: true }
   ) => Promise<SessionPackage.SessionPackageImportResult>
   sessionPackageOperation: (
     request: SessionPackage.PackageOperationRequest
@@ -218,6 +227,7 @@ type UploadApplicationCommandOwner = InvocationOwner<{
 type DataRootWrite = <Result>(operation: () => Promise<Result>) => Promise<Result>
 
 type DataContentApplicationCommandDependencies = Readonly<{
+  useCaseCatalog: UseCaseCatalog
   officePreviewCommands: OfficePreviewCommands
   fileSaveCommands: FileSaveCommands
   reproducibility: ArtifactReproducibilityCommands
@@ -249,6 +259,16 @@ const electronCommand = invocationCommandFor<ElectronDataContentApplicationComma
 const uploadCommand = invocationCommandFor<UploadApplicationCommandOwner>()
 
 const dataContentApplicationCommands = Object.freeze({
+  useCaseIntroduction: defineApplicationCommand<
+    'sessions:use-case-introduction',
+    readonly [string],
+    string | null
+  >('sessions:use-case-introduction', useCaseIntroductionContract),
+  useCaseCatalog: defineApplicationCommand<
+    'sessions:use-case-catalog',
+    readonly ['cached' | 'refreshed' | 'reload'],
+    UseCase[]
+  >('sessions:use-case-catalog', useCaseCatalogContract),
   officePreviewOpen: invocationCommandFor<OfficePreviewCommands>()('office-preview:open', 'open'),
   officePreviewAttachFrame: invocationCommandFor<OfficePreviewCommands>()(
     'office-preview:attach-frame',
@@ -264,6 +284,14 @@ const dataContentApplicationCommands = Object.freeze({
   ),
 
   sessionOpenRecoveryFolder: electronCommand('sessions:open-recovery-folder', 'openRecoveryFolder'),
+  artifactSaveProgress: invocationCommandFor<FileSaveCommands>()(
+    'file:artifact-save-progress',
+    'file:artifact-save-progress'
+  ),
+  cancelArtifactSave: invocationCommandFor<FileSaveCommands>()(
+    'file:cancel-artifact-save',
+    'file:cancel-artifact-save'
+  ),
   fileSaveBlob: invocationCommandFor<FileSaveCommands>()('file:save-blob', 'file:save-blob'),
   fileSaveManaged: invocationCommandFor<FileSaveCommands>()(
     'file:save-managed',
@@ -471,6 +499,11 @@ const dataContentApplicationCommands = Object.freeze({
     'sessions:delete-session',
     'deleteSession',
     SessionPersistence.sessionApplicationCommandContracts.delete
+  ),
+  sessionDeleteRecoveryFile: sessionCommand(
+    'sessions:delete-recovery-file',
+    'deleteRecoveryFile',
+    SessionPersistence.sessionApplicationCommandContracts.deleteRecoveryFile
   ),
   sessionEditDetails: sessionCommand(
     'sessions:edit-details',
@@ -690,6 +723,7 @@ const dataContentApplicationCommandGroups = Object.freeze([
   defineApplicationCommandGroup('sessions', [
     dataContentApplicationCommands.sessionOpenRecoveryFolder,
     dataContentApplicationCommands.sessionDelete,
+    dataContentApplicationCommands.sessionDeleteRecoveryFile,
     dataContentApplicationCommands.sessionEditDetails,
     dataContentApplicationCommands.sessionRename,
     dataContentApplicationCommands.sessionSetPinned,
@@ -701,6 +735,8 @@ const dataContentApplicationCommandGroups = Object.freeze([
     dataContentApplicationCommands.sessionExportPackage,
     dataContentApplicationCommands.sessionImportPackage,
     dataContentApplicationCommands.sessionPackageOperation,
+    dataContentApplicationCommands.useCaseCatalog,
+    dataContentApplicationCommands.useCaseIntroduction,
     dataContentApplicationCommands.sessionFilterPdfContextCandidates,
     dataContentApplicationCommands.sessionLinkPdfContext,
     dataContentApplicationCommands.sessionList,
@@ -760,6 +796,8 @@ const dataContentApplicationCommandGroups = Object.freeze([
     dataContentApplicationCommands.reproducibilityCancel
   ]),
   defineApplicationCommandGroup('native-file-save', [
+    dataContentApplicationCommands.artifactSaveProgress,
+    dataContentApplicationCommands.cancelArtifactSave,
     dataContentApplicationCommands.fileSaveBlob,
     dataContentApplicationCommands.fileSaveManaged,
     dataContentApplicationCommands.fileSaveSessionArtifacts,
@@ -789,6 +827,19 @@ const assertElectronCaller = (
   if (invocation.callerContext.surface !== 'electron') {
     throw new Error(`Channel only available from the Electron app: ${name}`)
   }
+}
+
+// Package export/import/operation are exposed to local Web callers (CLI over loopback Web RPC).
+// Remote browsers are stopped by the rejecting-stub surface and the local-only RPC gate; this
+// repeats that boundary at the handler so a dispatcher regression cannot widen it.
+const assertElectronOrLocalWebCaller = (
+  invocation: ApplicationInvocation<readonly unknown[]>,
+  name: string
+): void => {
+  const { surface, location } = invocation.callerContext
+  if (surface === 'electron') return
+  if (surface === 'web' && location === 'local') return
+  throw new Error(`Channel only available from the desktop app or local Web session: ${name}`)
 }
 
 const assertSessionDelegationPolicyCaller = (
@@ -978,6 +1029,8 @@ const registerDataContentApplicationCommands = (
         )
         return dependencies.electron.openRecoveryFolder(invocation)
       },
+      'sessions:delete-recovery-file': ({ args }) =>
+        dependencies.withDataRootWrite(() => dependencies.sessions.deleteRecoveryFile(args[0])),
       'sessions:delete-session': async ({ args }) => {
         const result = await dependencies.sessions.deleteSession(args[0])
         if (result.status === 'deleted') {
@@ -1085,15 +1138,31 @@ const registerDataContentApplicationCommands = (
         return dependencies.electron.forkSession(invocation)
       },
       'sessions:export-package': (invocation) => {
-        assertElectronCaller(invocation, dataContentApplicationCommands.sessionExportPackage.name)
+        assertElectronOrLocalWebCaller(
+          invocation,
+          dataContentApplicationCommands.sessionExportPackage.name
+        )
         return dependencies.electron.exportSessionPackage(invocation)
       },
       'sessions:import-package': (invocation) => {
-        assertElectronCaller(invocation, dataContentApplicationCommands.sessionImportPackage.name)
+        assertElectronOrLocalWebCaller(
+          invocation,
+          dataContentApplicationCommands.sessionImportPackage.name
+        )
         return dependencies.electron.importSessionPackage(invocation)
       },
+      'sessions:use-case-introduction': (invocation) => {
+        assertLocalCaller(invocation, dataContentApplicationCommands.useCaseIntroduction.name)
+        return dependencies.useCaseCatalog.introduction(invocation.args[0])
+      },
+      'sessions:use-case-catalog': (invocation) => {
+        assertLocalCaller(invocation, dataContentApplicationCommands.useCaseCatalog.name)
+        return invocation.args[0] === 'cached'
+          ? dependencies.useCaseCatalog.cached()
+          : dependencies.useCaseCatalog.refresh(invocation.args[0] === 'reload')
+      },
       'sessions:package-operation': (invocation) => {
-        assertElectronCaller(
+        assertElectronOrLocalWebCaller(
           invocation,
           dataContentApplicationCommands.sessionPackageOperation.name
         )
@@ -1374,8 +1443,23 @@ const registerDataContentApplicationCommands = (
       'uploads:transfer-status': (invocation) => dependencies.uploads.transferStatus(invocation)
     })
     scope.registerGroup(dataContentApplicationCommandGroups[8], {
-      'managed-file-versions:inspect': ({ args }) =>
-        dependencies.managedFileVersions.inspect(args[0]),
+      'managed-file-versions:inspect': async (invocation) => {
+        const [request] = invocation.args
+        const result = await dependencies.managedFileVersions.inspect(request)
+        // The command may be reached from a remote Web caller. Never return a Version whose
+        // resolved Project or logical File identity differs from the requested scope.
+        if (
+          result.ok &&
+          (result.value.projectId !== request.projectId || result.value.fileId !== request.fileId)
+        ) {
+          throw new Error('Managed file version identity does not match the requested scope.')
+        }
+        // Web can inspect versions, but its renderer has no edit or diff commands.
+        if (result.ok && invocation.callerContext.surface === 'web') {
+          return { ...result, value: { ...result.value, canEdit: false, canDiff: false } }
+        }
+        return result
+      },
       'managed-file-versions:save-text-edit': ({ args }) =>
         dependencies.managedFileVersions.saveTextEdit(args[0]),
       'managed-file-versions:diff-text': (invocation) =>
@@ -1414,6 +1498,10 @@ const registerDataContentApplicationCommands = (
         dependencies.reproducibility.cancel(invocation)
     })
     scope.registerGroup(dataContentApplicationCommandGroups[10], {
+      'file:artifact-save-progress': (invocation) =>
+        dependencies.fileSaveCommands['file:artifact-save-progress'](invocation),
+      'file:cancel-artifact-save': (invocation) =>
+        dependencies.fileSaveCommands['file:cancel-artifact-save'](invocation),
       'file:save-blob': (invocation) => dependencies.fileSaveCommands['file:save-blob'](invocation),
       'file:save-managed': (invocation) =>
         dependencies.fileSaveCommands['file:save-managed'](invocation),

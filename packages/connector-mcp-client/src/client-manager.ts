@@ -122,12 +122,20 @@ const createCustomMcpFetch = (
 
 const DEFAULT_CLIENT_INFO = { name: 'connector-mcp-client', version: '0.1.0' }
 
+export type McpStdioLaunch = {
+  command: string
+  args: string[]
+  env: Record<string, string>
+}
+
 export type McpTransportDependencies = {
   clientInfo?: { name: string; version: string; title?: string }
   // Host-owned credential policy. Missing/failed policy suppresses stderr text.
   redactDiagnosticText?: (value: string) => string
   fetchImpl?: typeof fetch
   prepareEnvironment?: (environment: Record<string, string>) => Record<string, string>
+  // Hosts may resolve local commands without teaching this package about application resources.
+  prepareStdioLaunch?: (launch: McpStdioLaunch) => McpStdioLaunch
   logger?: { warn(message: string, fields: Record<string, unknown>): void }
 }
 
@@ -380,15 +388,23 @@ export function buildTransport(
       if (!config.command) {
         throw new Error(`custom MCP server "${config.name}" is missing a command for stdio`)
       }
-      const transport = new StdioClientTransport({
+      const launch: McpStdioLaunch = {
         command: config.command,
-        args: config.args,
-        stderr: 'pipe',
+        args: config.args ?? [],
         env: (dependencies.prepareEnvironment ?? ((environment) => environment))({
           ...getDefaultEnvironment(),
           ...config.env
         }) as Record<string, string>
+      }
+      const transport = new StdioClientTransport({
+        ...(dependencies.prepareStdioLaunch?.(launch) ?? launch),
+        stderr: 'pipe'
       })
+      // The SDK starts close without awaiting it when initialization fails. Its stdio close
+      // clears the process handle before waiting, so subsequent calls must join that same cleanup.
+      const close = transport.close.bind(transport)
+      let closing: Promise<void> | undefined
+      transport.close = () => (closing ??= close())
       captureStdioStderr(
         transport.stderr,
         config,
@@ -451,6 +467,7 @@ export class McpClientManager {
   ) => Promise<Client>
   private readonly clients = new Map<string, Client>()
   private readonly connecting = new Map<string, ConnectionAttempt>()
+  private readonly pendingConnections = new Set<Promise<Client>>()
   private readonly authenticationCancels = new Map<string, () => Promise<void>>()
   private readonly generations = new Map<string, number>()
   private readonly oauthCredentialIds = new Map<string, string>()
@@ -557,6 +574,7 @@ export class McpClientManager {
   }
 
   async closeAll(): Promise<void> {
+    const pendingConnections = [...this.pendingConnections]
     await Promise.all(
       [
         ...new Set([
@@ -567,6 +585,9 @@ export class McpClientManager {
         ])
       ].map((id) => this.close(id))
     )
+    // Cancelled attempts leave the lookup map so retries can start, but still own resources
+    // until their factory and any late-client cleanup settle. Do not return before that cleanup.
+    await Promise.allSettled(pendingConnections)
     await this.callbackServer.close()
   }
 
@@ -687,6 +708,7 @@ export class McpClientManager {
           return client
         })
         .finally(() => {
+          this.pendingConnections.delete(promise)
           const current = this.connecting.get(config.id)
           if (current?.promise === promise) {
             current.settled = true
@@ -700,6 +722,7 @@ export class McpClientManager {
           }
         })
       const entry: ConnectionAttempt = { controller, promise, waiters: 0, settled: false }
+      this.pendingConnections.add(promise)
       this.connecting.set(config.id, entry)
       attempt = entry
     }

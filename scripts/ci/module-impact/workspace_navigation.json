@@ -1,6 +1,7 @@
 {
   "ownerPaths": [
     "src/renderer/src/pages/workspace/WorkspaceSidebar.render.test.tsx",
+    "src/renderer/src/pages/workspace/WorkspaceSidebar.session-gestures.test.tsx",
     "src/renderer/src/pages/workspace/WorkspaceSidebar.test.ts",
     "src/renderer/src/pages/workspace/WorkspaceSidebar.tsx",
     "src/renderer/src/pages/workspace/WorkspaceSidebarContainer.test.tsx",
@@ -13,10 +14,11 @@
   "testFiles": {
     "owner": [
       "src/renderer/src/pages/workspace/WorkspaceSidebar.render.test.tsx",
+      "src/renderer/src/pages/workspace/WorkspaceSidebar.session-gestures.test.tsx",
       "src/renderer/src/pages/workspace/WorkspaceSidebar.test.ts",
       "src/renderer/src/pages/workspace/WorkspaceSidebarContainer.test.tsx"
     ],
-    "contract": [],
+    "contract": ["src/main/host-layer-dependencies.architecture.test.ts"],
     "consumer": [
       "src/renderer/src/App.test.tsx",
       "src/renderer/src/components/global-search/GlobalSearchDialog.i18n.render.test.tsx",

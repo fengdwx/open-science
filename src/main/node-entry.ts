@@ -1,12 +1,33 @@
-import { createBackendStartupReporter } from './backend-startup'
+import {
+  configureMainAgentProcessOwnership,
+  closeMainAgentProcessOwnership
+} from './acp/main-agent-process-ownership'
+import { DelegatedProcessOwnership } from './delegation/process-ownership'
+import { inspectRuntimeWindowsProcessIds } from './process-tree-windows'
+import {
+  createLocalServiceLifetime,
+  LOCAL_SERVICE_STOP_BUDGET_MS,
+  serviceStopDeadline
+} from './local-service-lifetime'
+import { installNodeFatalErrors } from './node-fatal-errors'
+import { withRuntimeShutdownLifetime } from './runtime-shutdown-lifetime'
+import {
+  installationRootForEntry,
+  registerInstallationRuntime
+} from './update/installation-protection'
+import { randomUUID } from 'node:crypto'
+import { writeRuntimeExit } from './runtime-stop-confirmation'
+import { resolveDataRoot } from './storage-root'
+import { backendStartupAttemptId, createBackendStartupReporter } from './backend-startup'
 import {
   buildStartupDiagnostics,
   createLogger,
   diagnosticErrorFields,
   errorLogFields,
-  flushLogs
+  flushLogs,
+  initLogger
 } from '@aipoch/diagnostics/node'
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -18,6 +39,7 @@ import {
   prepareCredentialValidation,
   selectStartupCredentialIdentity
 } from './credential-identity/bootstrap'
+import { consumeCredentialInventoryFromEnv } from './credential-identity/inventory-handoff'
 import {
   createNodeSecureStorageCipher,
   initializeNodeWindowsProfileKey
@@ -59,7 +81,7 @@ import { configureRuntimeMetadata } from './runtime-metadata'
 import { configureRuntimeNetwork } from './runtime-network'
 import { createNodeRuntimeNetwork } from './runtime-network-node'
 import {
-  acquireRuntimeDirectorySync,
+  acquireCredentialBootstrapLease,
   configureRuntimeDirectoryOwnership,
   RuntimeDirectoryOwnership,
   RuntimeOwnershipConflict
@@ -72,6 +94,18 @@ import { cancelMigrationForQuit, isMigrationInProgress } from './storage/migrati
 import { parseWebModeOptions } from './web-service/options'
 
 const startupReporter = createBackendStartupReporter()
+// Helpers retain their own protocol and exit contract. Install before asynchronous bootstrap so
+// early failures cannot escape the same diagnostic-and-exit path as runtime failures.
+if (!isRuntimeHelper(process.argv))
+  installNodeFatalErrors({
+    process,
+    report: (error, kind) => {
+      createLogger('node-runtime').error('fatal local service failure', {
+        kind,
+        ...diagnosticErrorFields(error)
+      })
+    }
+  })
 
 async function main(): Promise<void> {
   const mainEntryPath = fileURLToPath(import.meta.url)
@@ -96,9 +130,28 @@ async function main(): Promise<void> {
   // Helpers never acquire business ownership or construct a second application runtime.
   if (await runRuntimeHelper(process.argv)) return
   const configRoot = resolveBootstrapConfigRoot(home, packaged)
+  const generation = randomUUID()
+  const installationLease = registerInstallationRuntime({
+    installationRoot: installationRootForEntry(mainEntryPath),
+    configRoot,
+    generation,
+    pid: process.pid
+  })
   const ownership = new RuntimeDirectoryOwnership()
   ownership.acquireSync(configRoot)
   configureRuntimeDirectoryOwnership(ownership)
+  // Credential preflight can fail before full application diagnostics are initialized.
+  initLogger({ logDir: join(configRoot, 'logs') })
+  try {
+    await configureMainAgentProcessOwnership(
+      new DelegatedProcessOwnership(configRoot, 'main-agent-process-ownership')
+    )
+  } catch (error) {
+    createLogger('node-runtime').error(
+      'main agent process recovery incomplete',
+      diagnosticErrorFields(error)
+    )
+  }
   const network = createNodeRuntimeNetwork()
   configureRuntimeNetwork(network)
   let runtime: Awaited<ReturnType<typeof import('./core-runtime').createCoreRuntime>> | undefined
@@ -109,12 +162,16 @@ async function main(): Promise<void> {
   let cipher: ReturnType<typeof createNodeSecureStorageCipher> | undefined
   let remoteAccess: RemoteAccessService | undefined
   let stopping: Promise<void> | undefined
+  let preparationOutcome: 'completed' | 'timeout' | 'failed' | undefined
+  let preparationEpoch = 0
   const startupCancellation = new AbortController()
   let unsubscribeLocale: (() => void) | undefined
   let restartRequested = false
   let desktopWillRestart = false
   let stopRequested = false
+  let profilePath: string | undefined
   let credentialFailure: CredentialIdentityError | undefined
+  let startupExitCode: number | undefined
   let finishStartup!: () => void
   const startupFinished = new Promise<void>((resolve) => {
     finishStartup = resolve
@@ -123,14 +180,31 @@ async function main(): Promise<void> {
     if (stopRequested) throw new Error('Node runtime startup was cancelled by a shutdown request.')
   }
   let disconnectDatabase: (() => Promise<void>) | undefined
-  const stop = (): Promise<void> => {
+  const stop = (deadlineAt = serviceStopDeadline()): Promise<void> => {
     stopRequested = true
+    runtime?.applicationCommands.beginStopping()
     startupCancellation.abort()
-    return (stopping ??= (async () => {
+    return (stopping ??= withRuntimeShutdownLifetime(async () => {
+      lifetime?.close()
+      // One process-wide deadline covers startup cancellation, preparation, every disposer and
+      // the exit record. A failed drain is diagnostic; it cannot leave Node alive indefinitely.
+      const deadline = setTimeout(
+        () => {
+          try {
+            createLogger('node-runtime').error('local service shutdown deadline exceeded', {
+              generation,
+              budgetMs: LOCAL_SERVICE_STOP_BUDGET_MS
+            })
+          } finally {
+            process.exit(1)
+          }
+        },
+        Math.max(1, deadlineAt - Date.now())
+      )
       await startupFinished
       let failed = false
       try {
-        const outcome = await runtime?.prepareForQuit()
+        const outcome = preparationOutcome ?? (await runtime?.prepareForQuit())
         if (outcome && outcome !== 'completed') failed = true
       } catch (error) {
         failed = true
@@ -139,29 +213,68 @@ async function main(): Promise<void> {
           diagnosticErrorFields(error)
         )
       }
+      let shutdownStep = 0
       for (const close of [
         () => remoteAccess?.shutdown(),
         () => control?.close(),
         () => desktop?.close(),
         () => web?.dispose(),
         () => runtime?.dispose(),
+        () => closeMainAgentProcessOwnership(),
         () => disconnectDatabase?.(),
         () => network.close(),
         () => flushLogs()
       ]) {
         try {
+          createLogger('node-runtime').info('shutdown step started', { step: shutdownStep })
           await close()
+          createLogger('node-runtime').info('shutdown step completed', { step: shutdownStep })
         } catch (error) {
           failed = true
           createLogger('node-runtime').error('shutdown failed', diagnosticErrorFields(error))
+        } finally {
+          shutdownStep += 1
         }
       }
-      unsubscribeLocale?.()
-      cipher?.dispose()
+      try {
+        unsubscribeLocale?.()
+        cipher?.dispose()
+      } catch {
+        failed = true
+      }
+      try {
+        await writeRuntimeExit(configRoot, {
+          generation,
+          pid: process.pid,
+          outcome: failed || credentialFailure || startupExitCode ? 'failed' : 'clean'
+        })
+      } catch {
+        failed = true
+      }
       // A failed child-process drain must not release ownership while this process remains alive.
-      if (!failed) await ownership.close()
-      process.exitCode = failed || credentialFailure ? 1 : 0
-      if (restartRequested && !desktopWillRestart && !failed) {
+      if (!failed) {
+        try {
+          await ownership.close()
+          installationLease.release()
+        } catch (error) {
+          failed = true
+          createLogger('node-runtime').error(
+            'shutdown ownership release failed',
+            diagnosticErrorFields(error)
+          )
+          try {
+            await writeRuntimeExit(configRoot, { generation, pid: process.pid, outcome: 'failed' })
+          } catch (recordError) {
+            createLogger('node-runtime').error(
+              'shutdown failure record failed',
+              diagnosticErrorFields(recordError)
+            )
+          }
+        }
+      }
+      const exitCode = failed || credentialFailure ? 1 : (startupExitCode ?? 0)
+      process.exitCode = exitCode
+      if (restartRequested && !desktopWillRestart && exitCode === 0) {
         const { spawn } = await import('node:child_process')
         const child = spawn(process.execPath, process.argv.slice(1), {
           detached: true,
@@ -174,13 +287,38 @@ async function main(): Promise<void> {
         })
         child.unref()
       }
-    })())
+      clearTimeout(deadline)
+      process.exit(exitCode)
+    }))
+  }
+  const lifetime = await createLocalServiceLifetime({
+    configRoot,
+    generation,
+    explicitStart: !process.argv.includes('--desktop'),
+    onStoppingAdmission: () => runtime?.applicationCommands.beginStopping(),
+    stop: (_reason, deadlineAt) => {
+      // Cancellation must be visible before an already-resolving startup await resumes.
+      void stop(deadlineAt).catch((error) => {
+        throw error
+      })
+    },
+    report: (error) =>
+      createLogger('node-runtime').error('service lifetime failed', diagnosticErrorFields(error))
+  })
+  const reportStopFailure = (error: unknown): void => {
+    createLogger('node-runtime').error(
+      'stop intent could not be recorded',
+      diagnosticErrorFields(error)
+    )
+  }
+  const requestStop = async (reason?: 'restart' | 'update', deadlineAt?: number): Promise<void> => {
+    await lifetime.stop(true, reason ?? (restartRequested ? 'restart' : 'user-stop'), deadlineAt)
   }
   process.once('SIGINT', () => {
-    void stop()
+    void requestStop().catch(reportStopFailure)
   })
   process.once('SIGTERM', () => {
-    void stop()
+    void requestStop().catch(reportStopFailure)
   })
   configureRuntimeLifecycle({
     relaunch: () => {
@@ -199,8 +337,10 @@ async function main(): Promise<void> {
             )
           }
         }
-        await stop()
-      })()
+        await lifetime.stop(true, restartRequested ? 'restart' : 'user-stop')
+      })().catch((error) => {
+        throw error
+      })
     },
     exit: (code) => process.exit(code)
   })
@@ -210,9 +350,18 @@ async function main(): Promise<void> {
     const passwordStore = process.argv
       .find((arg) => arg.startsWith('--password-store='))
       ?.slice('--password-store='.length)
-    const credentialBootstrapLease = acquireRuntimeDirectorySync(
-      join(home, '.open-science-credential-bootstrap')
-    )
+    const appData =
+      process.platform === 'win32'
+        ? process.env.APPDATA || join(home, 'AppData', 'Roaming')
+        : process.platform === 'darwin'
+          ? join(home, 'Library', 'Application Support')
+          : process.env.XDG_CONFIG_HOME || join(home, '.config')
+    profilePath = resolveElectronProfile({ appData, configRoot, packaged })
+    const credentialBootstrapLease = acquireCredentialBootstrapLease({
+      home,
+      profilePath,
+      platform: process.platform
+    })
     let identity: ReturnType<typeof selectStartupCredentialIdentity>
     try {
       identity = selectStartupCredentialIdentity({
@@ -221,16 +370,22 @@ async function main(): Promise<void> {
         credentialStore: getCredentialStore(),
         linuxPasswordStore: passwordStore
       })
-      const appData =
-        process.platform === 'win32'
-          ? process.env.APPDATA || join(home, 'AppData', 'Roaming')
-          : process.platform === 'darwin'
-            ? join(home, 'Library', 'Application Support')
-            : process.env.XDG_CONFIG_HOME || join(home, '.config')
-      const profilePath = resolveElectronProfile({ appData, configRoot, packaged })
       ownership.acquireSync(profilePath)
-      const validateCredentials = prepareCredentialValidation(identity, { configRoot, profilePath })
-      if (identity.backend === 'windows-dpapi') await initializeNodeWindowsProfileKey(profilePath)
+      const preloadedCiphertexts = await consumeCredentialInventoryFromEnv({
+        attemptId: backendStartupAttemptId ?? '',
+        configRoot,
+        profilePath
+      })
+      abortStartupIfStopping()
+      const validateCredentials = prepareCredentialValidation(
+        identity,
+        { configRoot, profilePath },
+        preloadedCiphertexts
+      )
+      if (identity.backend === 'windows-dpapi') {
+        await initializeNodeWindowsProfileKey(profilePath)
+        abortStartupIfStopping()
+      }
       cipher = createNodeSecureStorageCipher(identity, profilePath)
       configureSecureStorageCipher(cipher)
       validateCredentials(cipher, (error) => {
@@ -254,8 +409,11 @@ async function main(): Promise<void> {
     })
     startupReporter.phase('storage')
     const { prepareApplicationLocations } = await import('./storage/initialize-location')
+    abortStartupIfStopping()
     const { settingsStore, repository } = await prepareApplicationLocations(configRoot)
+    abortStartupIfStopping()
     const startupSettings = await repository.getSettings()
+    abortStartupIfStopping()
     const localeOwner = new LocalePreferenceOwner(
       [Intl.DateTimeFormat().resolvedOptions().locale],
       repository,
@@ -314,21 +472,50 @@ async function main(): Promise<void> {
         }
       }
     }
+    const runtimeStartupOptions: import('./desktop-runtime-info').RuntimeStartupOptions = {
+      configRoot,
+      dataRoot: resolveDataRoot(),
+      profilePath: profilePath!,
+      port: parseWebModeOptions(process.argv).port,
+      host: '127.0.0.1',
+      credentialStore: getCredentialStore(),
+      ...(passwordStore ? { passwordStore } : {})
+    }
     desktop = await startDesktopRuntimeTransport({
+      lifetime,
       version: metadata.version,
+      generation,
+      launch: process.argv.includes('--desktop') ? 'desktop' : 'cli',
+      entryPath: realpathSync(mainEntryPath),
+      startupOptions: runtimeStartupOptions,
       createLifecycle: () => {
         let lifecycle: ReturnType<typeof createDesktopRuntimeLifecycle> | undefined
         return {
-          request: (operation) => {
+          request: (operation, requestOptions) => {
             if (!runtime) throw new Error('The runtime is still starting.')
             lifecycle ??= createDesktopRuntimeLifecycle({
               ...runtime,
               isMigrationInProgress,
-              cancelMigrationForQuit
+              cancelMigrationForQuit,
+              prepareForQuit: async () => {
+                const epoch = preparationEpoch
+                const outcome = await runtime!.prepareForQuit()
+                if (epoch === preparationEpoch) preparationOutcome = outcome
+                return outcome
+              },
+              abortQuitPreparation: () => {
+                preparationEpoch += 1
+                preparationOutcome = undefined
+                runtime!.abortQuitPreparation()
+              }
             })
-            return lifecycle.request(operation)
+            return requestOptions
+              ? lifecycle.request(operation, requestOptions)
+              : lifecycle.request(operation)
           },
-          disconnect: () => lifecycle?.disconnect()
+          disconnect: async () => {
+            await lifecycle?.disconnect()
+          }
         }
       },
       startup: databaseStartup,
@@ -344,17 +531,28 @@ async function main(): Promise<void> {
       hostCommands: {
         commandNames: () => [
           'desktop:update-gate',
+          'desktop:update-inspect',
+          'desktop:update-owned-processes',
           'desktop:update-abort',
           'desktop:open-session',
           'locale:snapshot',
           'desktop:tray-sessions',
           'desktop:open-package',
+          'desktop:browser-import',
+          'desktop:browser-import-cancel',
+          'desktop:package-operation-snapshot',
+          'desktop:browser-import-discovery',
           'settings:get-settings',
+          'storage:get-status',
+          'sessions:list',
+          'projects:list',
           'settings:set-close-preference'
         ],
         invoke: async (channel, invocation) => {
           if (channel === 'locale:snapshot') return localeOwner.snapshot()
           if (!runtime) throw new Error('The runtime is still starting.')
+          if (channel === 'desktop:update-inspect') return runtime.inspectDesktopUpdate()
+          if (channel === 'desktop:update-owned-processes') return inspectRuntimeWindowsProcessIds()
           if (channel === 'desktop:update-gate')
             return runtime.prepareDesktopUpdate(
               z
@@ -385,7 +583,34 @@ async function main(): Promise<void> {
             runtime.openSessionPackageFile(path)
             return null
           }
-          if (channel !== 'settings:get-settings' && channel !== 'settings:set-close-preference')
+          if (channel === 'desktop:browser-import-discovery') {
+            await runtime.startBrowserPackageImportDiscovery(
+              invocation.args[0] as number | undefined
+            )
+            return null
+          }
+          if (channel === 'desktop:package-operation-snapshot')
+            return runtime.packageOperationSnapshot()
+          if (channel === 'desktop:browser-import-cancel') {
+            const id = invocation.args[0]
+            if (typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id))
+              throw new Error('Invalid transfer identity.')
+            await runtime.cancelBrowserPackageImport(id)
+            return null
+          }
+          if (channel === 'desktop:browser-import') {
+            await runtime.beginBrowserPackageImport(invocation.args[0], invocation.args[1] === true)
+            return runtime.packageOperationSnapshot()
+          }
+          if (
+            ![
+              'settings:get-settings',
+              'settings:set-close-preference',
+              'storage:get-status',
+              'sessions:list',
+              'projects:list'
+            ].includes(channel)
+          )
             throw new Error('Unknown desktop host command.')
           return runtime.applicationCommands.desktop.invoke(channel, invocation)
         }
@@ -405,6 +630,7 @@ async function main(): Promise<void> {
         notificationDelivery?.disconnect()
         runtime?.notificationInbox.configureDesktop()
       },
+      onControllerDisconnect: () => runtime?.abortDesktopUpdate(),
       onNotificationView: async (state) => {
         if (state.reason === 'view')
           await runtime?.notificationInbox.syncViewState({
@@ -418,10 +644,10 @@ async function main(): Promise<void> {
           'desktop visibility update failed',
           errorLogFields(error)
         ),
-      requestShutdown: () => {
-        void stop()
-      }
+      isStopping: () => stopRequested,
+      requestShutdown: requestStop
     })
+    abortStartupIfStopping()
     control = await startRuntimeControl(
       configRoot,
       'node',
@@ -429,10 +655,19 @@ async function main(): Promise<void> {
         if (!web) throw new Error('The runtime is still starting.')
         return web.ensureStarted(port, { attached: false })
       },
-      desktop.endpoint
+      desktop.endpoint,
+      runtimeStartupOptions,
+      () => stopRequested,
+      {
+        lifetime,
+        entryPath: realpathSync(mainEntryPath),
+        launch: process.argv.includes('--desktop') ? 'desktop' : 'cli'
+      }
     )
+    abortStartupIfStopping()
     startupReporter.phase('database')
     const state = await databaseStartup.start()
+    abortStartupIfStopping()
     if (state.phase === 'blocked' && !process.argv.includes('--desktop'))
       throw Object.assign(new Error(state.error.message), state.error)
     await waitForVerifiedDatabaseStartup(databaseStartup, startupCancellation.signal)
@@ -440,6 +675,7 @@ async function main(): Promise<void> {
     abortStartupIfStopping()
     startupReporter.phase('runtime')
     const { createCoreRuntime } = await import('./core-runtime')
+    abortStartupIfStopping()
     configureDesktopFileInteraction(
       createRemoteDesktopFileInteraction(async (request, callerId) => {
         if (!desktop) throw new DesktopCapabilityUnavailable(request.operation)
@@ -523,6 +759,8 @@ async function main(): Promise<void> {
       reportUploadProgress: (clientId, progress) =>
         desktop?.reportUploadProgress(clientId, progress)
     })
+    if (lifetime.snapshot().stopping) runtime.applicationCommands.beginStopping()
+    abortStartupIfStopping()
     if (notificationDelivery) {
       const delivery = notificationDelivery
       if (desktop?.isConnected()) runtime.notificationInbox.configureDesktop(delivery.inbox)
@@ -537,13 +775,15 @@ async function main(): Promise<void> {
     }
     abortStartupIfStopping()
     const { createWebServiceController } = await import('./web-service')
+    abortStartupIfStopping()
     remoteAccess = await RemoteAccessService.create()
+    abortStartupIfStopping()
     runtime.bindRemoteAccess(remoteAccess)
     web = createWebServiceController({
       ...runtime,
       externalAccess: remoteAccess.webAccess,
       requestQuit: () => {
-        void stop()
+        void requestStop().catch(reportStopFailure)
       }
     })
     remoteAccess.attachWebController(web)
@@ -551,6 +791,7 @@ async function main(): Promise<void> {
     const serving = await web.ensureStarted(parseWebModeOptions(process.argv).port, {
       attached: false
     })
+    abortStartupIfStopping()
     process.stdout.write(`Open-Science is listening on http://127.0.0.1:${serving.port}\n`)
     void remoteAccess.restore()
     databaseStartup.complete()
@@ -560,21 +801,42 @@ async function main(): Promise<void> {
     if (stopRequested) await stop()
   } catch (error) {
     const cancelled = stopRequested
-    if (credentialFailure || !cancelled) startupReporter.failed(credentialFailure ?? error)
+    if (credentialFailure || !cancelled) {
+      startupExitCode = error instanceof RuntimeOwnershipConflict ? 75 : 1
+      startupReporter.failed(credentialFailure ?? error)
+      // stop() exits the process; record the failure before it flushes logs and releases resources.
+      reportStartupError(credentialFailure ?? error)
+    }
     finishStartup()
     await stop()
     if (credentialFailure) throw credentialFailure
     if (!cancelled) throw error
   }
 }
-void main().catch((error: unknown) => {
-  startupReporter.failed(error)
+let startupErrorReported = false
+const reportStartupError = (error: unknown): void => {
+  if (startupErrorReported) return
+  startupErrorReported = true
   createLogger('node-runtime').error('startup failed', {
     ...diagnosticErrorFields(error),
     ...errorLogFields(error),
     ...(error instanceof CredentialIdentityError
-      ? { recoveryReason: error.reason, identityProbe: error.probe }
+      ? {
+          recoveryReason: error.reason,
+          identityProbe: error.probe,
+          // Inventory context is transient UI data, not an additional persisted diagnostic.
+          validationDiagnostic:
+            error.diagnostic?.code === 'inventory-failed' ? undefined : error.diagnostic
+        }
       : {})
   })
-  process.exitCode = error instanceof RuntimeOwnershipConflict ? 75 : 1
+}
+
+void main().catch((error: unknown) => {
+  try {
+    startupReporter.failed(error)
+    reportStartupError(error)
+  } finally {
+    process.exit(error instanceof RuntimeOwnershipConflict ? 75 : 1)
+  }
 })

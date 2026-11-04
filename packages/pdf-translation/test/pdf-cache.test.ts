@@ -85,7 +85,10 @@ async function setup() {
     }
   }
   const request = { ...input, cache: { source: 'source', checkpointKey: checkpoint.key } }
-  const owner = { readCheckpoint: vi.fn(async () => checkpoint as PdfTranslationCheckpoint | null) }
+  const owner = {
+    recordLayout: vi.fn(async () => {}),
+    readCheckpoint: vi.fn(async () => checkpoint as PdfTranslationCheckpoint | null)
+  }
   const native = new PdfTranslationWriter(() => 'unused')
   const writer = {
     valid: native.valid.bind(native),
@@ -177,9 +180,9 @@ it.each(['null', 'revoked', 'malformed', 'incomplete', 'missing-layout'] as cons
   }
 )
 
-it.each(['truncated', 'digest', 'header', 'symlink', 'expired'] as const)(
+it.for(['truncated', 'digest', 'header', 'symlink', 'expired'] as const)(
   'treats %s cache files as misses and replaces them safely',
-  async (kind) => {
+  async (kind, { skip }) => {
     const f = await setup()
     await f.publish()
     const file = join(f.directory, (await readdir(f.directory))[0])
@@ -198,7 +201,21 @@ it.each(['truncated', 'digest', 'header', 'symlink', 'expired'] as const)(
       const outside = join(f.root, 'outside.pdf')
       await writeFile(outside, 'untouched')
       await rm(file)
-      await symlink(outside, file)
+      try {
+        await symlink(outside, file, 'file')
+      } catch (error) {
+        if (
+          process.platform === 'win32' &&
+          error instanceof Error &&
+          'code' in error &&
+          error.code === 'EPERM'
+        ) {
+          skip(
+            'This Windows account cannot create file symlinks; the rejection runs where supported.'
+          )
+        }
+        throw error
+      }
     }
     if (kind === 'expired') {
       const now = Date.now()
@@ -301,6 +318,20 @@ it('requires exact native retained failures and never caches verification failur
   ).toBe(true)
 })
 
+it('separates mixed-output cache entries from strict source matching', async () => {
+  const f = await setup()
+  const strict = { ...f.request, preserveUnsupported: true }
+  const first = await f.cache.generate(strict, f.caller)
+  await f.cache.confirm(f.report(first!), f.caller)
+  const mixed = { ...strict, preserveUnmatched: true }
+  const second = await f.cache.generate(mixed, f.caller)
+  expect(second?.cacheHit).toBeUndefined()
+  await f.cache.confirm(f.report(second!), f.caller)
+  expect((await f.cache.generate(mixed, f.caller))?.cacheHit).toBe(true)
+  expect((await f.cache.generate(strict, f.caller))?.cacheHit).toBe(true)
+  expect(f.writer.generateDetailed).toHaveBeenCalledTimes(2)
+})
+
 it('enforces file count/byte quotas, removes only owned stale files, and serializes concurrent publication', async () => {
   const f = await setup()
   await f.publish()
@@ -365,7 +396,7 @@ it('refuses cache-directory symlinks and preserves their external destination', 
   await rm(f.directory, { recursive: true })
   const destination = await mkdtemp(join(tmpdir(), 'pdf-cache-outside-'))
   roots.push(destination)
-  await symlink(destination, f.directory)
+  await symlink(destination, f.directory, process.platform === 'win32' ? 'junction' : 'dir')
   const result = await f.cache.generate(f.request, f.caller)
   expect(result?.cacheHit).toBeUndefined()
   await f.cache.confirm(f.report(result!), f.caller)
@@ -452,4 +483,19 @@ it('publishes only after verification and survives restart; authorized source bi
   )
   expect(hit).toEqual({ data: Buffer.from('%PDF-output'), layoutFailures: [], cacheHit: true })
   expect(f.writer.generateDetailed).toHaveBeenCalledTimes(1)
+})
+
+it('records the layout before cache publication and leaves failed reports unpublished', async () => {
+  const f = await setup()
+  const result = (await f.cache.generate(f.request, f.caller))!
+  const report = f.report(result)
+  f.owner.recordLayout.mockRejectedValueOnce(new Error('report write failed'))
+  await expect(f.cache.recordLayout(report, f.caller)).rejects.toThrow('report write failed')
+  expect(await readdir(f.directory).catch(() => [])).toEqual([])
+  f.owner.recordLayout.mockImplementationOnce(async () => {
+    expect(await readdir(f.directory).catch(() => [])).toEqual([])
+  })
+  await f.cache.recordLayout(report, f.caller)
+  expect(f.owner.recordLayout).toHaveBeenLastCalledWith(report, f.caller)
+  expect((await f.cache.generate(f.request, f.caller))?.cacheHit).toBe(true)
 })

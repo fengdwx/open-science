@@ -6,7 +6,15 @@ import {
   rendererSessionPersistenceFlushBlocksShutdown,
   type RendererSessionPersistenceFlushOutcome
 } from './session-persistence/renderer-flush'
-import { BackendShutdownOutcomeError, type ShutdownStepOutcome } from './lifecycle-shutdown'
+import {
+  BackendShutdownOutcomeError,
+  QuitScopeChangedError,
+  type ShutdownStepOutcome
+} from './lifecycle-shutdown'
+import {
+  LOCAL_SERVICE_STOP_BUDGET_MS,
+  LOCAL_SERVICE_STOP_ESCALATION_MS
+} from './local-service-lifetime'
 import { flushDiagnosticsWithTimeout, type DiagnosticFlush } from '@aipoch/diagnostics/node'
 import { diagnosticErrorFields, type Logger } from '@aipoch/diagnostics/node'
 import { startDiagnosticOperation } from '@aipoch/diagnostics/node'
@@ -57,9 +65,9 @@ export type AppLifecycleDeps = {
   // Builds the tray; returns undefined on hosts without a tray (e.g. some Linux desktops).
   createTray: (handlers: TrayHandlers) => Tray | undefined
   // Bounded, best-effort backend teardown (agent tree + notebook kernels); never throws.
-  shutdownBackends: () => Promise<ShutdownStepOutcome | void>
+  shutdownBackends: (deadlineAt?: number) => Promise<ShutdownStepOutcome | void>
   // Requests active ACP turns to cancel, then waits a bounded interval for terminal usage events.
-  prepareForQuit: () => Promise<ShutdownStepOutcome | void>
+  prepareForQuit: (deadlineAt?: number) => Promise<ShutdownStepOutcome | 'scope-changed' | void>
   // Closes installation admission synchronously across asynchronous quit preparation.
   holdSettingsInstallAdmission: () => () => void
   // Reopens Main/renderer admission when persistence prevents an orderly quit from committing.
@@ -68,6 +76,8 @@ export type AppLifecycleDeps = {
   flushSessionPersistence: (
     timeoutMs?: number
   ) => Promise<RendererSessionPersistenceFlushOutcome | void>
+  // Update preparation saved while the renderer/backend were alive, before native window closure.
+  rendererPersistencePreparedForUpdate?: () => boolean
   // Local structured diagnostics remain optional for the dependency-injected lifecycle tests.
   log?: Logger
   // Drains the logger's serialized write queue after the shutdown terminal record.
@@ -75,6 +85,10 @@ export type AppLifecycleDeps = {
   logFlushTimeoutMs?: number
   // Shared timeout budget for the preflight and post-drain renderer persistence attempts.
   rendererFlushTimeoutMs?: number
+  // Total OS-owned exit budget; normal Runtime teardown includes a 15-second stop confirmation.
+  systemShutdownTimeoutMs?: number
+  shutdownTimeoutMs?: number
+  onShutdownProgress?: (active: boolean) => void
   // Classifies an orderly shutdown without changing its cleanup sequence.
   shutdownTrigger?: () => ApplicationShutdownTrigger
   // True while a data-root handoff is validating, preparing, or copying; its quit guard owns exits.
@@ -97,6 +111,8 @@ export type AppLifecycleDeps = {
   // A failed remote preparation/stop must leave the desktop alive instead of orphaning its server.
   requireCleanBackendShutdown?: boolean
   onQuitError?: (error: unknown) => void
+  // Transfers an interrupted ordinary quit to the desktop's existing disconnected decision.
+  handleDisconnectedQuit?: () => boolean
   // Snapshot of sessions with running work (in-flight agent prompt or a notebook cell mid-execution),
   // used to populate the confirmation list and to skip the quit dialog when nothing is running.
   detectActiveSessions: () => ActiveSessionInfo[]
@@ -150,7 +166,6 @@ export const installAppLifecycle = (
   // A delegated confirmation authorizes only the Sessions visible in that dialog. The final
   // before-quit boundary rechecks this snapshot so work admitted between confirmation and the
   // re-issued quit cannot inherit an unrelated confirmation.
-  let confirmedDelegatedSessionKeys = new Set<string>()
   // Shared across both confirm-dispatching paths (titlebar X and tray/Ctrl+Q quit) so only one
   // confirmation modal is ever open at a time. The renderer holds a single request slot; a second
   // dispatch would silently overwrite the first and strand its promise forever (see app-lifecycle.test.ts).
@@ -158,6 +173,46 @@ export const installAppLifecycle = (
   // Set only after the persistence-failure dialog's explicit destructive choice. The next before-quit
   // attempt consumes it once; an intervening guard or confirmation cannot leak it to a later attempt.
   let forceQuitAfterPersistenceFailure = false
+
+  const systemWaits = new Set<() => void>()
+  let systemShutdownDeadline: number | undefined
+  let shutdownDeadline: number | undefined
+  // Bound every asynchronous boundary once the OS owns exit, including waits started by a
+  // preceding ordinary quit. Timing out leaves the backend operation and its ownership intact.
+  const awaitQuitStep = <T>(
+    operation: Promise<T> | T,
+    timeoutMs = deps.systemShutdownTimeoutMs ?? 30_000
+  ): Promise<T> =>
+    new Promise<T>((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const bound = (): void => {
+        if (systemShutdownRequested || shutdownTrigger() === 'system')
+          systemShutdownDeadline ??= Date.now() + (deps.systemShutdownTimeoutMs ?? 30_000)
+        clearTimeout(timer)
+        timer = setTimeout(
+          () => {
+            systemWaits.delete(bound)
+            reject(new BackendShutdownOutcomeError('timeout'))
+          },
+          Math.max(
+            0,
+            Math.min(
+              timeoutMs,
+              (systemShutdownDeadline ?? Infinity) - Date.now(),
+              (shutdownDeadline ?? Infinity) - Date.now()
+            )
+          )
+        )
+      }
+      systemWaits.add(bound)
+      bound()
+      Promise.resolve(operation)
+        .then(resolve, reject)
+        .finally(() => {
+          if (timer) clearTimeout(timer)
+          systemWaits.delete(bound)
+        })
+    })
 
   const normalizeStepOutcome = (outcome: ShutdownStepOutcome | void): ShutdownStepOutcome =>
     outcome ?? 'completed'
@@ -194,26 +249,21 @@ export const installAppLifecycle = (
     deps.hasActiveReviewerWork() || activeSettingsInstallId() !== undefined
       ? confirmClose(variant, sessions, true)
       : confirmClose(variant, sessions)
-  const detectDelegatedWork = (): ActiveSessionInfo[] =>
-    deps.detectActiveSessions().filter((session) => session.kind === 'delegated')
-  const delegatedSessionKey = (session: ActiveSessionInfo): string =>
-    JSON.stringify([session.projectId, session.sessionId])
-  const requestConfirmedQuit = (
-    delegated: readonly ActiveSessionInfo[] = [],
-    settingsInstallId?: string
-  ): void => {
+  const requestConfirmedQuit = (settingsInstallId?: string): void => {
     quitConfirmed = true
     confirmedSettingsInstallId = settingsInstallId
-    confirmedDelegatedSessionKeys = new Set(delegated.map(delegatedSessionKey))
     deps.quit()
   }
   const requestSystemShutdown = (): void => {
-    if (systemShutdownRequested || shutdownFinished) return
+    if (systemShutdownRequested) return
     systemShutdownRequested = true
+    for (const bound of systemWaits) bound()
     const rollbackTrigger = markApplicationShutdownTrigger('system')
     // An ordinary quit may already be inside its abortable Renderer preflight. Keep the stronger
     // system intent latched; its abort path will reissue quit through the same lifecycle owner.
-    if (shutdownStarted) return
+    // A committed ordinary exit can still be waiting on beforeExit. Escalate that wait too,
+    // without entering a second shutdown sequence.
+    if (shutdownStarted || shutdownFinished) return
     try {
       deps.quit()
     } catch (error) {
@@ -245,8 +295,7 @@ export const installAppLifecycle = (
       if (deps.refreshQuitState) await deps.refreshQuitState()
       const choice = await confirmResearchClose('close-to-tray', deps.detectActiveSessions())
       if (choice !== 'quit') return choice
-      const delegated = detectDelegatedWork()
-      return delegated.length > 0 ? await confirmResearchClose('close-to-tray', delegated) : choice
+      return choice
     } finally {
       confirmInFlight = false
     }
@@ -256,12 +305,10 @@ export const installAppLifecycle = (
     classifyClose,
     resolveCloseAction,
     requestQuit: (confirmed = true) => {
-      // A caller's earlier confirmation cannot authorize delegated work that is already live at the
-      // final boundary. Leave that case unconfirmed so before-quit performs the delegated-work recheck.
-      quitConfirmed =
-        confirmed && detectDelegatedWork().length === 0 && activeSettingsInstallId() === undefined
+      // Whole-service task consent is stable; a newly active settings installation still requires
+      // its own transaction confirmation at the shutdown boundary.
+      quitConfirmed = confirmed && activeSettingsInstallId() === undefined
       confirmedSettingsInstallId = undefined
-      confirmedDelegatedSessionKeys = new Set()
       deps.quit()
     },
     ...(deps.onAppearanceChanged ? { onAppearanceChanged: deps.onAppearanceChanged } : {})
@@ -316,6 +363,18 @@ export const installAppLifecycle = (
   // migration guard (registered earlier) via defaultPrevented + isMigrationInProgress so a
   // migration-cancelled quit is respected. #177's will-quit guard remains a synchronous backstop for a
   // committed quit that never reaches this path.
+  const finishShutdown = async (): Promise<void> => {
+    if (shutdownFinished) return
+    shutdownFinished = true
+    trayBox.current?.destroy()
+    try {
+      await awaitQuitStep(deps.beforeExit?.())
+    } catch (error) {
+      deps.log?.error('application exit handoff failed', diagnosticErrorFields(error))
+    } finally {
+      deps.app.exit(0)
+    }
+  }
   let refreshedQuitBoundary = false
   let refreshingQuitBoundary = false
   deps.app.on('before-quit', (event) => {
@@ -325,30 +384,42 @@ export const installAppLifecycle = (
       event.preventDefault()
       return
     }
+    const trigger = shutdownTrigger()
     if (deps.refreshQuitState && !refreshedQuitBoundary && !event.defaultPrevented) {
       event.preventDefault()
       if (refreshingQuitBoundary) return
       refreshingQuitBoundary = true
-      void deps
-        .refreshQuitState()
+      void awaitQuitStep(deps.refreshQuitState())
         .then((changed) => {
+          if (shutdownStarted || shutdownFinished) return
           if (changed) {
             quitConfirmed = false
             confirmedSettingsInstallId = undefined
-            confirmedDelegatedSessionKeys = new Set()
           }
           refreshedQuitBoundary = true
           refreshingQuitBoundary = false
           deps.quit()
         })
-        .catch((error) => deps.onQuitError?.(error))
+        .catch(async (error) => {
+          if (shutdownStarted || shutdownFinished) return
+          if (systemShutdownRequested || trigger === 'system') {
+            shutdownStarted = true
+            try {
+              await awaitQuitStep(deps.abortQuitPreparation())
+            } catch {
+              // An unreachable Runtime retains its cleanup/ownership fence after Desktop detaches.
+            }
+            await finishShutdown()
+          } else {
+            deps.onQuitError?.(error)
+          }
+        })
         .finally(() => {
           refreshingQuitBoundary = false
         })
       return
     }
     refreshedQuitBoundary = false
-    const trigger = shutdownTrigger()
     const persistenceFailureIsForced = forceQuitAfterPersistenceFailure
     forceQuitAfterPersistenceFailure = false
     if (event.defaultPrevented || deps.isMigrationInProgress()) {
@@ -362,14 +433,12 @@ export const installAppLifecycle = (
       }
       quitConfirmed = false
       confirmedSettingsInstallId = undefined
-      confirmedDelegatedSessionKeys = new Set()
       return
     }
     // Renderer persistence may cancel only an ordinary quit. Update and data-root relaunches pass a
     // producer-teardown + renderer-durability gate before committing their handoff; once app.quit()
     // runs, cancellation would leave the old process alive after the external pointer changed.
     const ordinaryQuit = trigger === 'quit'
-    const delegatedWorkBlocksShutdown = ordinaryQuit
 
     // A Settings install can start after an earlier empty-work fast path resolved. Only a warning
     // that actually observed active installation work may authorize interrupting it.
@@ -384,38 +453,6 @@ export const installAppLifecycle = (
       confirmedSettingsInstallId = undefined
     }
 
-    // Final synchronous delegated-work safety boundary. A delegated Attempt may start after an earlier
-    // confirmation snapshot (or after a saved close preference was read). Storage commands quiesce and
-    // await all producers before marking migration-relaunch, and the updater does the same before
-    // quitAndInstall. Once either committed handoff invokes app.quit(), it must continue; cancelling
-    // there would strand the already-started installer or a process cached on the old data root.
-    const delegatedAtShutdownBoundary = detectDelegatedWork()
-    const hasUnconfirmedDelegatedWork = delegatedAtShutdownBoundary.some(
-      (session) => !confirmedDelegatedSessionKeys.has(delegatedSessionKey(session))
-    )
-    if (delegatedWorkBlocksShutdown && hasUnconfirmedDelegatedWork) {
-      event.preventDefault()
-      quitConfirmed = false
-      confirmedSettingsInstallId = undefined
-      confirmedDelegatedSessionKeys = new Set()
-      clearApplicationShutdownTrigger()
-      if (confirmInFlight) return
-      confirmInFlight = true
-      const settingsInstallAtDelegatedConfirmation = activeSettingsInstallId()
-      void (async () => {
-        let choice: CloseConfirmChoice
-        try {
-          choice = await confirmResearchClose('quit', delegatedAtShutdownBoundary)
-        } finally {
-          confirmInFlight = false
-        }
-        if (choice === 'quit') {
-          requestConfirmedQuit(delegatedAtShutdownBoundary, settingsInstallAtDelegatedConfirmation)
-        }
-      })()
-      return
-    }
-
     // Confirmation gate: unless the user already confirmed (e.g. Windows X -> Quit), confirm the
     // quit. An empty active-session list with no unlisted work resolves 'quit' with no modal.
     if (!quitConfirmed && ordinaryQuit) {
@@ -423,28 +460,17 @@ export const installAppLifecycle = (
       if (confirmInFlight) return
       confirmInFlight = true
       void (async () => {
-        let settingsInstallAtConfirmation = activeSettingsInstallId()
-        let delegated: ActiveSessionInfo[] = []
+        const settingsInstallAtConfirmation = activeSettingsInstallId()
         let choice: CloseConfirmChoice
         try {
           choice = await confirmResearchClose('quit', deps.detectActiveSessions())
-          if (choice === 'quit') {
-            delegated = detectDelegatedWork()
-            if (delegated.length > 0) {
-              quitConfirmed = false
-              confirmedSettingsInstallId = undefined
-              settingsInstallAtConfirmation = activeSettingsInstallId()
-              choice = await confirmResearchClose('quit', delegated)
-              if (choice !== 'quit') return
-            }
-          }
         } finally {
           // app.quit() synchronously reenters before-quit. Release this confirmation first so a
           // changed-work warning can open, without an old finally clearing its new admission latch.
           confirmInFlight = false
         }
         if (choice === 'quit') {
-          requestConfirmedQuit(delegated, settingsInstallAtConfirmation)
+          requestConfirmedQuit(settingsInstallAtConfirmation)
           return
         }
         // Cancel with no tray and no surviving window would strand the app with no UI (no-tray
@@ -480,6 +506,7 @@ export const installAppLifecycle = (
       let shutdownAbortReason: SessionPersistenceFlushAbortReason | undefined
       let persistenceFailureNeedsConsent = false
       let backendFailure: unknown
+      let quitScopeChanged = false
       const flushRendererSessionPersistence = async (
         phase: 'renderer-session-preflight' | 'renderer-session-flush',
         timeoutMs: number
@@ -487,15 +514,27 @@ export const installAppLifecycle = (
         outcome: RendererSessionPersistenceFlushOutcome
         result: ShutdownStepOutcome
       }> => {
+        if (trigger === 'update' && deps.rendererPersistencePreparedForUpdate?.()) {
+          diagnostics?.phase(phase, { result: 'completed', preparedBeforeQuit: true })
+          return { outcome: 'completed', result: 'completed' }
+        }
         diagnostics?.phase(phase)
         try {
-          const outcome = (await deps.flushSessionPersistence(timeoutMs)) ?? 'completed'
+          const outcome =
+            (await awaitQuitStep(
+              deps.flushSessionPersistence(
+                Math.max(0, Math.min(timeoutMs, (shutdownDeadline ?? Infinity) - Date.now()))
+              ),
+              timeoutMs
+            )) ?? 'completed'
           const result = rendererStepOutcome(outcome)
           diagnostics?.phase(phase, { result })
           return { outcome, result }
         } catch (error) {
           diagnostics?.phase(phase, { result: 'failed', ...diagnosticErrorFields(error) })
-          return { outcome: 'send-failed', result: 'failed' }
+          return error instanceof BackendShutdownOutcomeError && error.outcome === 'timeout'
+            ? { outcome: 'timeout', result: 'timeout' }
+            : { outcome: 'send-failed', result: 'failed' }
         }
       }
       try {
@@ -526,9 +565,29 @@ export const installAppLifecycle = (
           return
         }
 
+        // Confirmation and preflight precede this budget. Every later wait, including the final
+        // renderer save, shares this absolute deadline; a refused save aborts and resets the attempt.
+        shutdownDeadline = Date.now() + (deps.shutdownTimeoutMs ?? LOCAL_SERVICE_STOP_BUDGET_MS)
+        deps.onShutdownProgress?.(true)
         diagnostics?.phase('usage-drain')
         try {
-          usageDrainResult = normalizeStepOutcome(await deps.prepareForQuit())
+          const preparation = await awaitQuitStep(
+            deps.prepareForQuit(shutdownDeadline),
+            Math.max(
+              0,
+              shutdownDeadline -
+                Date.now() -
+                Math.min(
+                  LOCAL_SERVICE_STOP_ESCALATION_MS + rendererFinalFlushTimeoutMs,
+                  (deps.shutdownTimeoutMs ?? LOCAL_SERVICE_STOP_BUDGET_MS) / 2
+                )
+            )
+          )
+          if (preparation === 'scope-changed') {
+            quitScopeChanged = true
+            return
+          }
+          usageDrainResult = normalizeStepOutcome(preparation)
           diagnostics?.phase('usage-drain', { result: usageDrainResult })
           if (deps.requireCleanBackendShutdown && usageDrainResult !== 'completed') {
             throw new BackendShutdownOutcomeError(
@@ -537,7 +596,13 @@ export const installAppLifecycle = (
           }
         } catch (error) {
           usageDrainResult = 'failed'
-          if (deps.requireCleanBackendShutdown) {
+          if (
+            deps.requireCleanBackendShutdown ||
+            (error &&
+              typeof error === 'object' &&
+              'code' in error &&
+              error.code === 'command-unavailable')
+          ) {
             backendFailure = error
             return
           }
@@ -577,11 +642,28 @@ export const installAppLifecycle = (
 
         diagnostics?.phase('backend-teardown')
         try {
-          backendTeardownResult = normalizeStepOutcome(await deps.shutdownBackends())
+          backendTeardownResult = normalizeStepOutcome(
+            await awaitQuitStep(deps.shutdownBackends(shutdownDeadline))
+          )
           diagnostics?.phase('backend-teardown', { result: backendTeardownResult })
+          if (deps.requireCleanBackendShutdown && backendTeardownResult !== 'completed') {
+            throw new BackendShutdownOutcomeError(
+              backendTeardownResult === 'timeout' ? 'timeout' : 'degraded'
+            )
+          }
         } catch (error) {
           backendTeardownResult = 'failed'
-          if (deps.requireCleanBackendShutdown) {
+          if (error instanceof QuitScopeChangedError) {
+            quitScopeChanged = true
+            return
+          }
+          if (
+            deps.requireCleanBackendShutdown ||
+            (error &&
+              typeof error === 'object' &&
+              'code' in error &&
+              error.code === 'command-unavailable')
+          ) {
             backendFailure = error
             return
           }
@@ -605,13 +687,23 @@ export const installAppLifecycle = (
         })
 
         if (deps.flushLogs) {
-          const result = await flushDiagnosticsWithTimeout(deps.flushLogs, logFlushTimeoutMs)
+          const result = await flushDiagnosticsWithTimeout(
+            deps.flushLogs,
+            Math.max(0, Math.min(logFlushTimeoutMs, (shutdownDeadline ?? Infinity) - Date.now()))
+          )
           if (result === 'timeout') deps.log?.warn('final log flush timed out')
         }
       } finally {
-        if (backendFailure || shutdownAbortReason || persistenceFailureNeedsConsent) {
+        deps.onShutdownProgress?.(false)
+        if (
+          quitScopeChanged ||
+          backendFailure ||
+          shutdownAbortReason ||
+          persistenceFailureNeedsConsent
+        ) {
+          shutdownDeadline = undefined
           try {
-            await deps.abortQuitPreparation(shutdownAbortReason)
+            await awaitQuitStep(deps.abortQuitPreparation(shutdownAbortReason))
           } catch (error) {
             try {
               deps.log?.error('quit preparation rollback failed', diagnosticErrorFields(error))
@@ -623,7 +715,13 @@ export const installAppLifecycle = (
           shutdownStarted = false
           quitConfirmed = false
           confirmedSettingsInstallId = undefined
-          if (systemShutdownRequested) {
+          if (quitScopeChanged) {
+            // Release the obsolete leave reservation before inspecting current impact and asking
+            // the ordinary quit confirmation. No task has been stopped by this attempt.
+            deps.quit()
+          } else if (trigger === 'system') {
+            await finishShutdown()
+          } else if (systemShutdownRequested) {
             // A preventable OS shutdown arrived after this ordinary attempt began. Do not restore an
             // interactive app: replay it with the already-latched system trigger so persistence is
             // best-effort and cannot cancel the OS-owned exit.
@@ -631,8 +729,9 @@ export const installAppLifecycle = (
           } else {
             clearApplicationShutdownTrigger()
             showMainWindow()
-            if (backendFailure) deps.onQuitError?.(backendFailure)
-            if (persistenceFailureNeedsConsent && !confirmInFlight) {
+            const disconnectedQuitHandled = ordinaryQuit && deps.handleDisconnectedQuit?.()
+            if (backendFailure && !disconnectedQuitHandled) deps.onQuitError?.(backendFailure)
+            if (persistenceFailureNeedsConsent && !disconnectedQuitHandled && !confirmInFlight) {
               confirmInFlight = true
               try {
                 let choice: CloseConfirmChoice
@@ -659,15 +758,7 @@ export const installAppLifecycle = (
             }
           }
         } else {
-          trayBox.current?.destroy()
-          shutdownFinished = true
-          try {
-            await deps.beforeExit?.()
-          } catch (error) {
-            deps.log?.error('application exit handoff failed', diagnosticErrorFields(error))
-          } finally {
-            deps.app.exit(0)
-          }
+          await finishShutdown()
         }
       }
     })()

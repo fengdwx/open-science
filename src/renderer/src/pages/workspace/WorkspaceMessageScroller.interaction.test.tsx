@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { createLiteratureTestRenderer } from '../../../../../test/renderer/literature'
 import {
   createInitialGrantedFoldersState,
   useGrantedFoldersStore
@@ -19,7 +20,7 @@ import { literatureItemInputSchema } from '@aipoch/literature-library/item'
 import { fireEvent, waitFor } from '@testing-library/react'
 import type { PropsWithChildren } from 'react'
 import { act, forwardRef, useCallback, useEffect } from 'react'
-import { createRoot, type Root } from 'react-dom/client'
+import type { Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ArtifactVersionDescriptor } from '../../../../shared/artifact-provenance'
 import type { JobSummary } from '../../../../shared/compute'
@@ -46,9 +47,17 @@ import { normalizeSessionFile } from '../../../../shared/session-persistence'
 import type { ActivePlanProjection } from '../../../../shared/session-plan/contract'
 import { createUploadVersionReference, type UploadedAttachment } from '../../../../shared/uploads'
 import { BookmarksProvider } from './bookmarks/BookmarksProvider'
-;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
-
 import type { ComposerDoc } from './composer/composer-doc'
+import { resetHistoricalArtifactDescriptorCache } from './WorkspaceArtifactVisibility'
+
+const { createRoot } = createLiteratureTestRenderer({
+  get api() {
+    return window.api
+  },
+  onRecovered: () => () => {}
+})
+
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 // pdfjs-dist references DOMMatrix at module load, which jsdom does not provide. This suite exercises
 // click/scroll behavior, not PDF rendering, so stub the library to keep the import graph loadable.
@@ -220,6 +229,7 @@ vi.mock('@/components/ui/message-scroller', () => {
     MessageScrollerItem: Item,
     MessageScrollerButton: Button,
     useMessageScroller: () => ({
+      stopAutoScroll: vi.fn(),
       scrollToEnd: scrollToEndMock,
       scrollToMessage: vi.fn(),
       scrollToStart: vi.fn()
@@ -413,6 +423,7 @@ describe('WorkspaceMessageScroller artifact click behavior', () => {
   let root: Root
 
   beforeEach(() => {
+    resetHistoricalArtifactDescriptorCache()
     scrollableMock.end = false
     upsertAndActivateItem.mockClear()
     openFileDialog.mockClear()
@@ -480,6 +491,204 @@ describe('WorkspaceMessageScroller artifact click behavior', () => {
     vi.unstubAllGlobals()
     container.remove()
   })
+
+  it('resolves current candidate states only in original local sessions across session switches', async () => {
+    const { WorkspaceMessageScroller } = await import('./WorkspaceMessageScroller')
+    const getCandidateStates = vi.fn(async () => ({
+      candidates: [{ candidateId: 'candidate-1', state: 'pending' }]
+    }))
+    const unsubscribe = vi.fn()
+    Object.assign(window.api, {
+      literature: { getCandidateStates, onChanged: vi.fn(() => unsubscribe) }
+    })
+    const original = createSession({
+      status: 'idle',
+      messages: [createMessage({ id: 'prompt-1' })],
+      activities: [
+        createActivity({
+          providerToolName: 'mcp__open-science-library__save_to_inbox',
+          title: 'save_to_inbox',
+          rawInput: { candidates: [{ item: { title: 'Paper' } }] },
+          rawOutput: { results: [{ kind: 'candidate', id: 'candidate-1', state: 'pending' }] }
+        })
+      ]
+    })
+    const origin = {
+      importId: 'import-1',
+      sourceProjectId: 'source-project',
+      sourceSessionId: 'source-session',
+      importedAt: 1,
+      manifestChecksum: 'a'.repeat(64)
+    }
+    root = createRoot(container)
+    const show = async (session: ChatSession): Promise<void> => {
+      await act(async () => {
+        root.render(
+          <WorkspaceMessageScroller activeSession={session} onSendEditedMessage={vi.fn()} />
+        )
+      })
+      for (const header of container.querySelectorAll<HTMLButtonElement>(
+        '[data-testid="tool-group-header"][aria-expanded="false"]'
+      )) {
+        await act(async () => header.click())
+      }
+    }
+    await show(original)
+    expect(getCandidateStates).toHaveBeenCalledWith({ candidateIds: ['candidate-1'] })
+    expect(container.textContent).toContain('Pending review: 1')
+    for (const session of [
+      { ...original, id: 'imported', packageOrigin: origin },
+      { ...original, id: 'forked', forkOrigin: origin }
+    ]) {
+      await show(session)
+      expect(container.textContent).toContain(
+        'Historical result; current library status is unavailable.'
+      )
+      expect(container.textContent).not.toContain('Pending review:')
+      expect(getCandidateStates).toHaveBeenCalledTimes(1)
+    }
+    expect(unsubscribe).toHaveBeenCalledTimes(
+      vi.mocked(window.api.literature.onChanged).mock.calls.length
+    )
+    await show({ ...original, id: 'another-local-session' })
+    expect(getCandidateStates).toHaveBeenCalledTimes(2)
+    expect(container.textContent).toContain('Pending review: 1')
+  })
+
+  it.each(['fork', 'nested-fork', 'branch', 'legacy-branch'])(
+    'keeps inherited literature cards historical and refreshes new %s activity',
+    async (kind) => {
+      const sourceSessionId = kind === 'nested-fork' ? 'ancestor-session' : 'source-session'
+      const { WorkspaceMessageScroller } = await import('./WorkspaceMessageScroller')
+      const getCandidateStates = vi.fn(async () => ({
+        candidates: [{ candidateId: 'new-candidate', state: 'pending' }]
+      }))
+      const unsubscribe = vi.fn()
+      Object.assign(window.api, {
+        literature: { getCandidateStates, onChanged: vi.fn(() => unsubscribe) }
+      })
+      const oldPrompt = createMessage({
+        id: 'inherited-prompt',
+        sortIndex: 0,
+        usageOrigin:
+          kind === 'legacy-branch'
+            ? undefined
+            : { sessionId: sourceSessionId, messageId: 'source-prompt' }
+      })
+      const newPrompt = createMessage({
+        id: 'local-prompt',
+        sortIndex: 2,
+        createdAt: oldPrompt.createdAt + 2
+      })
+      const graph = createLinearConversationGraph({
+        sessionId: 'forked-session',
+        messages: [oldPrompt, newPrompt],
+        createdAt: oldPrompt.createdAt,
+        updatedAt: newPrompt.createdAt
+      })
+      const activities = [oldPrompt, newPrompt].map((prompt, index) =>
+        createActivity({
+          id: `save-${index}`,
+          status: 'completed',
+          title: 'save_to_inbox',
+          providerToolName: 'mcp__open-science-library__save_to_inbox',
+          sortIndex: index * 2 + 1,
+          createdAt: prompt.createdAt + 1,
+          rawOutput: {
+            results: [
+              { kind: 'candidate', id: index ? 'new-candidate' : 'old-candidate', state: 'pending' }
+            ]
+          }
+        })
+      )
+      graph.activities = activities.map((activity, index) => ({
+        ...activity,
+        agentFrameId: graph.rootFrameId,
+        messageBranchId: graph.branches[0].id,
+        runtimeSegmentId: graph.runtimeSegments[0].id,
+        promptMessageId: [oldPrompt, newPrompt][index].id
+      }))
+      const session = createSession({
+        id: 'forked-session',
+        status: 'idle',
+        forkOrigin: {
+          importId: 'fork-import',
+          sourceProjectId: 'source-project',
+          sourceSessionId: 'source-session',
+          importedAt: 1,
+          manifestChecksum: 'a'.repeat(64)
+        },
+        forkHeadMessageId: oldPrompt.id,
+        conversationGraph: graph,
+        messages: [oldPrompt, newPrompt],
+        // Main's flat presentation omits graph ownership: use the canonical activity ID.
+        activities
+      })
+      if (kind.endsWith('branch')) {
+        session.forkOrigin = undefined
+        session.forkHeadMessageId = undefined
+        session.branchSource = { sessionId: 'source-session', headMessageId: oldPrompt.id }
+      }
+      root = createRoot(container)
+      const show = async (value: ChatSession): Promise<void> => {
+        await act(async () => {
+          root.render(
+            <WorkspaceMessageScroller activeSession={value} onSendEditedMessage={vi.fn()} />
+          )
+        })
+        for (const header of container.querySelectorAll<HTMLButtonElement>(
+          '[data-testid="tool-group-header"][aria-expanded="false"]'
+        )) {
+          await act(async () => header.click())
+        }
+      }
+      await show(session)
+      expect(getCandidateStates).toHaveBeenCalledExactlyOnceWith({
+        candidateIds: ['new-candidate']
+      })
+      expect(container.textContent).toContain(
+        'Historical result; current library status is unavailable.'
+      )
+      expect(container.textContent).toContain('Pending review: 1')
+      expect(container.querySelectorAll('[data-testid="literature-tool-card"]')).toHaveLength(2)
+
+      const historicalBranch = structuredClone(graph)
+      historicalBranch.branches.push({
+        ...historicalBranch.branches[0],
+        id: 'historical-branch',
+        headMessageId: oldPrompt.id
+      })
+      historicalBranch.frames[0].activeBranchId = 'historical-branch'
+      await show({
+        ...session,
+        conversationGraph: historicalBranch,
+        messages: [oldPrompt],
+        activities: session.activities?.slice(0, 1)
+      })
+      expect(container.textContent).not.toContain('Pending review:')
+      expect(getCandidateStates).toHaveBeenCalledTimes(1)
+      expect(unsubscribe).toHaveBeenCalledTimes(
+        vi.mocked(window.api.literature.onChanged).mock.calls.length
+      )
+      await show(session)
+      expect(getCandidateStates).toHaveBeenCalledTimes(2)
+      // An unresolvable activity must not acquire live identities from another card.
+      await show({ ...session, conversationGraph: { ...graph, activities: [] } })
+      expect(container.textContent).not.toContain('Pending review:')
+      expect(getCandidateStates).toHaveBeenCalledTimes(2)
+      await show({
+        ...session,
+        packageOrigin: {
+          importId: 'readonly-import',
+          sourceProjectId: 'source-project',
+          sourceSessionId: 'source-session',
+          importedAt: 1,
+          manifestChecksum: 'a'.repeat(64)
+        }
+      })
+      expect(getCandidateStates).toHaveBeenCalledTimes(2)
+    }
+  )
 
   it.each([false, true])(
     'opens Literature metadata with package=%s independently of bookmark scope',
@@ -655,6 +864,11 @@ describe('WorkspaceMessageScroller artifact click behavior', () => {
       )
     })
 
+    for (const header of container.querySelectorAll<HTMLButtonElement>(
+      '[data-testid="tool-group-header"][aria-expanded="false"]'
+    )) {
+      await act(async () => header.click())
+    }
     await waitFor(() => {
       const targetedRunIds = loadNotebookState.mock.calls.flatMap(
         ([request]) => request.runIds ?? []
@@ -3609,6 +3823,123 @@ describe('WorkspaceMessageScroller artifact click behavior', () => {
     ).toBe('true')
   })
 
+  it('pauses the first-message hide timer for focus and hover, then resumes after blur or leave', async () => {
+    vi.useFakeTimers()
+    const { WorkspaceMessageScroller } = await import('./WorkspaceMessageScroller')
+    root = createRoot(container)
+    await act(async () => {
+      root.render(
+        <WorkspaceMessageScroller
+          activeSession={createSession({
+            status: 'idle',
+            messages: [
+              createMessage({ id: 'prompt-1' }),
+              createMessage({ id: 'reply-1', role: 'agent' }),
+              createMessage({ id: 'prompt-2' }),
+              createMessage({ id: 'reply-2', role: 'agent' })
+            ]
+          })}
+          onSendEditedMessage={vi.fn()}
+        />
+      )
+    })
+    const viewport = container.querySelector<HTMLElement>(
+      '[data-testid="message-scroller-viewport"]'
+    )!
+    Object.defineProperties(viewport, {
+      clientHeight: { configurable: true, value: 400 },
+      scrollHeight: { configurable: true, value: 10_000 },
+      scrollTop: { configurable: true, writable: true, value: 0 }
+    })
+    const scrollTo = async (scrollTop: number): Promise<void> => {
+      viewport.scrollTop = scrollTop
+      await act(async () => viewport.dispatchEvent(new Event('scroll', { bubbles: true })))
+    }
+    await scrollTo(1200)
+    await scrollTo(1199)
+    const button = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Scroll to first message"]'
+    )!
+    expect(button.dataset.revealed).toBe('true')
+
+    await act(async () => button.focus())
+    expect(document.activeElement).toBe(button)
+    await scrollTo(1200)
+    await act(async () => vi.advanceTimersByTimeAsync(3500))
+    expect(button.dataset.revealed).toBe('true')
+    expect(button.getAttribute('aria-hidden')).toBe('false')
+    expect(button.tabIndex).toBe(0)
+    const activate = vi.fn()
+    button.addEventListener('click', activate)
+    await act(async () => button.click())
+    expect(activate).toHaveBeenCalledOnce()
+
+    await act(async () => button.blur())
+    await act(async () => vi.advanceTimersByTimeAsync(2999))
+    expect(button.dataset.revealed).toBe('true')
+    await act(async () => vi.advanceTimersByTimeAsync(1))
+    expect(button.dataset.revealed).toBe('false')
+    expect(button.getAttribute('aria-hidden')).toBe('true')
+    expect(button.tabIndex).toBe(-1)
+
+    await scrollTo(1198)
+    expect(button.dataset.revealed).toBe('true')
+    await act(async () => fireEvent.pointerEnter(button, { pointerType: 'mouse' }))
+    await act(async () => vi.advanceTimersByTimeAsync(3500))
+    expect(button.dataset.revealed).toBe('true')
+    await act(async () => fireEvent.pointerLeave(button, { pointerType: 'mouse' }))
+    await act(async () => vi.advanceTimersByTimeAsync(3000))
+    expect(button.dataset.revealed).toBe('false')
+  })
+
+  it('keeps the focused first-message control mounted at the top until blur', async () => {
+    vi.useFakeTimers()
+    const { WorkspaceMessageScroller } = await import('./WorkspaceMessageScroller')
+    root = createRoot(container)
+    await act(async () => {
+      root.render(
+        <WorkspaceMessageScroller
+          activeSession={createSession({
+            status: 'idle',
+            messages: [
+              createMessage({ id: 'prompt-1' }),
+              createMessage({ id: 'reply-1', role: 'agent' }),
+              createMessage({ id: 'prompt-2' }),
+              createMessage({ id: 'reply-2', role: 'agent' })
+            ]
+          })}
+          onSendEditedMessage={vi.fn()}
+        />
+      )
+    })
+    const viewport = container.querySelector<HTMLElement>(
+      '[data-testid="message-scroller-viewport"]'
+    )!
+    Object.defineProperties(viewport, {
+      clientHeight: { configurable: true, value: 400 },
+      scrollHeight: { configurable: true, value: 10_000 },
+      scrollTop: { configurable: true, writable: true, value: 1200 }
+    })
+    const scrollTo = async (scrollTop: number): Promise<void> => {
+      viewport.scrollTop = scrollTop
+      await act(async () => viewport.dispatchEvent(new Event('scroll', { bubbles: true })))
+    }
+    await scrollTo(1199)
+    const button = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Scroll to first message"]'
+    )!
+    await act(async () => button.focus())
+    expect(document.activeElement).toBe(button)
+
+    await scrollTo(0)
+    expect(button.isConnected).toBe(true)
+    expect(document.activeElement).toBe(button)
+    expect(button.dataset.revealed).toBe('true')
+
+    await act(async () => button.blur())
+    expect(container.querySelector('[aria-label="Scroll to first message"]')).toBeNull()
+  })
+
   it('coalesces resize-driven scroll eligibility updates into one deferred frame', async () => {
     vi.useFakeTimers()
     const resizeCallbacks: ResizeObserverCallback[] = []
@@ -4119,7 +4450,8 @@ describe('WorkspaceMessageScroller artifact click behavior', () => {
       projectId: 'default',
       fileId: 'managed-artifact-1',
       versionId: 'artifact-version-1',
-      mimeType: 'image/png'
+      mimeType: 'image/png',
+      imagePreview: true
     })
   })
 
@@ -4859,7 +5191,7 @@ describe('WorkspaceMessageScroller artifact click behavior', () => {
     ).toBeLessThanOrEqual(80)
   })
 
-  it('collapses only the selected contiguous segment of a named tool group', async () => {
+  it('expands only the selected contiguous segment of a named tool group', async () => {
     const { WorkspaceMessageScroller } = await import('./WorkspaceMessageScroller')
     const { projectActivityGroupStart, projectToolActivity } =
       await import('@/stores/session-store-run-activity-helpers')
@@ -4880,6 +5212,7 @@ describe('WorkspaceMessageScroller artifact click behavior', () => {
         title: id,
         status: 'completed',
         toolKind: 'read',
+        rawOutput: 'Searchable file content',
         timestamp: 1710000000100 + index,
         ...(index === 1
           ? {
@@ -4913,13 +5246,42 @@ describe('WorkspaceMessageScroller artifact click behavior', () => {
       ).filter((button) => button.textContent?.includes('Inspect sources'))
       expect(headings).toHaveLength(2)
       expect(headings.map((button) => button.getAttribute('aria-expanded'))).toEqual([
-        'true',
-        'true'
+        'false',
+        'false'
       ])
       await act(async () => headings[0].click())
       expect
         .soft(headings.map((button) => button.getAttribute('aria-expanded')))
-        .toEqual(['false', 'true'])
+        .toEqual(['true', 'false'])
+      await act(async () =>
+        root.render(
+          <WorkspaceMessageScroller activeSession={{ ...session }} onSendEditedMessage={vi.fn()} />
+        )
+      )
+      expect(headings.map((button) => button.getAttribute('aria-expanded'))).toEqual([
+        'true',
+        'false'
+      ])
+      expect(container.textContent).not.toContain('read-after')
+      await act(async () => showWindowFindListener?.())
+      expect(headings.map((button) => button.getAttribute('aria-expanded'))).toEqual([
+        'true',
+        'true'
+      ])
+      expect(container.textContent).toContain('read-after')
+      expect(announceWindowFindContentReady).toHaveBeenCalled()
+      // Clicking a forced-open group must not overwrite the pre-search expansion choice.
+      await act(async () => headings[1].click())
+      await act(async () => hideWindowFindListener?.())
+      expect(headings.map((button) => button.getAttribute('aria-expanded'))).toEqual([
+        'true',
+        'false'
+      ])
+      await act(async () => headings[0].click())
+      expect(headings.map((button) => button.getAttribute('aria-expanded'))).toEqual([
+        'false',
+        'false'
+      ])
       expect.soft(new Set(segments.map((item) => item.id)).size).toBe(2)
       expect.soft(errors.mock.calls.some((call) => call.join(' ').includes('same key'))).toBe(false)
     } finally {

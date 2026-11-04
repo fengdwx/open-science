@@ -1,10 +1,11 @@
+import { classifyFailure } from '../../../shared/failure/classify'
+import type { ClassifiedFailure } from '../../../shared/failure/contract'
 import { MAX_ACP_RUNTIME_EVENTS, sanitizeAcpContextWindowSample } from '../../../shared/acp'
 import type {
   AcpContextWindowSample,
   AcpModelCallUsage,
   AcpTurnTokenUsage
 } from '../../../shared/acp-usage-contract'
-import { isReportableRunFailure } from '../../../shared/run-error-classification'
 import type {
   PersistedActivityGroup,
   PersistedChatSession,
@@ -12,7 +13,10 @@ import type {
 } from '../../../shared/session-persistence'
 import { retainRecentSessionEventIds } from '../../../shared/session-persistence'
 import type { ChatMessage, ChatSession, ToolActivity } from './session-store-contract'
-import { projectSessionInteractionState } from './session-store-interaction-state'
+import {
+  projectLiveSessionInteractionState,
+  projectSessionInteractionState
+} from './session-store-interaction-state'
 import { synchronizeSessionGraph } from './session-store-message-graph-helpers'
 import {
   completeOpenActivities,
@@ -79,7 +83,7 @@ const settleConversationGraphSyncFailure = (
     error: input.runError
       ? `${input.runError}\n\n${CONVERSATION_GRAPH_SYNC_ERROR}`
       : CONVERSATION_GRAPH_SYNC_ERROR,
-    errorReportable: true,
+    failure: classifyFailure({ origin: 'operation', text: CONVERSATION_GRAPH_SYNC_ERROR }),
     messages: input.messages,
     activities: input.activities,
     activityGroups: input.activityGroups,
@@ -230,14 +234,32 @@ export const projectAgentPromptInFlight = (
       }
 }
 
-export const projectElicitationPending = (session: ChatSession, pending: boolean): ChatSession => {
+export const projectElicitationPending = (
+  session: ChatSession,
+  pending: boolean,
+  liveProjection?: 'writer' | 'observer'
+): ChatSession => {
+  if (liveProjection)
+    return projectLiveSessionInteractionState(
+      session,
+      { elicitation: pending },
+      liveProjection === 'observer'
+    )
   return projectSessionInteractionState(session, { elicitation: pending })
 }
 
 export const projectPermissionPending = (
   session: ChatSession,
-  rearmAuthority = false
+  rearmAuthority = false,
+  liveProjection?: 'writer' | 'observer'
 ): ChatSession => {
+  if (liveProjection) {
+    return projectLiveSessionInteractionState(
+      session,
+      { permission: true },
+      liveProjection === 'observer'
+    )
+  }
   const runtimeContext = session.runtimeContext
   const permission = runtimeContext?.permission
   if (rearmAuthority && (!runtimeContext || permission?.state !== 'continuing')) return session
@@ -256,8 +278,16 @@ export const projectPermissionPending = (
 export const projectPermissionCleared = (
   session: ChatSession,
   authority?: 'continuing' | 'settled',
-  requestId?: string
+  requestId?: string,
+  liveProjection?: 'writer' | 'observer'
 ): ChatSession => {
+  if (liveProjection) {
+    return projectLiveSessionInteractionState(
+      session,
+      { permission: false },
+      liveProjection === 'observer'
+    )
+  }
   const runtimeContext = session.runtimeContext
   const permission = runtimeContext?.permission
   if (
@@ -304,7 +334,7 @@ export const projectArtifactError = (
     ...session,
     status: 'error',
     error: `${retryable ? ARTIFACT_ERROR_PREFIX : TERMINAL_ARTIFACT_ERROR_PREFIX}: ${error}`,
-    errorReportable: true,
+    failure: classifyFailure({ origin: 'operation', text: error }),
     artifactErrorEventIds,
     updatedAt: Date.now()
   }
@@ -326,7 +356,7 @@ export const projectArtifactErrorCleared = (
     ...session,
     status: session.activeRun ? 'running' : 'idle',
     error: undefined,
-    errorReportable: undefined,
+    failure: undefined,
     artifactErrorEventIds: undefined,
     updatedAt: Date.now()
   }
@@ -381,7 +411,7 @@ export const projectFinishedRun = (
     ...CLEARED_AGENT_RUN_STATE,
     status: keepArtifactError ? 'error' : planAwaitingApproval ? 'waiting-plan-approval' : 'idle',
     error: keepArtifactError ? session.error : undefined,
-    errorReportable: keepArtifactError ? session.errorReportable : undefined,
+    failure: keepArtifactError ? session.failure : undefined,
     resumeRecovery: undefined,
     interrupted: undefined,
     messages,
@@ -396,7 +426,7 @@ export const projectFinishedRun = (
 export const projectFailedRun = (
   session: ChatSession,
   error: string,
-  reportable?: boolean,
+  failure?: ClassifiedFailure,
   promptMessageId = session.activeRun?.promptMessageId,
   contextWindowSample?: RunTerminalContextWindowSample
 ): ChatSession => {
@@ -435,9 +465,9 @@ export const projectFailedRun = (
     ...CLEARED_AGENT_RUN_STATE,
     status: planAwaitingApproval ? 'waiting-plan-approval' : 'error',
     error: planAwaitingApproval ? undefined : error,
-    errorReportable: planAwaitingApproval
+    failure: planAwaitingApproval
       ? undefined
-      : (reportable ?? isReportableRunFailure(error)),
+      : (failure ?? classifyFailure({ origin: 'operation', text: error })),
     messages,
     activities,
     activityGroups,
@@ -464,7 +494,7 @@ export const projectCompactionFailed = (session: ChatSession, error: string): Ch
         status: 'error',
         compacting: undefined,
         error,
-        errorReportable: false,
+        failure: classifyFailure({ origin: 'operation', text: error }),
         updatedAt: Date.now()
       }
     : session
@@ -542,7 +572,7 @@ export const projectInterruptedRun = (
     interrupted: planAwaitingApproval ? undefined : true,
     resumeRecovery: planAwaitingApproval ? undefined : resumeRecovery,
     error: planAwaitingApproval ? undefined : error,
-    errorReportable: undefined,
+    failure: undefined,
     messages,
     activities,
     activityGroups,

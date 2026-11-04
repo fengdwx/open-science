@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/explicit-function-return-type */
 import { OPS, Util } from 'pdfjs-dist/legacy/build/pdf.mjs'
+import { measuredSourceRanges } from './literature-pdf-source-segments.mjs'
 import {
   joinHorizontalTableRules,
   clusterTableRulePositions,
@@ -92,7 +93,7 @@ function closedCellParts(item, glyphs, first, scale, context, frames) {
 // Independent text operations can be joined into one PDF.js item. Observe their
 // explicit text/graphics positions only; the numeric splitter retains its own
 // eligibility rules and never uses this observation to infer a column.
-function positionedNativeGlyphs(operators) {
+function positionedNativeGlyphs(operators, observeGlyph) {
   const points = new Map(),
     stack = []
   let matrix = [1, 0, 0, 1, 0, 0],
@@ -130,7 +131,14 @@ function positionedNativeGlyphs(operators) {
       active = true
     } else if (op === OPS.endText) active = false
     else if (op === OPS.setTextMatrix) {
-      textMatrix = Array.from(args)
+      textMatrix = Array.from(
+        observeGlyph &&
+          args.length === 1 &&
+          (Array.isArray(args[0]) || ArrayBuffer.isView(args[0])) &&
+          args[0].length === 6
+          ? args[0]
+          : args
+      )
       x = y = lineX = lineY = 0
     } else if (op === OPS.moveText) move(args[0], args[1])
     else if (op === OPS.setLeadingMoveText) {
@@ -170,6 +178,17 @@ function positionedNativeGlyphs(operators) {
         const width = (glyph.width * size) / 1000
         const start = [x, y + rise],
           end = [x + width * hScale, y + rise]
+        observeGlyph?.({
+          operationIndex: run,
+          glyphIndex: index,
+          glyph,
+          active,
+          transform: [...transform],
+          size,
+          hScale,
+          start: [...start],
+          end: [...end]
+        })
         if (valid) {
           Util.applyTransform(start, transform)
           Util.applyTransform(end, transform)
@@ -555,7 +574,8 @@ export function splitPdfNumericRuns(content, operators, context) {
         (joined
           ? joined.slice(1)
           : (counted ?? [...item.str.matchAll(/\d+(?:\.\d+)?\s*\(\d+\/\d+\)/g)].map((m) => m[0])))
-      const parts = fragments.map((text) => {
+      const sourceRanges = measuredSourceRanges(item, fragments)
+      const parts = fragments.map((text, fragmentIndex) => {
         const count = Array.from(text.replace(/\s/gu, '')).length,
           a = glyphs[cursor],
           b = glyphs[cursor + count - 1]
@@ -565,6 +585,7 @@ export function splitPdfNumericRuns(content, operators, context) {
           str: text,
           // These fragments no longer own the complete original PDF text item.
           sourceItem: undefined,
+          sourceSegment: sourceRanges?.[fragmentIndex],
           width: (b.end - a.start) * scale,
           transform: [
             ...item.transform.slice(0, 4),
@@ -1023,6 +1044,18 @@ const reviewedSubsetSymbols = (font, name) => {
   )
     return new Map([[3, ['\uf0b3', '≥', 549]]])
   if (font.type !== 'Type1' || !Array.isArray(font.differences)) return undefined
+  // These legacy check/cross slots retain numeric encoding names. Match the
+  // native slot and advance below; ordinary numeral fonts remain unchanged.
+  if (
+    ['Dingbats', 'ZapfDingbats'].includes(name) &&
+    font.differences.length === 0 &&
+    font.defaultEncoding?.[51] === 'three' &&
+    font.defaultEncoding?.[55] === 'seven'
+  )
+    return new Map([
+      [51, ['3', '✓', 755]],
+      [55, ['7', '✗', 571]]
+    ])
   const matches = (length, entries) =>
     font.differences.length === length &&
     font.differences.filter(Boolean).length === entries.length &&
@@ -1381,6 +1414,7 @@ export async function repairPdfSymbolText(page, content, operators) {
     )
   operators ??= await page.getOperatorList()
   const mappings = new Map()
+  const isolatedDingbats = new Set()
   const fontStack = []
   let font
   for (let index = 0; index < operators.fnArray.length; index++) {
@@ -1393,6 +1427,7 @@ export async function repairPdfSymbolText(page, content, operators) {
       const fontInfo = page.commonObjs?.get(font) ?? {}
       const name = symbolFontName(fontInfo.name)
       const reviewed = reviewedSubsetSymbols(fontInfo, name)
+      if (reviewed && ['Dingbats', 'ZapfDingbats'].includes(name)) isolatedDingbats.add(font)
       // These legacy Pi subsets label mathematical outlines with Latin glyph
       // names. Require the complete observed encoding as well as each glyph's
       // original code, Unicode and width; other subsets remain untouched.
@@ -1634,8 +1669,21 @@ export async function repairPdfSymbolText(page, content, operators) {
         items: content.items.map((item) => {
           const map = mappings.get(item.fontName)
           if (!('str' in item) || !map) return item
+          // Match the Reader's isolated-run policy; a compound numeric string
+          // does not establish one check/cross mark per native text item.
+          if (isolatedDingbats.has(item.fontName) && !/^[37]$/u.test(item.str)) return item
           const str = [...item.str].map((char) => map.get(char) ?? char).join('')
-          return str === item.str ? item : { ...item, str, inlineSymbol: [...str].length === 1 }
+          if (str === item.str) return item
+          const canonicalSource =
+            isolatedDingbats.has(item.fontName) &&
+            item.sourceItem?.text === item.str &&
+            Number.isSafeInteger(item.sourceItem.pageNumber) &&
+            item.sourceItem.pageNumber > 0 &&
+            Number.isSafeInteger(item.sourceItem.index) &&
+            item.sourceItem.index >= 0
+              ? { sourceItem: { ...item.sourceItem, text: str } }
+              : {}
+          return { ...item, str, ...canonicalSource, inlineSymbol: [...str].length === 1 }
         })
       },
       operators,
@@ -1725,14 +1773,15 @@ export function removeClippedFormText(content, operators, originalContent = cont
   for (const [font, chars] of streams) {
     const text = chars.map((c) => c.char).join('')
     const source = original.get(font)
-    // PDF.js can omit an off-page suffix. A single clip for the entire font
-    // stream makes its item-to-clip assignment unambiguous even in that case.
+    // PDF.js can omit off-page prefixes and suffixes. A contiguous source
+    // substring still has unambiguous clip ownership when the entire font
+    // stream shares one clip; mixed clips require exact stream alignment.
     const uniformClip = chars[0]?.clip
     if (
       text !== source &&
       !(
         source &&
-        text.startsWith(source) &&
+        text.includes(source) &&
         uniformClip &&
         chars.every((c) => c.clip === uniformClip)
       )
@@ -2130,4 +2179,86 @@ export function repairSpacedTextOffsets(content, operators) {
       }
     })
   }
+}
+
+// Measurement only: retain original source/glyph objects and every whitespace
+// record. This neither creates Source authority nor changes numeric splitting.
+export function nativeWholeSourceGlyphObservations(content, operators) {
+  if (
+    !Array.isArray(content?.items) ||
+    !Array.isArray(operators?.fnArray) ||
+    !Array.isArray(operators?.argsArray) ||
+    operators.fnArray.length !== operators.argsArray.length ||
+    operators.fnArray.length > 100000 ||
+    content.items.length > 100000
+  )
+    return
+  const fonts = new Map(),
+    stack = []
+  let font
+  for (const [i, op] of operators.fnArray.entries()) {
+    const a = operators.argsArray[i]
+    if (op === OPS.save || op === OPS.paintFormXObjectBegin) stack.push(font)
+    else if (op === OPS.restore || op === OPS.paintFormXObjectEnd) {
+      if (!stack.length) return
+      font = stack.pop()
+    } else if (op === OPS.setFont) font = a?.[0]
+    else if (op === OPS.showText) {
+      if (typeof font !== 'string' || !Array.isArray(a?.[0])) return
+      fonts.set(i, font)
+    }
+  }
+  if (stack.length) return
+  const glyphs = [],
+    streams = new Map()
+  let invalid = false
+  positionedNativeGlyphs(operators, (g) => {
+    const name = fonts.get(g.operationIndex)
+    if (
+      !name ||
+      typeof g.glyph?.unicode !== 'string' ||
+      typeof g.glyph.fontChar !== 'string' ||
+      !Number.isFinite(g.glyph.width) ||
+      !g.active ||
+      ![...g.transform, ...g.start, ...g.end, g.size, g.hScale].every(Number.isFinite) ||
+      !(g.size > 0) ||
+      !(g.hScale > 0) ||
+      !(g.transform[0] * g.transform[3] - g.transform[1] * g.transform[2] > 0)
+    ) {
+      invalid = true
+      return
+    }
+    const observed = { ...g, fontName: name }
+    glyphs.push(observed)
+    if (!streams.has(name)) streams.set(name, [])
+    for (const char of Array.from(g.glyph.unicode).filter((c) => !/\s/u.test(c)))
+      streams.get(name).push({ char, observed })
+  })
+  if (invalid) return
+  const literal = new Map()
+  for (const r of content.items) {
+    if (!r || typeof r.str !== 'string' || typeof r.fontName !== 'string') return
+    literal.set(r.fontName, (literal.get(r.fontName) ?? '') + r.str.replace(/\s/gu, ''))
+  }
+  if (
+    [...streams].some(
+      ([name, stream]) => stream.map((g) => g.char).join('') !== (literal.get(name) ?? '')
+    ) ||
+    [...literal].some(([name, text]) => text && !streams.has(name))
+  )
+    return
+  const offsets = new Map(),
+    used = new Set(),
+    records = []
+  for (const [index, r] of content.items.entries()) {
+    const offset = offsets.get(r.fontName) ?? 0,
+      length = Array.from(r.str.replace(/\s/gu, '')).length,
+      local = (streams.get(r.fontName) ?? []).slice(offset, offset + length),
+      whole = [...new Set(local.map((g) => g.observed))]
+    offsets.set(r.fontName, offset + length)
+    if (local.length !== length || whole.some((g) => used.has(g))) return
+    for (const g of whole) used.add(g)
+    records.push({ index, source: r, glyphs: whole })
+  }
+  return { records, glyphs }
 }

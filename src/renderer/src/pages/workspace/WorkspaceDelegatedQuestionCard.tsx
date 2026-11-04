@@ -5,6 +5,7 @@ import { Check, ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
+import { ChoiceKindChip } from './ChoiceKindChip'
 import type { ElicitationResponse } from '../../../../shared/acp'
 import type {
   DelegatedQuestionAnswer,
@@ -132,10 +133,12 @@ const WorkspaceDelegatedQuestionCard = ({
     }
   }
 
-  const choose = (value: string, debounce = false): void => {
+  const choose = (value: string | string[], debounce = false): void => {
     const next = [
       ...answers.filter((answer) => answer.questionIndex !== questionIndex),
-      ...(value.trim() ? [{ questionIndex, value }] : [])
+      ...((Array.isArray(value) ? value.length > 0 : value.trim())
+        ? [{ questionIndex, value }]
+        : [])
     ].sort((left, right) => left.questionIndex - right.questionIndex)
     setAnswers(next)
     cancelScheduledDraft()
@@ -174,9 +177,12 @@ const WorkspaceDelegatedQuestionCard = ({
         {t('Asked by {{name}}', { name: request.sourceName })}
       </p>
       <div className="flex items-start justify-between gap-3">
-        <h3 className="min-w-0 flex-1 whitespace-pre-wrap text-base font-semibold">
-          {question.question}
-        </h3>
+        <div className="flex min-w-0 flex-1 items-start gap-2">
+          <ChoiceKindChip kind={question.kind} />
+          <h3 className="min-w-0 flex-1 whitespace-pre-wrap break-words text-base font-semibold">
+            {question.question}
+          </h3>
+        </div>
         <span className="shrink-0 text-xs text-text-300">
           {t('{{current}} of {{total}}', {
             current: questionIndex + 1,
@@ -184,9 +190,11 @@ const WorkspaceDelegatedQuestionCard = ({
           })}
         </span>
       </div>
-      <div className="mt-3">
+      <div className="mt-3 max-h-[min(24rem,50vh)] overflow-y-auto">
         {question.options.map((option, index) => {
-          const selected = currentAnswer === option.label
+          const selected = Array.isArray(currentAnswer)
+            ? currentAnswer.includes(option.label)
+            : currentAnswer === option.label
           return (
             <button
               key={option.label}
@@ -197,7 +205,18 @@ const WorkspaceDelegatedQuestionCard = ({
                 'flex w-full items-start gap-3 border-b border-border-200 px-3 py-3 text-left hover:bg-bg-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40',
                 selected && 'bg-bg-200'
               )}
-              onClick={() => choose(option.label)}
+              onClick={() => {
+                if (question.kind !== 'multi-select') return choose(option.label)
+                const previous = Array.isArray(currentAnswer) ? currentAnswer : []
+                const next = selected
+                  ? previous.filter((value) => value !== option.label)
+                  : [...previous, option.label]
+                choose(
+                  question.options
+                    .filter((candidate) => next.includes(candidate.label))
+                    .map((candidate) => candidate.label)
+                )
+              }}
             >
               <span
                 className={cn(
@@ -230,6 +249,7 @@ const WorkspaceDelegatedQuestionCard = ({
             rows={1}
             maxLength={4_000}
             value={
+              typeof currentAnswer === 'string' &&
               currentAnswer &&
               currentAnswer !== AGENT_DECIDES_ANSWER &&
               currentAnswer !== SKIPPED_ANSWER &&
@@ -239,7 +259,7 @@ const WorkspaceDelegatedQuestionCard = ({
             }
             className="min-h-9 flex-1 resize-none border-0 bg-transparent shadow-none focus-visible:ring-0"
             onChange={(event) => choose(event.currentTarget.value, true)}
-            onBlur={(event) => choose(event.currentTarget.value)}
+            onBlur={flushScheduledDraft}
           />
           <Button type="button" variant="ghost" onClick={() => choose(SKIPPED_ANSWER)}>
             {t('Skip')}

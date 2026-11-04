@@ -7,7 +7,9 @@ import { readFileWithinLimit } from './bounded-read.js'
 import {
   checkPdfStructureDecodingBudget,
   pdfTextRunsSchema,
-  pdfTableSourceItemsSchema
+  pdfTableSourceItemsSchema,
+  pdfNativeBodySchema,
+  pdfTableSourceSegmentSchema
 } from './result.js'
 import {
   parsePdfStructureResult,
@@ -39,12 +41,14 @@ const candidate = z.object({
   region: rect.optional(),
   thumbnail: z.string().optional(),
   caption,
-  issue: z.string().optional()
+  issue: z.string().optional(),
+  nativeBody: pdfNativeBodySchema.optional()
 })
 const rawNote = z.object({ text: z.string(), rect, page: z.number().int().positive().optional() })
 const rawTableData = z.object({
   sourceViewport: z.object({ width: z.number().positive(), height: z.number().positive() }),
   grid: z.array(z.array(z.string()).max(128)).max(256),
+  unreliableMathSourceItems: pdfTableSourceItemsSchema.optional(),
   cells: z
     .array(
       z.object({
@@ -55,6 +59,11 @@ const rawTableData = z.object({
         text: z.string(),
         textRuns: pdfTextRunsSchema.optional(),
         sourceItems: pdfTableSourceItemsSchema.optional(),
+        sourceSegments: z
+          .array(pdfTableSourceSegmentSchema.omit({ region: true }).extend({ rect }))
+          .min(1)
+          .max(8192)
+          .optional(),
         sourceRects: z.array(rect)
       })
     )
@@ -77,7 +86,9 @@ const rawSchema = z.object({
       rotation: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)])
     })
   ),
-  figures: z.array(candidate).max(128),
+  figures: z
+    .array(candidate.extend({ sourceItems: pdfTableSourceItemsSchema.optional() }))
+    .max(128),
   algorithms: z.array(candidate).max(32).default([]),
   tables: z
     .array(
@@ -112,7 +123,14 @@ function fitSourceMetadataBudget(input: unknown): unknown {
     return input
   } catch {
     const withoutOrigins: unknown = JSON.parse(
-      JSON.stringify(input, (key, value) => (key === 'sourceItems' ? undefined : value))
+      JSON.stringify(input, (key, value) =>
+        key === 'sourceItems' ||
+        key === 'sourceSegments' ||
+        key === 'nativeBody' ||
+        key === 'unreliableMathSourceItems'
+          ? undefined
+          : value
+      )
     )
     check(withoutOrigins)
     return withoutOrigins
@@ -237,6 +255,8 @@ export const readWorkerResult = async (
         kind,
         regions: [region(item.page, item.region)],
         thumbnailId: item.id,
+        ...('sourceItems' in item && item.sourceItems ? { sourceItems: item.sourceItems } : {}),
+        ...(item.nativeBody ? { nativeBody: item.nativeBody } : {}),
         ...(item.caption
           ? {
               caption: {
@@ -245,7 +265,7 @@ export const readWorkerResult = async (
               }
             }
           : {}),
-        issues: []
+        issues: item.issue ? [{ code: item.issue, detail: item.issue }] : []
       }
       const convertNote = (
         note: z.infer<typeof rawNote>
@@ -263,6 +283,9 @@ export const readWorkerResult = async (
         return {
           rowCount: data.grid.length,
           columnCount: data.grid[0].length,
+          ...(data.unreliableMathSourceItems
+            ? { unreliableMathSourceItems: data.unreliableMathSourceItems }
+            : {}),
           cells: data.cells.map((cell) => ({
             row: cell.row,
             column: cell.column,
@@ -271,6 +294,31 @@ export const readWorkerResult = async (
             text: cell.text,
             ...(cell.textRuns ? { textRuns: cell.textRuns } : {}),
             ...(cell.sourceItems ? { sourceItems: cell.sourceItems } : {}),
+            ...(cell.sourceSegments
+              ? {
+                  sourceSegments: cell.sourceSegments.map(({ rect: box, ...segment }) => {
+                    if (
+                      segment.pageNumber !== item.page ||
+                      box[0] < 0 ||
+                      box[1] < 0 ||
+                      box[2] > data.sourceViewport.width ||
+                      box[3] > data.sourceViewport.height ||
+                      box[2] <= box[0] ||
+                      box[3] <= box[1]
+                    )
+                      throw new Error('Invalid PDF worker source segment region.')
+                    return {
+                      ...segment,
+                      region: region(
+                        item.page,
+                        box,
+                        data.sourceViewport.width,
+                        data.sourceViewport.height
+                      )
+                    }
+                  })
+                }
+              : {}),
             regions: cell.sourceRects.map((box) =>
               region(item.page, box, data.sourceViewport.width, data.sourceViewport.height)
             )
@@ -290,9 +338,8 @@ export const readWorkerResult = async (
           table: convertTable(part)
         }))
         element.tableNotes = item.notes?.map(convertNote)
-        element.issues = element.tableParts.flatMap((part) =>
-          part.table.issues.map((issue) => ({ ...issue }))
-        )
+        // Each part owns its uncertainty. Copying it to the parent would turn
+        // a local conflict into a group-wide veto in downstream readers.
       } else if ('cells' in item) {
         element.issues = item.issues.map((code) => ({ code, detail: code }))
         if (item.captionIssue)

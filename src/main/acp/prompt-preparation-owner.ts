@@ -16,6 +16,7 @@ import {
 } from '@aipoch/diagnostics/node'
 import type { AcpPromptRequest } from '../../shared/acp'
 import type { ArtifactReference, FileReference } from '../../shared/artifacts'
+import type { ShellRuntimeBinding } from '../../shared/notebook'
 import { resolveFileTextBudget } from '../../shared/history-preamble'
 import type { NotebookPromptInput } from '../../shared/notebook'
 import { hasCurrentPageIntent, hasFullDocumentIntent } from '../../shared/pdf-preparation-scope'
@@ -29,6 +30,7 @@ import type {
   SessionEstimateInput
 } from './context-usage-tracker'
 import type { ImageInputCompatibilityPort } from './image-input-compatibility-port'
+import type { AcpClassificationImageLoader } from './classification-image-loader'
 import { buildLiteratureReferencePrompt } from './literature-reference-prompt'
 import type { AcpPromptContentOwner } from './prompt-content-owner'
 import type { AcpProviderModelCallUsage } from './provider-turn-adapter'
@@ -41,7 +43,9 @@ import { buildSessionReferencePrompt } from './session-reference-prompt'
 import { codeBuddySkillRuntimeRoot, type TurnSkillHandle } from './turn-skill-owner'
 
 const log = createLogger('acp-prompt-preparation-owner')
-type SelectBridgeSkills = NonNullable<ResolvedAgentBackend['responsesBridgeLease']>['selectSkills']
+type SelectBridgeSkills = NonNullable<
+  ResolvedAgentBackend['responsesTransportLease']
+>['selectSkills']
 type NotebookTurnInputs = Readonly<{
   projectId: string
   appSessionId: string
@@ -50,7 +54,9 @@ type NotebookTurnInputs = Readonly<{
   references: FileReference[]
 }>
 type AcpPromptPreparationOwnerOptions = Readonly<{
+  shellRuntimeBindingFor?: (sessionId: string) => ShellRuntimeBinding | undefined
   promptContent: Pick<AcpPromptContentOwner, 'prepare'>
+  classificationImages: Pick<AcpClassificationImageLoader, 'load'>
   imageInputCompatibility?: Pick<ImageInputCompatibilityPort, 'prepare'>
   presentation: Pick<
     AcpSessionPresentationPolicy,
@@ -290,6 +296,14 @@ class AcpPromptPreparationOwner {
                 text,
                 catalog,
                 signal: input.signal,
+                loadImages: async (signal) =>
+                  this.options.classificationImages.load({
+                    appSessionId: input.request.sessionId,
+                    projectId: input.projectId,
+                    currentImages: input.request.currentImages,
+                    currentUploads: input.request.attachments ?? [],
+                    signal
+                  }),
                 usageContext: { projectId: context.projectId, sessionId: context.sessionId },
                 observeUsage: (entry) => usage.push(entry)
               })
@@ -350,6 +364,9 @@ class AcpPromptPreparationOwner {
           ? {
               codebuddy: {
                 root: codeBuddySkillRuntimeRoot(input.backend.session.options),
+                ...(this.options.shellRuntimeBindingFor
+                  ? { shellRuntime: this.options.shellRuntimeBindingFor(input.request.sessionId) }
+                  : {}),
                 selectorAvailable: input.bridgeSkillsAvailable,
                 selectSkills,
                 signal: input.signal,

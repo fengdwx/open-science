@@ -15,7 +15,7 @@ import {
 // Legacy entries require no migration of their existing authorization contract.
 const registrations: Record<
   string,
-  'allow_once' | 'inner_authorization' | 'legacy' | 'operations'
+  'allow_once' | 'inner_authorization' | 'legacy' | 'operations' | 'review'
 > = {
   "artifacts/mcp-server.ts:'write_artifact_file'": 'allow_once',
   'literature/library-mcp-server.ts:LITERATURE_LIBRARY_SEARCH_TOOL_NAME': 'allow_once',
@@ -29,6 +29,11 @@ const registrations: Record<
   'literature/mcp-server.ts:LITERATURE_READ_DOCUMENT_TOOL_NAME': 'allow_once',
   "literature/mcp-server.ts:'list_pdf_elements'": 'allow_once',
   "literature/mcp-server.ts:'read_pdf_element'": 'allow_once',
+  // Reading annotations use the verified Literature identity; read-only calls skip the prompt,
+  // while create remains a one-call Auto approval.
+  "literature/mcp-server.ts:'list_pdf_annotations'": 'allow_once',
+  "literature/mcp-server.ts:'locate_pdf_annotation_target'": 'allow_once',
+  "literature/mcp-server.ts:'create_pdf_annotation'": 'allow_once',
   'notebook/mcp-server.ts:definition.name': 'operations',
   'reviewer/mcp-server.ts:REVIEWER_MCP_TOOLS.readTurn': 'legacy',
   'reviewer/mcp-server.ts:REVIEWER_MCP_TOOLS.queryExecutionLog': 'legacy',
@@ -48,6 +53,7 @@ const notebookOperations: Record<string, 'inner_authorization' | 'legacy' | 'ope
   bash_execute: 'legacy',
   request_network_access: 'inner_authorization',
   notebook_state: 'legacy',
+  list_authorized_directories: 'legacy',
   list_notebook_runtimes: 'legacy',
   notebook_bind_runtime: 'legacy',
   notebook_switch_runtime: 'legacy',
@@ -153,20 +159,31 @@ describe('Auto operation completeness against real tool registrations', () => {
     }
     expect({ definitions, notebookSchemas, sharedContracts }).toEqual({
       definitions: {
+        // Reviewed: 401 publication errors now explain recovery without dropping provenance.
+        // Strict inputs, allow-once disposition and owner-checked source access are unchanged.
         'artifacts/mcp-server.ts':
-          '6b43e2b69387c7310dee65d97674b94e608a349f987ef90d7dd5cee7ff675c7f',
+          'f44800f59957041e1004ce93a039e47a3c491f958fe429ef5b3fa49ae472b2f0',
         'literature/library-mcp-server.ts':
           'f6eddd996e4651c56586435e7c0845a437dd7d3b8c18dfe0ff634eb0e8bbefd6',
+        // Reviewed: linked-PDF reading order is resolved automatically from logical structure
+        // or layout, with OCR guidance and coverage presentation. Strict inputs, mounted-server checks and
+        // single-use authorization are unchanged.
         'literature/mcp-server.ts':
-          'd7baeae460b294940d198e2a16f701c399b7630da945f31226260f19decdae72',
+          '7d285b27718e63d53e028b873f6391da842f44acb118fd2c10b80963be5a71eb',
+        // Reviewed: Windows Bioconductor installer guidance, plus non-blank patterns on required
+        // ask_user_question strings that only narrow accepted inputs; handlers and Auto operation
+        // dispositions are unchanged.
         'notebook/mcp-server.ts':
-          'ad036e2da30658225b2526d3fabed33355ce189e9b1825c0fa86b22b021640af',
+          '1bf1a40a68e0bf5fe1fbc8eaf5e06891a0caaf7f710a89e801f8b9df1c2ee63a',
+        // Reviewed: generate_plan sends progress notifications while awaiting review; the handler
+        // call, its result and the Plan operation dispositions are unchanged.
         'session-plan/plan-mcp-server.ts':
-          'b32ac73d8a2655f556c50b067892eb4caa3940acdcae6df7d8475d81cf7b98d9',
+          'fd75f9cb577deef4abb70925b4d059497dca57a6a7d42d2d9826fb8bcdfd4d02',
         'skills/mcp-server.ts': '3064af8275f8026e9dbf84b445f3a5061d41619c523def579c4b759c0aac338b'
       },
       notebookSchemas: {
-        ask_user_question: 'f4a3e6c178ec5dc5fbbd9ef256a046f32565a58be8bc8fa263a9e642e789002a',
+        // Reviewed: required question and option label strings must contain non-whitespace.
+        ask_user_question: 'eaf58cc178cc28d01fd208393f67dc394f374b4dd80f822158942db8a3c48afb',
         background_run: '4198921bb3f61261431524f7e57c92d8713bfe5db49c360a30b66b3cc4e027fd',
         manage_environments: '15d33c6e75c14aaddad62bc062f714238ae7c87ab08976d77efd1f77e8641675',
         request_network_access: '6b5a49d73cc704691da193510764101bc5577b48bb7c0fa8bf99f1b29b500f95'

@@ -123,6 +123,53 @@ afterEach(async () => {
 })
 
 describe('notebook local RPC server', () => {
+  it('retries failed delegated lane cleanup without restoring its revoked capability', async () => {
+    const root = await createStorageRoot()
+    const service = new NotebookRuntimeService({
+      configRoot: root,
+      dataRoot: root,
+      projectId: 'project',
+      repository: new NotebookRunRepository(root)
+    })
+    const shutdown = vi.spyOn(service, 'shutdown').mockRejectedValueOnce(new Error('not reaped'))
+    const server = new NotebookLocalRpcServer(service, { transport: 'tcp' })
+    try {
+      const child = await server.issueDelegatedNotebookConnection({
+        projectId: 'project',
+        sessionId: 'session',
+        rootFrameId: 'root',
+        agentFrameId: 'child',
+        attemptId: 'attempt',
+        messageBranchId: 'branch',
+        runtimeSegmentId: 'segment',
+        promptMessageId: 'prompt',
+        workspaceCwd: root,
+        isAttemptWritable: () => true
+      })
+      await expect(child.revoke()).rejects.toThrow('not reaped')
+      await expect(child.revoke()).resolves.toBeUndefined()
+      expect(shutdown).toHaveBeenCalledTimes(2)
+      expect(shutdown.mock.calls[1][0]).toMatchObject({
+        sessionId: 'session',
+        delegatedWorkAttemptId: 'attempt',
+        provenanceContext: { agentFrameId: 'child' }
+      })
+      const response = await fetchLocalRpc(
+        child,
+        {
+          method: 'POST',
+          headers: { authorization: `Bearer ${child.token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ method: 'state', params: { sessionId: 'session' } })
+        },
+        'revoked delegated cleanup test'
+      )
+      expect(response.status).toBe(401)
+    } finally {
+      await server.close()
+      await service.shutdownAll()
+    }
+  })
+
   it('does not recreate a missing data root before empty-folder acceptance', async () => {
     const parentRoot = await createStorageRoot()
     const missingDataRoot = join(parentRoot, 'missing-data-root')
@@ -3760,7 +3807,8 @@ describe('notebook local RPC server', () => {
       ...artifactCapabilityBinding,
       sourceScope: { allowedImportRoots: roots, workspaceCwd: root }
     }
-    const token = server.issueArtifactRunCapability(binding)
+    let isOwnerActive = true
+    const token = server.issueArtifactRunCapability(binding, undefined, () => isOwnerActive)
     roots.push('/forged-after-issuance')
     const params = {
       ...artifactCapabilityBinding,
@@ -3788,11 +3836,17 @@ describe('notebook local RPC server', () => {
           agentName: 'Claude Code',
           messageBranchAncestry: [...artifactCapabilityBinding.messageBranchAncestry]
         }),
-        { allowedImportRoots: [root], workspaceCwd: root },
+        { allowedImportRoots: [root], workspaceCwd: root, grantedImportRoots: [] },
         expect.any(AbortSignal),
         expect.any(Function)
       )
       let drained = false
+      isOwnerActive = false
+      const closedOwnerResponse = await call()
+      expect(closedOwnerResponse.status).toBe(401)
+      expect(await closedOwnerResponse.json()).toEqual({
+        error: 'Artifact RPC capability is no longer active.'
+      })
       const drain = server.revokeArtifactRunCapability(token).then(() => {
         drained = true
       })

@@ -4,6 +4,12 @@ import { captionKind } from './literature-pdf-caption-group.mjs'
 import { createHash } from 'node:crypto'
 import { Path2D } from '@napi-rs/canvas'
 import { OPS, Util, version } from 'pdfjs-dist/legacy/build/pdf.mjs'
+import { nativeRecoveryGroupDepth } from './literature-pdf-native-figure-recovery-profile.mjs'
+import {
+  nativeRecordedGroupPaintEnvelopes,
+  bindNativeGroupPaintBudget
+} from './literature-pdf-render-bounds.mjs'
+import { nativeCompositingPaintSpan } from './literature-pdf-native-compositing-profile.mjs'
 import { nativeClosedRuleFrames } from './literature-pdf-figure-connectivity.mjs'
 
 // Locate small tables missed by the detector. The structure model still owns
@@ -156,15 +162,19 @@ export function findCaptionedNumericTableRegions(items, rules, detectedRects = [
 // Keep closed stroke rectangles separate from table-rule discovery: a path's
 // bounding box does not prove four edges. Explicit closed outlines and four
 // separately painted, connected sides establish frames after exact clipping.
-export function collectClosedFigureFrames(operators, viewport) {
+export function collectClosedFigureFrames(operators, viewport, paintEvidence, compositingProfile) {
+  const compositing = nativeCompositingPaintSpan(compositingProfile, operators, viewport)
+  if (compositingProfile !== undefined && !compositing) return []
   let transform = [1, 0, 0, 1, 0, 0],
     clip = [0, 0, viewport.width ?? Infinity, viewport.height ?? Infinity],
     pendingClip = false,
     lineWidth = 1,
+    lineCap = 0,
     solidStroke = true,
     strokeAlpha = 1,
     fillAlpha = 1
   const stack = [],
+    isolatedGroups = [],
     frames = [],
     sides = []
   const save = () =>
@@ -172,6 +182,7 @@ export function collectClosedFigureFrames(operators, viewport) {
       transform: [...transform],
       clip: clip && [...clip],
       lineWidth,
+      lineCap,
       solidStroke,
       strokeAlpha,
       fillAlpha
@@ -181,6 +192,7 @@ export function collectClosedFigureFrames(operators, viewport) {
     transform = state?.transform ?? [1, 0, 0, 1, 0, 0]
     clip = state ? state.clip : null
     lineWidth = state?.lineWidth ?? 1
+    lineCap = state?.lineCap ?? 0
     solidStroke = state?.solidStroke ?? true
     strokeAlpha = state?.strokeAlpha ?? 1
     fillAlpha = state ? state.fillAlpha : 1
@@ -217,14 +229,44 @@ export function collectClosedFigureFrames(operators, viewport) {
       Math.max(...points.map((p) => p[1]))
     ]
   }
+  let frameOperationIndex
   const addFrame = (rect, paintClip) => {
     if (
       paintClip &&
       rect.every((v, n) => (n < 2 ? v >= paintClip[n] - 1e-8 : v <= paintClip[n] + 1e-8))
-    )
+    ) {
       frames.push(rect)
+      paintEvidence?.frames?.set(frameOperationIndex, rect)
+    }
   }
   for (const [i, op] of operators.fnArray.entries()) {
+    if (compositing && i >= compositing.begin && i <= compositing.end) continue
+    frameOperationIndex = i
+    // Optional native ownership evidence observes the same transform/clip
+    // state as frame discovery. It does not change legacy frame selection.
+    if (paintEvidence && op === OPS.paintImageXObject) {
+      const matrix = Util.transform(viewport.transform, transform),
+        points = [
+          [0, 0],
+          [1, 0],
+          [1, 1],
+          [0, 1]
+        ]
+      for (const point of points) Util.applyTransform(point, matrix)
+      paintEvidence.images.push({ operationIndex: i, rect: intersectClip(rectangle(points)) })
+    }
+    if (paintEvidence?.paths && op === OPS.constructPath)
+      paintEvidence.paths.set(i, {
+        transform: [...transform],
+        clip: clip && [...clip],
+        lineWidth,
+        lineCap,
+        solidStroke,
+        strokeAlpha,
+        fillAlpha
+      })
+    if (paintEvidence && op === OPS.showText)
+      paintEvidence.texts.set(i, { transform: [...transform], clip: clip && [...clip] })
     const args = operators.argsArray[i],
       // PDF.js paints the current path against the old clip before consumePath
       // applies a pending clip. Keep that paint domain even when the new clip
@@ -246,6 +288,61 @@ export function collectClosedFigureFrames(operators, viewport) {
         for (const point of points) Util.applyTransform(point, matrix)
         clip = intersectClip(rectangle(points))
       }
+    }
+    // The symbol-axis observer separately closes every isolated group. Legacy
+    // frame callers neither request this state nor admit new operators.
+    if (paintEvidence?.isolatedGroups && op === OPS.beginGroup) {
+      const group = args?.[0],
+        matrix = Util.transform(viewport.transform, transform)
+      if (
+        pendingClip ||
+        isolatedGroups.length >= nativeRecoveryGroupDepth(paintEvidence) ||
+        !group ||
+        Object.keys(group).sort().join(',') !== 'bbox,isolated,knockout,matrix,smask' ||
+        group.matrix !== null ||
+        group.smask !== null ||
+        group.isolated !== true ||
+        group.knockout !== false ||
+        !Array.isArray(group.bbox) ||
+        group.bbox.length !== 4 ||
+        !group.bbox.every(Number.isFinite) ||
+        group.bbox[0] >= group.bbox[2] ||
+        group.bbox[1] >= group.bbox[3] ||
+        fillAlpha !== 1 ||
+        strokeAlpha !== 1 ||
+        !clip ||
+        !matrix.every(Number.isFinite)
+      ) {
+        paintEvidence.invalidIsolatedGroups = true
+        return []
+      }
+      const points = [
+        [group.bbox[0], group.bbox[1]],
+        [group.bbox[2], group.bbox[1]],
+        [group.bbox[2], group.bbox[3]],
+        [group.bbox[0], group.bbox[3]]
+      ]
+      for (const point of points) Util.applyTransform(point, matrix)
+      const rect = rectangle(points)
+      if (!rect) {
+        paintEvidence.invalidIsolatedGroups = true
+        return []
+      }
+      save()
+      clip = intersectClip(rect)
+      fillAlpha = strokeAlpha = 1
+      isolatedGroups.push({ begin: i, group })
+      paintEvidence.isolatedGroups.set(i, { begin: i, rect, clip: clip && [...clip] })
+      continue
+    } else if (paintEvidence?.isolatedGroups && op === OPS.endGroup) {
+      const previous = isolatedGroups.pop()
+      if (!previous || JSON.stringify(previous.group) !== JSON.stringify(args?.[0])) {
+        paintEvidence.invalidIsolatedGroups = true
+        return []
+      }
+      paintEvidence.isolatedGroups.get(previous.begin).end = i
+      restore()
+      continue
     }
     if (op === OPS.save) save()
     else if (op === OPS.restore || op === OPS.paintFormXObjectEnd) restore()
@@ -270,10 +367,12 @@ export function collectClosedFigureFrames(operators, viewport) {
         clip = intersectClip(rectangle(points))
       }
     } else if (op === OPS.setLineWidth) lineWidth = args[0]
+    else if (op === OPS.setLineCap) lineCap = args[0]
     else if (op === OPS.setDash) solidStroke = Array.isArray(args[0]) && args[0].length === 0
     else if (op === OPS.setGState) {
       for (const [key, value] of args?.[0] ?? []) {
         if (key === 'LW') lineWidth = value
+        if (key === 'LC') lineCap = value
         if (key === 'D') solidStroke = Array.isArray(value?.[0]) && value[0].length === 0
         if (key === 'CA') strokeAlpha = value
         if (key === 'ca') fillAlpha = value
@@ -281,7 +380,14 @@ export function collectClosedFigureFrames(operators, viewport) {
     } else if (op === OPS.clip || op === OPS.eoClip) pendingClip = true
     else if (
       op === OPS.constructPath &&
-      [OPS.stroke, OPS.fill, OPS.fillStroke, OPS.eoFillStroke].includes(args[0]) &&
+      [
+        OPS.stroke,
+        OPS.fill,
+        OPS.fillStroke,
+        OPS.eoFillStroke,
+        OPS.closeFillStroke,
+        OPS.closeEOFillStroke
+      ].includes(args[0]) &&
       args[1]?.length === 1
     ) {
       const nativePath = args[1][0]
@@ -291,11 +397,18 @@ export function collectClosedFigureFrames(operators, viewport) {
       )
         continue
       let path = Array.from(nativePath)
+      // An ownership observer may normalize consecutive unpainted moves before
+      // the existing closed-frame validator. Legacy frame selection is unchanged.
+      if (paintEvidence?.frames) while (path[0] === 0 && path[3] === 0) path = path.slice(3)
       if (args[0] !== OPS.fill && (!(strokeAlpha > 0) || !Number.isFinite(strokeAlpha))) continue
       // A fill-and-stroke operation really paints its closed perimeter. A
       // fill alone still requires the separate hollow-contour proof below.
+      // Closing paint variants use the same validators, which require an
+      // explicit closePath. The paint opcode alone does not prove a contour.
       if (
-        [OPS.fillStroke, OPS.eoFillStroke].includes(args[0]) &&
+        [OPS.fillStroke, OPS.eoFillStroke, OPS.closeFillStroke, OPS.closeEOFillStroke].includes(
+          args[0]
+        ) &&
         (!(lineWidth > 0) || !Number.isFinite(lineWidth))
       )
         continue
@@ -429,11 +542,10 @@ export function collectClosedFigureFrames(operators, viewport) {
       // Rotate its exact commands to the corner-first form below; a trailing
       // move without a painted segment contributes no edge or frame evidence.
       if (
-        path.length === 47 &&
+        (path.length === 44 || (path.length === 47 && path[44] === 0)) &&
         path[0] === 0 &&
         path[3] === 1 &&
         path[43] === 4 &&
-        path[44] === 0 &&
         [6, 16, 26, 36].every((n) => path[n] === 2) &&
         [13, 23, 33].every((n) => path[n] === 1) &&
         path.every(Number.isFinite) &&
@@ -1202,6 +1314,10 @@ export function excludeRepeatedMarginContent(pages) {
         line.height > 0 &&
         rect[3] <= (authorHeader(line.text) || runningSeparator(page, line) ? 0.1 : 0.07) &&
         rect[3] - rect[1] <= 0.03
+      // The separator depends only on this native row and the unchanged page.
+      // Resolve it outside the overlap scan, including author-shaped headers
+      // whose short-circuited margin check did not need a separator lookup.
+      const separator = runningHeader ? runningSeparator(page, line) : undefined
       if (
         !(verticalNotice || runningHeader) ||
         (page.graphicsBounds ?? []).some((graphic) => {
@@ -1210,7 +1326,7 @@ export function excludeRepeatedMarginContent(pages) {
             // A page background/border path is not evidence that a repeated
             // running header is a figure label. Real images remain protected.
             !(runningHeader && kind === 'path' && r[2] - r[0] >= 0.95 && r[3] - r[1] >= 0.95) &&
-            !(runningHeader && graphic === runningSeparator(page, line)) &&
+            !(runningHeader && graphic === separator) &&
             // Quantized separator strokes can touch the top of the header's
             // font box. A long thin rule is not an enclosing body graphic.
             !(
@@ -2111,6 +2227,7 @@ export function collectGraphicsBounds(renderTask, boxes) {
   const transforms = [],
     viewport = renderTask._internalRenderTask.params?.viewport
   const envelopeContext = imageEnvelopeRenderContext(renderTask._internalRenderTask, operators)
+  const groupClips = nativeRecordedGroupPaintEnvelopes(renderTask)
   let invalidGraphicsBounds = 0
   for (const [index, operation] of operators.fnArray.entries()) {
     const args = operators.argsArray[index]
@@ -2136,14 +2253,14 @@ export function collectGraphicsBounds(renderTask, boxes) {
       boxes.maxX(index),
       boxes.maxY(index)
     ]
-    if (
-      !normalizedRect.every(Number.isFinite) ||
-      normalizedRect[2] <= normalizedRect[0] ||
-      normalizedRect[3] <= normalizedRect[1]
-    ) {
+    if (!normalizedRect.every(Number.isFinite)) {
       invalidGraphicsBounds++
       continue
     }
+    // PDF.js can record a finite empty intersection when paint lies outside
+    // its active clip. It contributes no visible ink; unlike unknown bounds,
+    // it cannot invalidate the other recorded figure geometry on the page.
+    if (normalizedRect[2] <= normalizedRect[0] || normalizedRect[3] <= normalizedRect[1]) continue
     // Compare decoded pixels, not per-page object IDs or bounding boxes. Hash
     // decoded images within a bounded budget, including manuscript watermarks.
     let imageHash, paintedNormalizedRect, imageEnvelopeNormalizedRect
@@ -2211,23 +2328,58 @@ export function collectGraphicsBounds(renderTask, boxes) {
     )
       imageMasks.add(graphic)
   }
-  return {
-    graphicsBounds: graphicsBounds.filter((graphic) => {
-      if (!imageMasks.has(graphic)) return true
-      const r = graphic.normalizedRect
-      // Thin mask strips are page decoration; near-identical image masks often
-      // repaint an existing figure and must not change its ownership.
-      if (r[2] - r[0] < 0.05 || r[3] - r[1] < 0.05) return false
-      return !graphicsBounds.some((other) => {
-        if (imageMasks.has(other)) return false
-        const b = other.normalizedRect
-        const intersection =
-          Math.max(0, Math.min(r[2], b[2]) - Math.max(r[0], b[0])) *
-          Math.max(0, Math.min(r[3], b[3]) - Math.max(r[1], b[1]))
-        const union = (r[2] - r[0]) * (r[3] - r[1]) + (b[2] - b[0]) * (b[3] - b[1]) - intersection
-        return intersection / union > 0.9
+  const clipped = groupClips?.current()
+    ? graphicsBounds.flatMap((graphic) => {
+        const clip = groupClips.clips.get(graphic.operationIndex)
+        if (!clip) return [graphic]
+        const r = graphic.normalizedRect,
+          normalizedRect = [
+            Math.max(r[0], clip[0]),
+            Math.max(r[1], clip[1]),
+            Math.min(r[2], clip[2]),
+            Math.min(r[3], clip[3])
+          ]
+        if (normalizedRect[2] <= normalizedRect[0] || normalizedRect[3] <= normalizedRect[1])
+          return []
+        const value = { ...graphic, normalizedRect }
+        for (const key of ['paintedNormalizedRect', 'imageEnvelopeNormalizedRect'])
+          if (
+            value[key] &&
+            !value[key].every((v, i) => (i < 2 ? v >= normalizedRect[i] : v <= normalizedRect[i]))
+          )
+            delete value[key]
+        if (imageMasks.has(graphic)) imageMasks.add(value)
+        return [value]
       })
-    }),
+    : graphicsBounds
+  const retainGraphic = (graphic) => {
+    if (!imageMasks.has(graphic)) return true
+    const r = graphic.normalizedRect
+    // Thin mask strips are page decoration; near-identical image masks often
+    // repaint an existing figure and must not change its ownership.
+    if (r[2] - r[0] < 0.05 || r[3] - r[1] < 0.05) return false
+    return !graphicsBounds.some((other) => {
+      if (imageMasks.has(other)) return false
+      const b = other.normalizedRect
+      const intersection =
+        Math.max(0, Math.min(r[2], b[2]) - Math.max(r[0], b[0])) *
+        Math.max(0, Math.min(r[3], b[3]) - Math.max(r[1], b[1]))
+      const union = (r[2] - r[0]) * (r[3] - r[1]) + (b[2] - b[0]) * (b[3] - b[1]) - intersection
+      return intersection / union > 0.9
+    })
+  }
+  const coarse = graphicsBounds.filter(retainGraphic),
+    retainedMaskOperations = new Set(
+      coarse.filter((graphic) => imageMasks.has(graphic)).map((graphic) => graphic.operationIndex)
+    ),
+    visible = clipped.filter(
+      (graphic) =>
+        retainGraphic(graphic) &&
+        (!imageMasks.has(graphic) || retainedMaskOperations.has(graphic.operationIndex))
+    )
+  return {
+    graphicsBounds:
+      groupClips && !bindNativeGroupPaintBudget(renderTask, coarse, visible) ? coarse : visible,
     invalidGraphicsBounds
   }
 }

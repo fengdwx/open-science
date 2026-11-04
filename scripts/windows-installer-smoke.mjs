@@ -434,10 +434,17 @@ const waitForShutdownExit = (
     )
   })
 
-const packagedResourcePaths = (installDirectory, { includeWslPreview = true } = {}) => [
+const packagedResourcePaths = (
+  installDirectory,
+  { includeWslPreview = true, legacyMicromamba = false } = {}
+) => [
   join(installDirectory, APP_EXECUTABLE),
   join(installDirectory, 'resources', 'app.asar'),
-  join(installDirectory, 'resources', 'micromamba.exe'),
+  ...(legacyMicromamba
+    ? [join(installDirectory, 'resources', 'micromamba.exe')]
+    : ['micromamba.exe', 'micromamba-compat.exe'].map((name) =>
+        join(installDirectory, 'resources', 'backend', 'resources', name)
+      )),
   ...(includeWslPreview
     ? [join(installDirectory, 'resources', 'notebook-network-sandbox', 'wsl2', 'manifest.json')]
     : []),
@@ -869,10 +876,21 @@ const removeWslCommandTempEvidence = async ({ root, receipt }) => {
   await rm(receipt, { force: true })
 }
 
-const assertPackagedResources = async (installDirectory, { certifyWslPreview = true } = {}) => {
-  for (const path of packagedResourcePaths(installDirectory, {
-    includeWslPreview: certifyWslPreview
-  })) {
+const assertPackagedResources = async (
+  installDirectory,
+  { certifyWslPreview = true, allowLegacyMicromamba = false } = {}
+) => {
+  // Only previous/rollback certification may inspect installers released before backend staging.
+  const legacyMicromamba =
+    allowLegacyMicromamba &&
+    !(await pathExists(
+      join(installDirectory, 'resources', 'backend', 'resources', 'micromamba.exe')
+    ))
+  const paths = packagedResourcePaths(installDirectory, {
+    includeWslPreview: certifyWslPreview,
+    legacyMicromamba
+  })
+  for (const path of paths) {
     if (!(await pathExists(path))) throw new Error(`Packaged Windows resource is missing: ${path}`)
   }
   const prismaRoot = join(installDirectory, 'resources', 'backend', 'resources', 'prisma-client')
@@ -883,7 +901,7 @@ const assertPackagedResources = async (installDirectory, { certifyWslPreview = t
   if (nativeEngines.length !== 1 || nativeEngines[0] !== 'query_engine-windows.dll.node') {
     throw new Error(`Packaged Windows must contain exactly one Prisma engine in ${prismaRoot}.`)
   }
-  if (!certifyWslPreview) return
+  if (!certifyWslPreview) return paths[2]
   const wslManifest = JSON.parse(
     await readFile(
       join(installDirectory, 'resources', 'notebook-network-sandbox', 'wsl2', 'manifest.json'),
@@ -906,6 +924,7 @@ const assertPackagedResources = async (installDirectory, { certifyWslPreview = t
   if (!isDeepStrictEqual(wslManifest, expectedWslManifest)) {
     throw new Error('Packaged Windows WSL2 sandbox assets are missing or version-mismatched.')
   }
+  return paths[2]
 }
 
 const upgradeSentinelPath = (configRoot, sentinelName) => join(configRoot, sentinelName)
@@ -979,6 +998,23 @@ const createUpgradeProfileGuard = (
   return { cleanup, shouldExpectDowngradeBlock: () => expectDowngradeBlock, verifyCycle }
 }
 
+// The Node backend logs independently of Electron stdout. Preserve its startup evidence before
+// the disposable profile is removed, without copying credentials, databases, or service tokens.
+const captureStartupLogs = async (configRoots, outputDirectory) => {
+  await mkdir(outputDirectory, { recursive: true })
+  const captured = []
+  for (const [index, root] of [...new Set(configRoots.filter(Boolean))].entries()) {
+    const target = join(outputDirectory, `backend-${index}.log`)
+    try {
+      await copyFile(join(root, 'logs', 'main.log'), target)
+      captured.push(target)
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error
+    }
+  }
+  return captured
+}
+
 const launchAndProbe = async ({
   installDirectory,
   expectedVersion,
@@ -1037,6 +1073,14 @@ const launchAndProbe = async ({
     if (onSqliteVersion) onSqliteVersion(await readDesktopSqliteVersion(configRoot, child.pid))
     return configRoot
   } catch (error) {
+    try {
+      await captureStartupLogs(
+        [env.OPEN_SCIENCE_E2E_STORAGE_ROOT, ...(legacyConfigRoots ?? [])],
+        resolve('test-results', 'windows-installer-smoke', randomUUID())
+      )
+    } catch (captureError) {
+      console.warn('Could not capture installed backend startup logs:', captureError.code)
+    }
     await terminateProcessTree(child)
     const processOutput = output().trim()
     if (error instanceof Error && processOutput && !error.message.includes(processOutput)) {
@@ -1219,10 +1263,11 @@ const installAndProbe = async ({
   if (!reuseInstallation) {
     await installApplication(installer, installDirectory, env)
   }
-  await assertPackagedResources(installDirectory, {
-    certifyWslPreview: phase === 'current' || phase === 'restart'
+  const micromamba = await assertPackagedResources(installDirectory, {
+    certifyWslPreview: phase === 'current' || phase === 'restart',
+    allowLegacyMicromamba: phase === 'previous' || phase === 'rollback'
   })
-  await runProcess(join(installDirectory, 'resources', 'micromamba.exe'), ['--version'], { env })
+  await runProcess(micromamba, ['--version'], { env })
   if (phase === 'current')
     await runPackagedLocalRpcSmoke({ installDirectory, env, artifactRpcContract })
   return launchAndProbe({
@@ -1263,10 +1308,11 @@ const installOverRunningApp = async ({
     throw error
   }
 
-  await assertPackagedResources(installDirectory, {
-    certifyWslPreview: phase === 'current' || phase === 'restart'
+  const micromamba = await assertPackagedResources(installDirectory, {
+    certifyWslPreview: phase === 'current' || phase === 'restart',
+    allowLegacyMicromamba: phase === 'previous' || phase === 'rollback'
   })
-  await runProcess(join(installDirectory, 'resources', 'micromamba.exe'), ['--version'], { env })
+  await runProcess(micromamba, ['--version'], { env })
   if (phase === 'current')
     await runPackagedLocalRpcSmoke({ installDirectory, env, artifactRpcContract })
   if (!launchInstalledApp) return undefined
@@ -1441,17 +1487,20 @@ const drillOrphanedUninstallerLock = async ({ installer, installDirectory, env }
 }
 
 const terminateDirectoryProcesses = async (directory, run = runProcess) => {
-  const root = `${directory.replace(/[\\/]+$/u, '')}\\`
+  const resolvedDirectory = win32.resolve(directory)
+  if (!win32.isAbsolute(directory) || resolvedDirectory === win32.parse(resolvedDirectory).root)
+    throw new Error('Process cleanup requires an absolute directory below a volume root.')
+  const root = `${resolvedDirectory.replace(/[\\/]+$/u, '')}\\`
+  const encodedRoot = Buffer.from(root, 'utf8').toString('base64')
   await run(
     'powershell.exe',
     [
       '-NoProfile',
       '-NonInteractive',
       '-Command',
-      "$root = $args[0]; Get-CimInstance -ClassName Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($root, 'CurrentCultureIgnoreCase') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
-      root
+      `$ErrorActionPreference = 'Stop'; $root = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedRoot}')); Get-CimInstance -ClassName Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($root, [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`
     ],
-    { allowNonZero: true }
+    {}
   )
 }
 
@@ -1898,6 +1947,7 @@ export {
   assertPackagedResources,
   assertUpgradeProfilePreserved,
   buildSmokePlan,
+  captureStartupLogs,
   cleanupSmokeRoot,
   cleanupOwnedSmokeRegistrations,
   cleanupSmokeRegistrations,

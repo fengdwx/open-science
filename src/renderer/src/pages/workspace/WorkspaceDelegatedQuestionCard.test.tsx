@@ -34,6 +34,113 @@ afterEach(() => {
 })
 
 describe('WorkspaceDelegatedQuestionCard', () => {
+  it('defaults legacy questions to single select and updates the chip when advancing to multi select', async () => {
+    render(
+      <WorkspaceDelegatedQuestionCard
+        projectId="project-1"
+        sessionId="session-1"
+        request={{
+          ...request,
+          questions: [request.questions[0], { ...request.questions[1], kind: 'multi-select' }]
+        }}
+        onRespond={async () => undefined}
+      />
+    )
+    expect(screen.getByTestId('choice-kind-chip').textContent).toBe('Single select')
+    fireEvent.click(screen.getByRole('button', { name: 'Strict' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    expect(screen.getByTestId('choice-kind-chip').textContent).toBe('Multi select')
+    fireEvent.click(screen.getByRole('button', { name: '30 days' }))
+    fireEvent.click(screen.getByRole('button', { name: '90 days' }))
+    expect(screen.getByRole('button', { name: '30 days' }).getAttribute('aria-pressed')).toBe(
+      'true'
+    )
+    expect(screen.getByRole('button', { name: '90 days' }).getAttribute('aria-pressed')).toBe(
+      'true'
+    )
+  })
+
+  it('toggles all 16 choices, restores drafts and submits an ordered array', async () => {
+    const onRespond = vi.fn<(response: ElicitationResponse) => Promise<void>>(async () => undefined)
+    const labels = Array.from({ length: 16 }, (_, i) => `Option ${i + 1}`)
+    render(
+      <WorkspaceDelegatedQuestionCard
+        projectId="project-1"
+        sessionId="session-1"
+        request={{
+          ...request,
+          questions: [
+            {
+              question: 'Which outputs?',
+              kind: 'multi-select',
+              options: labels.map((label) => ({ label }))
+            }
+          ],
+          draftAnswers: [{ questionIndex: 0, value: [labels[0]] }]
+        }}
+        onRespond={onRespond}
+      />
+    )
+    expect(screen.getByRole('button', { name: labels[0] }).getAttribute('aria-pressed')).toBe(
+      'true'
+    )
+    fireEvent.click(screen.getByRole('button', { name: labels[15] }))
+    fireEvent.click(screen.getByRole('button', { name: labels[1] }))
+    fireEvent.click(screen.getByRole('button', { name: labels[0] }))
+    fireEvent.blur(screen.getByRole('textbox', { name: 'Type your own answer' }))
+    expect(screen.getByRole('button', { name: labels[15] }).getAttribute('aria-pressed')).toBe(
+      'true'
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Finish' }))
+    await waitFor(() =>
+      expect(onRespond).toHaveBeenCalledWith(
+        expect.objectContaining({
+          delegatedQuestion: expect.objectContaining({
+            action: 'confirm',
+            answers: [{ questionIndex: 0, value: [labels[1], labels[15]] }]
+          })
+        })
+      )
+    )
+  })
+
+  it('treats custom and agent-decide answers as alternatives to multiple choices', async () => {
+    const onRespond = vi.fn<(response: ElicitationResponse) => Promise<void>>(async () => undefined)
+    render(
+      <WorkspaceDelegatedQuestionCard
+        projectId="project-1"
+        sessionId="session-1"
+        request={{ ...request, questions: [{ ...request.questions[0], kind: 'multi-select' }] }}
+        onRespond={onRespond}
+      />
+    )
+    const strict = screen.getByRole('button', { name: 'Strict' })
+    fireEvent.click(strict)
+    fireEvent.click(strict)
+    expect(screen.queryByRole('button', { name: 'Finish' })).toBeNull()
+    fireEvent.click(strict)
+    fireEvent.change(screen.getByRole('textbox', { name: 'Type your own answer' }), {
+      target: { value: 'Custom' }
+    })
+    expect(strict.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(strict)
+    expect(
+      (screen.getByRole('textbox', { name: 'Type your own answer' }) as HTMLTextAreaElement).value
+    ).toBe('')
+    fireEvent.click(screen.getByRole('button', { name: 'Let the agent decide' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Finish' }))
+    await waitFor(() =>
+      expect(onRespond).toHaveBeenCalledWith(
+        expect.objectContaining({
+          delegatedQuestion: expect.objectContaining({
+            action: 'confirm',
+            answers: [{ questionIndex: 0, value: 'Let the agent decide' }]
+          })
+        })
+      )
+    )
+  })
+
   it('persists only the latest custom answer after rapid typing', async () => {
     vi.useFakeTimers()
     const onRespond = vi.fn<(response: ElicitationResponse) => Promise<void>>(async () => undefined)

@@ -1,12 +1,37 @@
+import type {
+  PreviewPanelState,
+  PreviewFileItem,
+  PreviewToolItem,
+  PreviewItem,
+  PendingPdfContextSelection,
+  PendingPdfContext,
+  PreviewFileViewState,
+  RestoredPreviewSlice,
+  SessionReviewerPreviewInput
+} from './preview-workbench-contract'
+export type {
+  PreviewPanelState,
+  PreviewFileFormat,
+  PreviewFileSource,
+  PreviewFileItem,
+  PreviewToolItem,
+  PreviewSourceItem,
+  PreviewItem,
+  PendingPdfContextSelection,
+  PendingPdfContext,
+  PreviewProvenanceTab,
+  PreviewFileViewState,
+  RestoredPreviewSlice,
+  SessionReviewerPreviewInput
+} from './preview-workbench-contract'
 import { previewCloseGuards } from './preview-close-guard'
 import { create } from 'zustand'
 
 import type { NotebookSessionReference } from '../../../shared/notebook'
-import type { ProjectFileOriginSession } from '../../../shared/project-files'
-import type { FindingLocator } from '../../../shared/reviewer'
 import type { UploadedAttachment } from '../../../shared/uploads'
 import { getUploadedAttachmentPath } from '../../../shared/uploads'
-import type { PdfReadingPosition, SessionPdfSourceKind } from '../../../shared/session-persistence'
+import type { PdfReadingPosition } from '../../../shared/session-persistence'
+import { validatePdfProseRegions, type PdfProseRegion } from '../../../shared/pdf-text'
 
 import { resolvePlanFileProjection } from '../pages/workspace/session-plan/plan-file-projection'
 import {
@@ -18,117 +43,16 @@ import { useSessionStore } from './session-store'
 
 const activeWorkbenchGuardScope = (state: PreviewWorkbenchStoreData): string | undefined =>
   workbenchPreviewGuardScope(state.activeProjectId, state.activeItemId)
-
-export type PreviewPanelState = 'open' | 'collapsed'
-export type PreviewFileFormat =
-  | 'code'
-  | 'markdown'
-  | 'text'
-  | 'json'
-  | 'csv'
-  | 'fasta'
-  | 'html'
-  | 'image'
-  | 'tiff'
-  | 'pdb'
-  | 'molecule'
-  | 'pdf'
-  | 'word'
-  | 'spreadsheet'
-  | 'presentation'
-  | 'unknown'
-// Distinguishes generated artifacts from user uploads, notebook inputs, and local ("This computer")
-// files when preview readers and header actions differ. 'local' files live outside app storage:
-// their path is an absolute filesystem path read via window.api.localFs.
-export type PreviewFileSource = 'artifact' | 'upload' | 'notebook-input' | 'literature' | 'local'
 export const PROJECT_FILES_PREVIEW_ID = 'tool:project:files'
 export const PROJECT_LIBRARY_PREVIEW_ID = 'tool:project:library'
+export const PROJECT_MARKETPLACE_PREVIEW_ID = 'tool:project:marketplace'
 export const PROJECT_COMPUTE_PREVIEW_ID = 'tool:project:compute'
 export const sideChatTabId = (sessionId: string): string => `tool:side-chat:${sessionId}`
-
-type PreviewItemBase = {
-  id: string
-  projectId?: string
-  sessionId: string
-  title: string
-}
-
-export type PreviewFileItem = PreviewItemBase & {
-  type: 'file'
-  source?: PreviewFileSource
-  path: string
-  format: PreviewFileFormat
-  name: string
-  mimeType?: string
-  size?: number
-  mtimeMs?: number
-  artifactId?: string
-  managedFileId?: string
-  selectedVersionId?: string
-  versionNumber?: number
-  originSession?: ProjectFileOriginSession
-}
-
-// Tool previews share the workbench chrome with files, but keep their own render path.
-export type PreviewToolItem = PreviewItemBase & {
-  type: 'tool'
-  sideChatId?: string
-  // A message chip can request a transient Library scope without changing the durable tab format.
-  libraryScopeRequest?: { section?: 'inbox'; collectionId?: string; collectionName?: string }
-  toolKind?:
-    | 'notebook'
-    | 'files'
-    | 'library'
-    | 'compute'
-    | 'reviewer'
-    | 'plan'
-    | 'subagents'
-    | 'side-chat'
-    | 'replay'
-  // A replay tab retains its source when the left-hand discussion selects another Session.
-  replaySourceProjectId?: string
-  replaySourceSessionId?: string
-  replayStepId?: string
-  replayBranchId?: string
-  replayRevealRequest?: number
-  notebook?: NotebookSessionReference
-  notebookRunId?: string
-  notebookRunFocusRequest?: number
-  // Reviewer-specific: which session's reviews to show, which review to select, and the active
-  // finding to scroll to.
-  reviewerSessionId?: string
-  reviewerReviewId?: string
-  reviewerActiveFindingId?: string
-  planArtifactVersionId?: string
-  // Session-scoped Subagents Preview: one stable item owns the selected read-only Agent Frame.
-  selectedAgentFrameId?: string
-}
-
-export type PreviewSourceItem = PreviewItemBase & {
-  type: 'source'
-  url: string
-}
-
-export type PreviewItem = PreviewFileItem | PreviewToolItem | PreviewSourceItem
-
-export type PendingPdfContextSelection =
-  | { kind: 'staged-upload'; attachmentId: string; previewItemId: string }
-  | {
-      kind: 'version'
-      sourceKind: SessionPdfSourceKind
-      sourceFileId?: string
-      sourceVersionId: string
-      previewItemId: string
-    }
 
 export const pendingPdfContextBindingId = (selection: PendingPdfContextSelection): string =>
   selection.kind === 'staged-upload'
     ? `staged:${selection.attachmentId}`
     : `version:${selection.sourceKind}:${selection.sourceVersionId}`
-
-export type PendingPdfContext =
-  | PendingPdfContextSelection
-  | { kind: 'multiple'; selections: readonly PendingPdfContextSelection[] }
 
 export const pendingPdfContextSelections = (
   context: PendingPdfContext | undefined
@@ -153,14 +77,6 @@ type StoredPreviewItem = PreviewItem & {
   fileViewState?: PreviewFileViewState
 }
 
-export type PreviewProvenanceTab =
-  'code' | 'sources' | 'reproducibility' | 'execution' | 'messages' | 'environment' | 'review'
-
-export type PreviewFileViewState = {
-  provenanceOpen?: boolean
-  provenanceTab?: PreviewProvenanceTab
-}
-
 // The preview state for a single project. The store keeps the active project's slice at top level and
 // stashes inactive projects' slices in `byProject` so switching projects never shows another's tabs.
 type PreviewSlice = {
@@ -168,13 +84,6 @@ type PreviewSlice = {
   activeItemId: string | undefined
   panelState: PreviewPanelState
   openRequestVersion: number
-}
-
-// The durable subset restored from persistence when a project is first activated in a session.
-export type RestoredPreviewSlice = {
-  items?: PreviewItem[]
-  activeItemId?: string
-  panelState?: PreviewPanelState
 }
 
 type PreviewWorkbenchStoreData = PreviewSlice & {
@@ -190,6 +99,9 @@ type PreviewWorkbenchStoreData = PreviewSlice & {
   draftStagedUploadIds: string[]
   // Ephemeral viewport state. Only captureSend copies the active value into a durable Message.
   pdfReadingPositionByBindingId: Record<string, PdfReadingPosition>
+  // An empty array explicitly requests native order for the next message; absent means unconfigured.
+  pdfProseRegionsByBindingId: Record<string, readonly PdfProseRegion[]>
+  pdfProseRegionsScope?: string
   // Tool tab currently shown as a large modal instead of inline panel content (files tab only).
   expandedToolItemId: string | null
   // A one-off file preview stays outside the tab list so Files and Global Search can open the same
@@ -210,6 +122,9 @@ type PreviewWorkbenchStore = PreviewWorkbenchStoreData & {
   setDraftStagedUploadIds: (ids: string[]) => void
   setPdfReadingPosition: (bindingId: string, position: PdfReadingPosition) => void
   clearPdfReadingPosition: (bindingId: string) => void
+  setPdfProseRegions: (bindingId: string, regions: readonly PdfProseRegion[]) => void
+  clearPdfProseRegions: (bindingId: string) => void
+  setPdfProseRegionsScope: (scope: string) => void
   upsertItem: (item: PreviewItem, skipGuard?: boolean) => boolean
   setFileViewState: (
     projectId: string | undefined,
@@ -241,6 +156,8 @@ export const createInitialPreviewWorkbenchState = (): PreviewWorkbenchStoreData 
   pendingPdfContextByProject: {},
   draftStagedUploadIds: [],
   pdfReadingPositionByBindingId: {},
+  pdfProseRegionsByBindingId: {},
+  pdfProseRegionsScope: undefined,
   expandedToolItemId: null,
   fileDialogItem: undefined
 })
@@ -470,6 +387,14 @@ const createProjectLibraryPreviewItem = (
   ...(libraryScopeRequest ? { libraryScopeRequest } : {})
 })
 
+const createProjectMarketplacePreviewItem = (): PreviewToolItem => ({
+  id: PROJECT_MARKETPLACE_PREVIEW_ID,
+  sessionId: '__project_marketplace__',
+  type: 'tool',
+  toolKind: 'marketplace',
+  title: 'Sharing marketplace'
+})
+
 const createProjectComputePreviewItem = (): PreviewToolItem => ({
   id: PROJECT_COMPUTE_PREVIEW_ID,
   sessionId: '__project_compute__',
@@ -477,14 +402,6 @@ const createProjectComputePreviewItem = (): PreviewToolItem => ({
   toolKind: 'compute',
   title: 'Compute'
 })
-
-// Input for opening the Session reviewer panel; findingId/locator determine scroll position.
-export type SessionReviewerPreviewInput = {
-  sessionId: string
-  reviewId: string
-  findingId: string | undefined
-  locator: FindingLocator | undefined
-}
 
 // Builds a stable preview tab for the Session reviewer panel scoped to one session. The id is
 // session-scoped so "Go to transcript" from any card in the same session reuses the same tab.
@@ -795,11 +712,40 @@ export const usePreviewWorkbenchStore = create<PreviewWorkbenchStore>((set, get)
 
   clearPdfReadingPosition: (bindingId) => {
     set((state) => {
-      if (!state.pdfReadingPositionByBindingId[bindingId]) return state
+      if (
+        !state.pdfReadingPositionByBindingId[bindingId] &&
+        !state.pdfProseRegionsByBindingId[bindingId]
+      )
+        return state
       const pdfReadingPositionByBindingId = { ...state.pdfReadingPositionByBindingId }
+      const pdfProseRegionsByBindingId = { ...state.pdfProseRegionsByBindingId }
       delete pdfReadingPositionByBindingId[bindingId]
-      return { pdfReadingPositionByBindingId }
+      delete pdfProseRegionsByBindingId[bindingId]
+      return { pdfReadingPositionByBindingId, pdfProseRegionsByBindingId }
     })
+  },
+
+  setPdfProseRegions: (bindingId, regions) => {
+    if (regions.length) validatePdfProseRegions(regions)
+    set((state) => ({
+      pdfProseRegionsByBindingId: {
+        ...state.pdfProseRegionsByBindingId,
+        [bindingId]: regions.map((region) => ({ ...region }))
+      }
+    }))
+  },
+
+  clearPdfProseRegions: (bindingId) => get().setPdfProseRegions(bindingId, []),
+
+  setPdfProseRegionsScope: (scope) => {
+    set((state) =>
+      state.pdfProseRegionsScope === scope
+        ? state
+        : {
+            pdfProseRegionsScope: scope,
+            pdfProseRegionsByBindingId: {}
+          }
+    )
   },
 
   // Inserts a preview item or refreshes the existing tab without changing focus.
@@ -1037,6 +983,7 @@ export {
   createNotebookPreviewItem,
   createProjectFilesPreviewItem,
   createProjectLibraryPreviewItem,
+  createProjectMarketplacePreviewItem,
   createProjectComputePreviewItem,
   createSessionPlanPreviewItem,
   createSessionSubagentsPreviewItem,

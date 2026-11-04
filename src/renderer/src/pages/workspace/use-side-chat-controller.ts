@@ -1,9 +1,6 @@
 import { previewCloseGuards } from '@/stores/preview-close-guard'
-import {
-  sideChatTabId,
-  usePreviewWorkbenchStore,
-  type PreviewItem
-} from '@/stores/preview-workbench-store'
+import { sideChatTabId, usePreviewWorkbenchStore } from '@/stores/preview-workbench-store'
+import type { PreviewItem } from '@/stores/preview-workbench-contract'
 import { useProjectStore } from '@/stores/project-store'
 import {
   Fragment,
@@ -28,7 +25,8 @@ import { SideChatCloseConfirmation } from './SideChatCloseConfirmation'
 import { useTranslation } from 'react-i18next'
 
 import { useNavigationStore } from '@/stores/navigation-store'
-import { useSessionStore, type ChatSession } from '@/stores/session-store'
+import { useSessionStore } from '@/stores/session-store'
+import type { ChatSession } from '@/stores/session-store-contract'
 import { selectFrameworkApiEndpoints, useSettingsStore } from '@/stores/settings-store'
 import { getAcpRuntimeEventText } from '../../../../shared/acp'
 import { buildConfiguredModelCatalog } from '../../../../shared/configured-model-catalog'
@@ -36,24 +34,7 @@ import { resolveSessionAgentConfiguration } from '../../../../shared/session-age
 import type { SideChatModelSelection, SideChatSnapshot } from '../../../../shared/side-chat'
 import type { SideChatEntry } from '../../../../shared/side-chat-entry-contract'
 
-type SideChatView = Readonly<{
-  modelSelection?: SideChatModelSelection
-  id?: string
-  draftOnly?: boolean
-  generation: number
-  revision?: number
-  parentSessionId: string
-  projectId: string
-  sideSessionId?: string
-  entries: readonly SideChatEntry[]
-  liveTurnUserEntryId?: string
-  draft: string
-  annotations?: readonly Annotation[]
-  running: boolean
-  error?: string
-  persistenceError?: string
-  notice?: SideChatSnapshot['notice']
-}>
+import type { SideChatView } from './side-chat-contract'
 
 type SideChatController = Readonly<{
   views?: readonly SideChatView[]
@@ -232,6 +213,11 @@ const useOwnedSideChatRuntime = (persistence: SideChatPersistence): SideChatRunt
             }
           }
           for (const snapshot of snapshotList.chats) {
+            if (
+              snapshot.sideSessionId &&
+              closedSideSessionIdsRef.current.has(snapshot.sideSessionId)
+            )
+              continue
             const lastRevision =
               revisionByChatRef.current.get(snapshot.sideSessionId ?? snapshot.parentSessionId) ?? 0
             if (snapshot.revision < lastRevision) continue
@@ -699,18 +685,9 @@ const useOwnedSideChatRuntime = (persistence: SideChatPersistence): SideChatRunt
         : { parentSessionId: current.parentSessionId }
       void window.api.sideChat
         .close(request)
-        .catch((error) => {
-          if (current.sideSessionId) closedSideSessionIdsRef.current.delete(current.sideSessionId)
-          update(
-            chatId,
-            (latest) =>
-              latest ?? {
-                ...current,
-                running: false,
-                error: t('Could not close Side chat: {{error}}', { error: errorText(error) })
-              }
-          )
-        })
+        // Closing is a user decision. Backend cleanup owns its retries; a transport or cleanup
+        // failure must not restore the tab or expose internal process diagnostics.
+        .catch(() => undefined)
         .finally(() => {
           const next = new Set(closingChatIdsRef.current)
           next.delete(chatId)
@@ -718,7 +695,7 @@ const useOwnedSideChatRuntime = (persistence: SideChatPersistence): SideChatRunt
           setClosingChatIds(next)
         })
     },
-    [t, update]
+    [update]
   )
 
   useEffect(() => {

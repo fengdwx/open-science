@@ -2,6 +2,8 @@ import type {
   UpdateApplyOptions,
   UpdateBlocker,
   UpdateDownloadOptions,
+  UpdateInstaller,
+  UpdateInstallerRevealResult,
   UpdateStatus
 } from '../../shared/update'
 
@@ -9,9 +11,17 @@ import type {
 // and whether every process tree was cleanly reaped. Structurally matches lifecycle-shutdown's
 // ShutdownOutcome so the coordinator satisfies it without coupling update code to that module.
 export type InstallReadiness = {
+  canForce?: boolean
   completed: boolean
   reaped: boolean
+  // Renderer durability passed; ordinary process cleanup may be completed by bounded service stop.
+  stopAuthorized?: boolean
+  // Service exit and Config Root lock were confirmed. Installer occupancy is checked separately.
+  runtimeStopped?: boolean
+  reason?: import('../../shared/update').UpdateFailureReason
+  recovery?: import('../../shared/update').UpdateRecoveryStatus
   blockedBy?: UpdateBlocker[]
+  blockedTasks?: UpdateStatus['blockedTasks']
   legacyShellRecovery?: UpdateStatus['legacyShellRecovery']
 }
 
@@ -28,6 +38,16 @@ const restoreAfterFinalRefusal = (restore: () => void): void => {
   }
 }
 
+export const canForceUpdateBlockers = (blockers: readonly UpdateBlocker[]): boolean =>
+  blockers.length > 0 &&
+  blockers.every(
+    (blocker) =>
+      blocker === 'agent' ||
+      blocker === 'delegated' ||
+      blocker === 'notebook' ||
+      blocker === 'reviewer'
+  )
+
 // Checks active research before teardown and once more at the final install boundary. Kept
 // independent of Electron/runtime types so composition tests can prove both admission races close.
 export const createActiveResearchSafeInstallGate =
@@ -41,10 +61,14 @@ export const createActiveResearchSafeInstallGate =
     if (isExclusiveHandoffActive()) return { completed: false, reaped: false }
     const blockedBy = [...new Set(detectBlockers())]
     if (blockedBy.length > 0 && !options.force)
-      return { completed: false, reaped: false, blockedBy }
+      return {
+        completed: false,
+        reaped: false,
+        blockedBy
+      }
 
     const readiness = await runTeardownGate(options)
-    if (!readiness.completed || !readiness.reaped) return readiness
+    if ((!readiness.completed || !readiness.reaped) && !readiness.stopAuthorized) return readiness
     if (isExclusiveHandoffActive()) {
       restoreAfterFinalRefusal(onFinalRefusal)
       return { completed: false, reaped: false }
@@ -76,11 +100,17 @@ export const createDataRootResearchSafeInstallGate = (
 // events. A refused durability check leaves the installer untouched, while the non-latching teardown
 // allows the still-open app to reconnect on the next action.
 export const createDurableInstallGate =
-  (runTeardownGate: InstallGate, confirmRendererDurability: () => Promise<boolean>): InstallGate =>
+  (
+    runTeardownGate: InstallGate,
+    confirmRendererDurability: () => Promise<boolean>,
+    allowServiceStop = false
+  ): InstallGate =>
   async (options = {}) => {
     const readiness = await runTeardownGate(options)
-    if (!readiness.completed || !readiness.reaped) return readiness
-    return (await confirmRendererDurability()) ? readiness : { completed: false, reaped: false }
+    if ((!readiness.completed || !readiness.reaped) && !allowServiceStop) return readiness
+    return (await confirmRendererDurability())
+      ? { ...readiness, ...(allowServiceStop ? { stopAuthorized: true } : {}) }
+      : { completed: false, reaped: false }
   }
 
 // Shared admission invariant for every update provider. A failed transfer with a known release may
@@ -116,7 +146,12 @@ export const toAvailableUpdateStatus = ({
 // UpdateService (dev/nightly macOS + any other fallback — manifest download + manual reinstall). Both
 // broadcast the same UpdateStatus. See create-strategy.ts for how the host is routed.
 export interface UpdateStrategy {
+  publishLifecycleStatus?(status: Partial<UpdateStatus>): void
+  recheck?(): Promise<UpdateStatus>
+  recover?(): Promise<UpdateStatus>
   getStatus(): UpdateStatus
+  getInstaller(): Promise<UpdateInstaller | null>
+  revealInstaller(): Promise<UpdateInstallerRevealResult>
   check(): Promise<UpdateStatus>
   download(options?: UpdateDownloadOptions): Promise<UpdateStatus>
   // Aborts an in-flight download, stops network activity, and returns the reset status (back to

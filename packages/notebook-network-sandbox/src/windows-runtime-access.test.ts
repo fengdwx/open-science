@@ -1,8 +1,9 @@
 import { EventEmitter } from 'node:events'
+import type { ChildProcess, SpawnOptions } from 'node:child_process'
 import { PassThrough } from 'node:stream'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { beforeEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 const host = vi.hoisted(() => ({ spawn: vi.fn() }))
 vi.mock('node:child_process', () => ({ spawn: host.spawn }))
@@ -27,6 +28,22 @@ const reply = (value: unknown, code = 0): void => {
   })
 }
 beforeEach(() => host.spawn.mockReset())
+afterEach(() => vi.unstubAllEnvs())
+
+it('resolves elevation through the Windows system root when PATH is empty', async () => {
+  vi.stubEnv('SystemRoot', 'C:\\Windows')
+  vi.stubEnv('PATH', '')
+  reply({ authorized: false, registered: false })
+  reply(null)
+  reply(null)
+  reply(null)
+  await expect(
+    setWindowsRuntimeAccess('host.exe', 'installation', 'owner-root', 'Rscript.exe', true)
+  ).resolves.toEqual({ cancelled: false })
+  expect(host.spawn.mock.calls[2][0]).toBe(
+    'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+  )
+})
 
 it.each([true, false])(
   'reads R access without starting elevation (authorized: %s)',
@@ -79,7 +96,9 @@ it('finishes an accepted native authorization before returning', async () => {
     setWindowsRuntimeAccess('host.exe', 'installation', 'owner-root', 'Rscript.exe', true)
   ).resolves.toEqual({ cancelled: false })
   expect(
-    host.spawn.mock.calls.map(([program, args]) => (program === 'powershell.exe' ? 'uac' : args[0]))
+    host.spawn.mock.calls.map(([program, args]) =>
+      program.endsWith('powershell.exe') ? 'uac' : args[0]
+    )
   ).toEqual(['runtime-access-status', 'prepare-runtime-access', 'uac', 'finish-setup'])
 })
 
@@ -92,7 +111,9 @@ it('cancels the native setup journal when Windows declines UAC', async () => {
     setWindowsRuntimeAccess('host.exe', 'installation', 'owner-root', 'Rscript.exe', true)
   ).resolves.toEqual({ cancelled: true })
   expect(
-    host.spawn.mock.calls.map(([program, args]) => (program === 'powershell.exe' ? 'uac' : args[0]))
+    host.spawn.mock.calls.map(([program, args]) =>
+      program.endsWith('powershell.exe') ? 'uac' : args[0]
+    )
   ).toEqual(['runtime-access-status', 'prepare-runtime-access', 'uac', 'cancel-setup'])
 })
 
@@ -195,7 +216,9 @@ it('commits verified runtime access with one elevation and the original containe
     )
   ).resolves.toEqual({ cancelled: false })
   expect(
-    host.spawn.mock.calls.map(([program, args]) => (program === 'powershell.exe' ? 'uac' : args[0]))
+    host.spawn.mock.calls.map(([program, args]) =>
+      program.endsWith('powershell.exe') ? 'uac' : args[0]
+    )
   ).toEqual([
     'runtime-access-status',
     'prepare-verified-runtime-access',
@@ -237,7 +260,9 @@ it('returns contained verification failure without starting another elevation', 
       verification
     )
   ).rejects.toThrow('contained jsonlite is unavailable')
-  expect(host.spawn.mock.calls.filter(([program]) => program === 'powershell.exe')).toHaveLength(1)
+  expect(
+    host.spawn.mock.calls.filter(([program]) => program.endsWith('powershell.exe'))
+  ).toHaveLength(1)
   expect(host.spawn.mock.calls.at(-1)?.[1][0]).toBe('cancel-setup')
 })
 
@@ -258,7 +283,9 @@ it('stops the waiting verifier when the user cancels UAC', async () => {
     )
   ).resolves.toEqual({ cancelled: true })
   expect(verifier.kill).toHaveBeenCalledOnce()
-  expect(host.spawn.mock.calls.filter(([program]) => program === 'powershell.exe')).toHaveLength(1)
+  expect(
+    host.spawn.mock.calls.filter(([program]) => program.endsWith('powershell.exe'))
+  ).toHaveLength(1)
 })
 
 it('does not classify an interrupted verifier as cancellation before the probe started', async () => {
@@ -385,49 +412,34 @@ it('waits for the verifier to close after its combined output exceeds the limit'
   await expect(result).resolves.toContain('output exceeded its buffer limit')
 })
 
-const unconfiguredProtection = {
-  profileExists: false,
-  loopbackAllowed: false,
-  networkFenceReady: false,
-  owned: false,
-  ownershipState: 'unowned',
-  gatewayPort: null
-}
-
 it('recognizes only an absent protection receipt as standard mode without elevation', async () => {
-  reply(unconfiguredProtection)
+  reply(false)
   await expect(
     isWindowsProtectionConfigured('host.exe', 'installation', 'owner-root')
   ).resolves.toBe(false)
   expect(host.spawn).toHaveBeenCalledExactlyOnceWith(
     'host.exe',
-    ['status', 'installation', 'owner-root'],
-    expect.any(Object)
+    ['configured', 'installation', 'owner-root'],
+    expect.objectContaining({ timeout: 5_000 })
   )
 })
 
-it.each(['creating', 'owned'])(
-  'retains protection for a %s receipt even when its resources are broken',
-  async (ownershipState) => {
-    reply({ ...unconfiguredProtection, ownershipState })
-    await expect(
-      isWindowsProtectionConfigured('host.exe', 'installation', 'owner-root')
-    ).resolves.toBe(true)
-  }
-)
-
-it.each([
-  { profileExists: true },
-  { loopbackAllowed: true },
-  { networkFenceReady: true },
-  { owned: true },
-  { gatewayPort: 4312 }
-])('rejects inconsistent unowned protection: %j', async (overrides) => {
-  reply({ ...unconfiguredProtection, ...overrides })
+it('retains configured protection without requiring a readiness probe', async () => {
+  reply(true)
   await expect(
     isWindowsProtectionConfigured('host.exe', 'installation', 'owner-root')
-  ).rejects.toThrow('ownership is inconsistent')
+  ).resolves.toBe(true)
 })
+
+it.each([null, {}, 'false', 0, { configured: false }])(
+  'rejects invalid protection configuration: %j',
+  async (payload) => {
+    reply(payload)
+    await expect(
+      isWindowsProtectionConfigured('host.exe', 'installation', 'owner-root')
+    ).rejects.toThrow('invalid protection configuration payload')
+  }
+)
 
 it('does not classify an unreadable protection receipt as standard mode', async () => {
   reply(null, 1)
@@ -435,3 +447,28 @@ it('does not classify an unreadable protection receipt as standard mode', async 
     isWindowsProtectionConfigured('host.exe', 'installation', 'owner-root')
   ).rejects.toThrow('pending owned operation')
 })
+
+it('terminates a stalled read-only configuration helper and waits for its closure', async () => {
+  const { spawn } = await vi.importActual<typeof import('node:child_process')>('node:child_process')
+  let child: ChildProcess | undefined
+  let closed = false
+  host.spawn.mockImplementationOnce((_path: string, _args: string[], options: SpawnOptions) => {
+    child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], options)
+    child.once('close', () => {
+      closed = true
+    })
+    return child
+  })
+  try {
+    await expect(
+      isWindowsProtectionConfigured('host.exe', 'installation', 'owner-root')
+    ).rejects.toThrow('configuration check was terminated')
+    expect(closed).toBe(true)
+  } finally {
+    if (child && !closed) {
+      const done = new Promise<void>((resolve) => child!.once('close', () => resolve()))
+      child.kill('SIGKILL')
+      await done
+    }
+  }
+}, 15_000)

@@ -1,3 +1,4 @@
+import { runInNewContext } from 'node:vm'
 import { EventEmitter } from 'node:events'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -20,6 +21,7 @@ import { Readable } from 'node:stream'
 import { gzipSync } from 'node:zlib'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { loadManagedCodexErrorHandler } from './codex-error.test-utils'
+import { describePromptError } from '../acp/prompt-error'
 
 import {
   ACP_MODEL_CALL_USAGE_META_KEY,
@@ -1406,15 +1408,50 @@ describe('installManagedCodex', () => {
   })
 })
 
+describe('Codex authentication repair', () => {
+  it('repairs the pinned authentication method in an installed adapter and remains idempotent', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'codex-auth-repair-'))
+    try {
+      const method = await readFile(
+        new URL('./fixtures/codex-acp-1.6.2-authentication-status.txt', import.meta.url),
+        'utf8'
+      )
+      const adapterPath = join(root, 'index.js')
+      await writeFile(
+        adapterPath,
+        withPinnedSkillMapper(`class Client {${method}}\n// Other pinned patch targets`)
+      )
+      await ensureManagedCodexContextUsage(adapterPath)
+      const repaired = await readFile(adapterPath, 'utf8')
+      const Client = runInNewContext(
+        `${repaired.split('// Other pinned patch targets')[0]}\nClient`
+      )
+      const client = new Client()
+      client.getCurrentModelProvider = async () => 'open-science-chatgpt-https'
+      client.getAccount = async () => ({ requiresOpenaiAuth: true, account: null })
+      expect((await client.getAuthenticationStatus()).type).toBe('unauthenticated')
+      client.getAccount = async () => ({ requiresOpenaiAuth: false, account: null })
+      expect((await client.getAuthenticationStatus()).type).toBe('gateway')
+      await ensureManagedCodexContextUsage(adapterPath)
+      expect(await readFile(adapterPath, 'utf8')).toBe(repaired)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('Codex terminal error normalization', () => {
   it.each([
-    ['serverOverloaded', true, -32603],
-    ['usageLimitExceeded', true, -32603],
-    ['unauthorized', true, -32603],
-    ['unauthorized', false, -32000]
+    ['serverOverloaded', true, -32603, false],
+    ['usageLimitExceeded', true, -32603, false],
+    ['unauthorized', true, -32603, true],
+    ['unauthorized', false, -32000, true],
+    [{ httpConnectionFailed: { httpStatusCode: 401 } }, true, -32603, true],
+    [{ httpConnectionFailed: { httpStatusCode: 401 } }, false, -32000, true],
+    [{ httpConnectionFailed: { httpStatusCode: 403 } }, true, -32603, false]
   ] as const)(
     'preserves %s with authConfigured=%s as an ACP error',
-    async (code, auth, rpcCode) => {
+    async (code, auth, rpcCode, authenticationRequired) => {
       const root = await mkdtemp(join(tmpdir(), 'codex-terminal-error-'))
       try {
         const handler = await loadManagedCodexErrorHandler(root)
@@ -1432,6 +1469,9 @@ describe('Codex terminal error normalization', () => {
           code: rpcCode,
           data: { codexErrorInfo: code, message: 'Provider could not finish.' }
         })
+        expect(describePromptError(handler.getFailure()) === 'Authentication required').toBe(
+          authenticationRequired
+        )
         const adapterPath = join(root, 'index.js')
         const normalized = await readFile(adapterPath, 'utf8')
         await ensureManagedCodexContextUsage(adapterPath)
@@ -2193,6 +2233,78 @@ describe('patchCodexAcpModelCatalogStartupSource', () => {
     expect(() => patchCodexAcpModelCatalogStartupSource(drifted)).toThrow(
       /model-catalog startup patch no longer matches/
     )
+  })
+})
+
+describe('Codex Reviewer MCP normalization', () => {
+  // The config projection from pinned codex-acp 1.6.2; transport conversion is unchanged.
+  const fixture = `function createSessionConfig(serversToConfigure) {
+    return {
+      "mcp_servers": Object.fromEntries(serversToConfigure.map((mcp) => [mcp.name, this.createMcpSeverConfig(mcp.server)]))
+    };
+  }`
+
+  const normalize = async (source: string): Promise<string> => {
+    const root = await mkdtemp(join(tmpdir(), 'managed-codex-mcp-config-'))
+    try {
+      const adapterPath = join(root, 'index.js')
+      await writeFile(adapterPath, withPinnedSkillMapper(source))
+      await ensureManagedCodexContextUsage(adapterPath)
+      return (await readFile(adapterPath, 'utf8')).split('\nfunction buildPromptItems')[0]
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  }
+
+  it('requires only Reviewer MCP and preserves stdio/HTTP transport config', async () => {
+    const patched = await normalize(fixture)
+    const project = Function(`${patched}; return createSessionConfig;`)() as (
+      servers: Array<{ name: string; server: Record<string, unknown> }>
+    ) => { mcp_servers: Record<string, Record<string, unknown>> }
+    for (const server of [
+      { command: 'node', args: ['reviewer.js'], env: { TOKEN: 'test' } },
+      { url: 'http://127.0.0.1:1234/mcp', http_headers: { Authorization: 'test' } }
+    ]) {
+      const result = project.call({ createMcpSeverConfig: (value: unknown) => value }, [
+        { name: 'open-science-reviewer', server },
+        { name: 'optional-user-server', server }
+      ])
+      expect(result.mcp_servers['open-science-reviewer']).toEqual({ ...server, required: true })
+      expect(result.mcp_servers['optional-user-server']).toEqual(server)
+      expect(server).not.toHaveProperty('required')
+    }
+    expect(await normalize(patched)).toBe(patched)
+  })
+
+  it('upgrades an existing managed adapter atomically and leaves the second check unchanged', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'managed-codex-reviewer-'))
+    try {
+      const adapterPath = join(root, 'index.js')
+      const previous = withPinnedSkillMapper(fixture)
+      await writeFile(adapterPath, previous)
+      await ensureManagedCodexContextUsage(adapterPath)
+      const upgraded = await readFile(adapterPath, 'utf8')
+      expect(upgraded).toContain(await normalize(fixture))
+      const before = await stat(adapterPath)
+      await ensureManagedCodexContextUsage(adapterPath)
+      expect(await readFile(adapterPath, 'utf8')).toBe(upgraded)
+      expect((await stat(adapterPath)).mtimeMs).toBe(before.mtimeMs)
+      expect(await readdir(root)).toEqual(['index.js'])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects drifted, duplicated or mixed config projections', async () => {
+    for (const source of [
+      fixture.replace('mcp.server)', 'mcp.server, true)'),
+      `${fixture}\n${fixture}`,
+      `${fixture}\n${await normalize(fixture)}`
+    ]) {
+      await expect(normalize(source)).rejects.toThrow(
+        'Pinned Codex ACP Reviewer MCP patch no longer matches the adapter bundle'
+      )
+    }
   })
 })
 

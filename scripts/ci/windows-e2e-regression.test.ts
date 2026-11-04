@@ -38,8 +38,23 @@ const step = (job: Job, name: string): Step =>
 const suites = [
   ['renderer_layout', 'test:e2e:browser', 0],
   ['e2e_functional_windows', 'test:e2e:journey', 3],
-  ['e2e_workspace_windows', 'test:e2e:workspace', 2]
+  ['e2e_workspace_windows', 'test:e2e:workspace', 4]
 ] as const
+
+it.each([
+  ['PR mainlines', pr.jobs.windows_e2e, 'Run mainline journeys'],
+  ['scheduled regression', workflow.jobs.windows_e2e_setup, 'Pack E2E setup']
+])('builds the candidate native sandbox after staging dependencies for %s', (_, job, consumer) => {
+  const build = step(job, 'Build Windows sandbox native host')
+  expect(build).toEqual({
+    name: 'Build Windows sandbox native host',
+    run: 'node packages/notebook-network-sandbox/vendor/windows/build.mjs x64'
+  })
+  expect(job.steps.indexOf(build)).toBeGreaterThan(
+    job.steps.indexOf(step(job, 'Build Electron application'))
+  )
+  expect(job.steps.indexOf(build)).toBeLessThan(job.steps.indexOf(step(job, consumer)))
+})
 
 it('schedules independent complete Windows E2E and keeps the manual full entry point', () => {
   expect(workflow.on.schedule).toEqual([{ cron: '17 18 * * *' }])
@@ -60,7 +75,7 @@ it('schedules independent complete Windows E2E and keeps the manual full entry p
       'fail-fast': false,
       matrix: {
         shard:
-          "${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.workspace_test_pattern != '' && '[1]' || '[1,2,3]') }}"
+          "${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.workspace_test_pattern != '' && '[1]' || '[1,2,3,4,5,6]') }}"
       }
     }
   })
@@ -97,7 +112,7 @@ it('schedules independent complete Windows E2E and keeps the manual full entry p
     )
     expect(run.run).toContain(`npm run ${command} --`)
     expect(run.run).toContain('--workers=1')
-    expect(run.run).toContain('--shard=${{ matrix.shard }}/3')
+    expect(run.run).toContain('--shard=${{ matrix.shard }}/6')
     expect(run.run).toContain('--fail-on-flaky-tests')
     expect(run.run).not.toContain('--grep')
     expect(run.run).not.toContain('--pass-with-no-tests')
@@ -115,10 +130,10 @@ it('budgets complete serial journeys and teardown within the shard job', () => {
     return Number(run.match(/--global-timeout=(\d+)/)![1])
   })
   expect(budgets).toEqual([420000, 900000, 900000])
-  // Leave time for restore, Chromium installation, uploads and teardown beyond suite budgets.
+  // Include the one permitted browser resource-exhaustion retry, then reserve setup/teardown.
   expect(
-    execution['timeout-minutes']! * 60000 - budgets.reduce((a, b) => a + b, 0)
-  ).toBeGreaterThanOrEqual(180000)
+    execution['timeout-minutes']! * 60000 - budgets.reduce((a, b) => a + b, 0) - budgets[0]
+  ).toBeGreaterThanOrEqual(600000)
 })
 
 it('fails a scheduled shard when setup or any required suite does not succeed', () => {
@@ -155,7 +170,7 @@ it('isolates manual workspace diagnostics while retaining full scheduled coverag
     for (const pattern of ['', 'finds offscreen cells']) {
       const focused = event === 'workflow_dispatch' && pattern !== ''
       expect(evaluate(String(execution.strategy!.matrix.shard), event, pattern)).toEqual(
-        focused ? [1] : [1, 2, 3]
+        focused ? [1] : [1, 2, 3, 4, 5, 6]
       )
       expect(evaluate(diagnostic.if!, event, pattern)).toBe(focused)
       expect(evaluate(diagnosticGate.if!, event, pattern)).toBe(focused)
@@ -252,20 +267,27 @@ it('discovers the reviewed mainline subset and retains every other case in the f
     return visit((JSON.parse(result.stdout) as JSONReport).suites).sort()
   }
   // New regression cases stay untagged unless the reviewed representative journey changes.
-  for (const [group, title] of Object.entries({
-    projects:
-      'electron-foundation.spec.ts: creates a project through the desktop stack and reloads it after relaunch',
-    conversation:
-      'workspace-conversation.spec.ts: resolves Agent permission requests through both Allow and Deny decisions',
-    files:
-      'workspace-files.spec.ts: edits uploaded Markdown versions and keeps diff navigation coherent',
-    notebook:
-      'electron-foundation.spec.ts: analyzes uploaded data in Python and reopens the saved research',
-    windows:
+  for (const [group, titles] of Object.entries({
+    projects: [
+      'electron-foundation.spec.ts: creates a project through the desktop stack and reloads it after relaunch'
+    ],
+    conversation: [
+      'workspace-conversation.spec.ts: expands the selected table across repeated portal lifecycles',
+      'workspace-conversation.spec.ts: resolves Agent permission requests through both Allow and Deny decisions'
+    ],
+    files: [
+      'markdown-publication-policy.spec.ts: new Markdown publications replace the head while edits, restoration and drafts survive',
+      'workspace-files.spec.ts: edits uploaded Markdown versions and keeps diff navigation coherent'
+    ],
+    notebook: [
+      'electron-foundation.spec.ts: analyzes uploaded data in Python and reopens the saved research'
+    ],
+    windows: [
       'windows-window-system.spec.ts: persists minimize-to-tray across titlebar close, relaunch, and Ctrl+W'
+    ]
   })) {
     const selected = collect('test:e2e', `@pr-mainline-${group}(?:\\s|$)`)
-    expect(selected).toEqual([`${title} @pr-mainline-${group}`])
+    expect(selected).toEqual(titles.map((title) => `${title} @pr-mainline-${group}`).sort())
   }
   for (const [, command, count] of suites) {
     const full = collect(command)

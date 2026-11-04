@@ -150,7 +150,7 @@ test('measures official history opening and live autosave responsiveness', async
       const snapshot = await window.api.settings.upsertProvider({
         type: 'custom',
         name: 'Official history UI fixture',
-        apiEndpoints: ['openai'],
+        apiEndpoints: ['chat-completions'],
         baseUrl: 'http://127.0.0.1:9/v1',
         model: 'e2e-model',
         key: 'e2e-key',

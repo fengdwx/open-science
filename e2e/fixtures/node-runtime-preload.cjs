@@ -5,7 +5,57 @@ const { readFileSync } = require('node:fs')
 const root = process.env.OPEN_SCIENCE_E2E_STORAGE_ROOT
 if (!root) throw new Error('The Node runtime fixture requires an isolated source E2E profile.')
 if (process.versions.electron) {
-  if (require('electron').app.isPackaged) throw new Error('Source fixture cannot run packaged.')
+  const { app } = require('electron')
+  if (app.isPackaged) throw new Error('Source fixture cannot run packaged.')
+  if (process.env.OPEN_SCIENCE_E2E_NO_FOCUS === '1') {
+    const { BrowserWindow, dialog } = require('electron')
+    BrowserWindow.prototype.show = () => {}
+    BrowserWindow.prototype.showInactive = () => {}
+    BrowserWindow.prototype.focus = () => {}
+    app.focus = () => {}
+    dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false })
+    dialog.showMessageBoxSync = () => 0
+    dialog.showErrorBox = (_title, message) => console.error('Native dialog suppressed:', message)
+  }
+  if (
+    process.platform !== 'linux' &&
+    app.commandLine.getSwitchValue('password-store') === 'basic' &&
+    !(process.argv ?? []).some((arg) => arg.startsWith('--password-store='))
+  ) {
+    // Playwright injects this Linux-only override outside argv. It is not an application-selected
+    // credential backend on macOS/Windows and must not create a false replacement mismatch.
+    app.commandLine.removeSwitch('password-store')
+  }
+  if (process.platform === 'linux') {
+    // Playwright's Electron loader overrides argv with password-store=basic. Restore the
+    // explicitly selected test vault before application credential preflight runs.
+    if (!process.argv.includes('--password-store=gnome-libsecret'))
+      throw new Error('Linux source fixture requires an explicit Secret Service backend.')
+    app.commandLine.appendSwitch('password-store', 'gnome-libsecret')
+  }
+  if (process.env.OPEN_SCIENCE_E2E_ISOLATE_HOME === '1') {
+    // Electron resolves the Windows home through the OS, ignoring USERPROFILE. Override only
+    // this isolated source fixture before application bootstrap can discover user state.
+    const { dirname, resolve } = require('node:path')
+    const { mkdirSync } = require('node:fs')
+    const fixtureHome = join(dirname(root), 'isolated home')
+    if (resolve(process.env.USERPROFILE || '') !== resolve(fixtureHome))
+      throw new Error('Acceptance home does not match the isolated fixture.')
+    mkdirSync(fixtureHome, { recursive: true })
+    app.setPath('home', fixtureHome)
+    for (const [key, value] of [
+      ['appData', process.env.APPDATA],
+      // LOCALAPPDATA retains the Windows OS profile for native AppContainer Temp resolution;
+      // Electron's cache remains inside this fixture independently of that OS environment input.
+      ['cache', join(fixtureHome, 'AppData', 'Local')],
+      ['downloads', join(fixtureHome, 'Downloads')]
+    ]) {
+      if (!value || !resolve(value).startsWith(resolve(fixtureHome) + require('node:path').sep))
+        throw new Error('Acceptance OS path escaped the isolated home.')
+      mkdirSync(value, { recursive: true })
+      app.setPath(key, value)
+    }
+  }
   const Module = require('node:module')
   const load = Module._load
   const wrapped = new WeakMap()
@@ -29,9 +79,13 @@ if (process.versions.electron) {
     }
     return exports
   }
-  // Playwright consumes NODE_OPTIONS on Electron launch. Propagate to the ordinary child explicitly.
-  process.env.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ''} --require=${JSON.stringify(__filename)}`
+  // Relaunched Electron also inherits NODE_OPTIONS before its app API exists. The wrapper
+  // skips that early phase without caching this module, so explicit Electron setup still runs.
+  const childPreload = join(__dirname, 'node-runtime-child-preload.cjs')
+  process.env.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ''} --require=${JSON.stringify(childPreload)}`
 } else {
+  require('./session-outcome-preload.cjs')
+  if (process.env.OPEN_SCIENCE_E2E_USE_CASE_GATE) require('./use-case-download-preload.cjs')
   if (process.platform === 'darwin') require('./mock-node-credentials.cjs')
   const fs = require('node:fs/promises')
   const statfs = fs.statfs

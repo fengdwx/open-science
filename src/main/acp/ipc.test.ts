@@ -96,6 +96,9 @@ const {
       }),
       resetSessionContext,
       requestProviderReconnect,
+      requestIdleRelease: vi.fn(),
+      withPromptAdmission: <T>(work: () => Promise<T>) => work(),
+      hasPendingSessionWriterRelease: vi.fn(() => false),
       resumeSession,
       sendAppContinuation: (request: AcpPromptRequest, promptAttemptId?: string) => {
         const prompting = sendAppContinuation(request, promptAttemptId)
@@ -1031,7 +1034,10 @@ describe('installAcpIpcHandlers — managed session workspace', () => {
       {},
       { projectId: 'project-1', permissionProfile: 'ask' }
     )
+    const creationRejected = expect(createPromise).rejects.toBe(failure)
     await vi.waitFor(() => expect(rm).toHaveBeenCalledTimes(1))
+    // The caller receives the failure while cleanup still holds the writer.
+    await creationRejected
 
     beginMigration()
     let drained = false
@@ -1043,7 +1049,6 @@ describe('installAcpIpcHandlers — managed session workspace', () => {
     expect(drained).toBe(false)
 
     finishRollback()
-    await expect(createPromise).rejects.toBe(failure)
     await drainPromise
     expect(drained).toBe(true)
   })
@@ -1268,7 +1273,7 @@ describe('installAcpIpcHandlers — resume-session diagnostics', () => {
     expect(admissionActive).toBe(false)
   })
 
-  it('logs a privacy-safe correlated lifecycle on success', async () => {
+  it('logs a correlated lifecycle with session identity for diagnostics export', async () => {
     registerWithFakes()
     const request: AcpResumeSessionRequest = {
       sessionId: 'private-session-id',
@@ -1293,23 +1298,25 @@ describe('installAcpIpcHandlers — resume-session diagnostics', () => {
     )
     expect(started?.[1]).toMatchObject({
       operationId: expect.any(String),
-      sessionHash: expect.stringMatching(/^[a-f0-9]{12}$/)
+      sessionHash: expect.stringMatching(/^[a-f0-9]{12}$/),
+      sessionId: request.sessionId,
+      projectId: request.projectId
     })
     expect(completed?.[1]).toMatchObject({
       operationId: started?.[1]?.operationId,
       sessionHash: started?.[1]?.sessionHash,
+      sessionId: request.sessionId,
+      projectId: request.projectId,
       frameworkId: 'codex',
       contextReset: true,
       durationMs: expect.any(Number)
     })
     const serialized = JSON.stringify(infoLogSpy.mock.calls)
-    expect(serialized).not.toContain(request.sessionId)
     expect(serialized).not.toContain(request.cwd)
-    expect(serialized).not.toContain(request.projectId)
     expect(serialized).not.toContain('private-backend-id')
   })
 
-  it('classifies a failure without logging private error details', async () => {
+  it('classifies a failure and retains its evidence for the redacted diagnostic sink', async () => {
     registerWithFakes()
     const request: AcpResumeSessionRequest = {
       sessionId: 'private-session-id',
@@ -1340,20 +1347,25 @@ describe('installAcpIpcHandlers — resume-session diagnostics', () => {
     expect(failed?.[1]).toMatchObject({
       operationId: started?.[1]?.operationId,
       sessionHash: started?.[1]?.sessionHash,
+      sessionId: request.sessionId,
       errorCategory: 'request',
       rpcCode: -32603,
       errorKind: 'session_not_found',
       service: 'session',
-      durationMs: expect.any(Number)
+      durationMs: expect.any(Number),
+      error: failure.message,
+      stack: failure.stack,
+      name: failure.name,
+      code: failure.code,
+      data: failure.data
     })
     const serialized = JSON.stringify([infoLogSpy.mock.calls, errorLogSpy.mock.calls])
-    expect(serialized).not.toContain(request.sessionId)
     expect(serialized).not.toContain(request.cwd)
-    expect(serialized).not.toContain('secret.example.test')
-    expect(serialized).not.toContain('private upstream details')
+    // This spy observes input to the logger. Credential and export-path redaction are exercised
+    // with real sinks in logger.test.ts and session-diagnostics/export-evidence.integration.test.ts.
   })
 
-  it('buckets an unknown numeric RPC code instead of copying it into the log', async () => {
+  it('buckets an unknown RPC classification while retaining its original diagnostic code', async () => {
     registerWithFakes()
     const privateCode = 987_654_321
     resumeSession.mockRejectedValueOnce(
@@ -1370,8 +1382,11 @@ describe('installAcpIpcHandlers — resume-session diagnostics', () => {
     const failed = errorLogSpy.mock.calls.find(
       ([message]) => message === 'acp:resume-session failed'
     )
-    expect(failed?.[1]).toMatchObject({ errorCategory: 'request', rpcCode: 'other' })
-    expect(JSON.stringify(failed)).not.toContain(String(privateCode))
+    expect(failed?.[1]).toMatchObject({
+      errorCategory: 'request',
+      rpcCode: 'other',
+      code: privateCode
+    })
   })
 
   it('keeps resume results and failures authoritative when diagnostics throw', async () => {
@@ -1437,6 +1452,55 @@ describe('installAcpIpcHandlers — native context compaction bridge', () => {
 
     expect(withSessionAvailableById).toHaveBeenCalledWith('s-1', expect.any(Function))
     expect(compactSession).not.toHaveBeenCalled()
+  })
+})
+
+describe.each([
+  ['acp:create-session', createSession],
+  ['acp:resume-session', resumeSession],
+  ['acp:reset-session-context', resetSessionContext]
+] as const)('%s authentication recovery', (channel, method) => {
+  it.each([
+    { code: -32000, message: 'Authentication required' },
+    { code: -32603, data: { codexErrorInfo: 'unauthorized' } },
+    { code: -32603, data: { errorName: 'APIError', statusCode: 401 } }
+  ])(
+    'normalizes structured authentication failure %j before IPC serialization',
+    async (details) => {
+      registerWithFakes()
+      const failure = Object.assign(new Error('Internal error'), {
+        name: 'RequestError',
+        ...details
+      })
+      method.mockRejectedValueOnce(failure)
+
+      await expect(handlers.get(channel)?.({}, { sessionId: 's-1' })).rejects.toMatchObject({
+        message: 'Authentication required',
+        cause: failure
+      })
+    }
+  )
+
+  it('preserves a generic -32000 initialization error', async () => {
+    registerWithFakes()
+    const failure = Object.assign(new Error('Native Codex unavailable'), {
+      name: 'RequestError',
+      code: -32000
+    })
+    method.mockRejectedValueOnce(failure)
+    await expect(handlers.get(channel)?.({}, { sessionId: 's-1' })).rejects.toBe(failure)
+  })
+
+  it.each([403, 429])('preserves non-authentication provider status %s', async (statusCode) => {
+    registerWithFakes()
+    const failure = Object.assign(new Error('Internal error'), {
+      name: 'RequestError',
+      code: -32603,
+      data: { errorName: 'APIError', statusCode }
+    })
+    method.mockRejectedValueOnce(failure)
+
+    await expect(handlers.get(channel)?.({}, { sessionId: 's-1' })).rejects.toBe(failure)
   })
 })
 

@@ -15,6 +15,7 @@ import {
   assertUpgradeProfilePreserved,
   assertWsl2RestartCleanupBlocked,
   buildSmokePlan,
+  captureStartupLogs,
   cleanupOwnedSmokeRegistrations,
   cleanupSmokeRegistrations,
   cleanupSmokeRoot,
@@ -46,6 +47,26 @@ import {
 } from './windows-installer-smoke.mjs'
 
 describe('Windows installer smoke plan', () => {
+  it('retains backend startup logs from candidate roots without copying profile secrets', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'installer-startup-evidence-'))
+    const profile = join(root, 'profile')
+    const output = join(root, 'evidence')
+    try {
+      await mkdir(join(profile, 'logs'), { recursive: true })
+      await writeFile(join(profile, 'logs', 'main.log'), 'backend startup failed\n')
+      await writeFile(join(profile, 'web-token'), 'private-token')
+      const files = await captureStartupLogs(
+        [undefined, join(root, 'missing'), profile, profile],
+        output
+      )
+      expect(files).toEqual([join(output, 'backend-1.log')])
+      expect(await readFile(files[0], 'utf8')).toBe('backend startup failed\n')
+      await expect(readFile(join(output, 'web-token'))).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('bounds installation separately and preserves failures when no files were extracted', async () => {
     const root = await mkdtemp(join(tmpdir(), 'open-science-install-deadline-'))
     const installDirectory = join(root, 'installed app 程序')
@@ -83,23 +104,36 @@ describe('Windows installer smoke plan', () => {
     await expect(findSetupInstaller(root)).rejects.toThrow(/exactly one Windows setup executable/)
   })
 
-  it('force-kills leftover processes whose executable still lives under the install directory', async () => {
-    const run = vi.fn().mockResolvedValue({ code: 0, stdout: '', stderr: '' })
+  it.each(['', '.', 'C:\\', '\\\\server\\share\\'])(
+    'rejects broad or relative process cleanup paths: %s',
+    async (directory) => {
+      const run = vi.fn()
+      await expect(terminateDirectoryProcesses(directory, run)).rejects.toThrow(
+        'absolute directory below a volume root'
+      )
+      expect(run).not.toHaveBeenCalled()
+    }
+  )
 
-    await terminateDirectoryProcesses('D:\\installed app 程序\\', run)
-
-    expect(run).toHaveBeenCalledWith(
-      'powershell.exe',
-      [
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        "$root = $args[0]; Get-CimInstance -ClassName Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($root, 'CurrentCultureIgnoreCase') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
-        'D:\\installed app 程序\\'
-      ],
-      { allowNonZero: true }
-    )
-  })
+  it.skipIf(process.platform !== 'win32')(
+    'passes the exact cleanup directory through actual PowerShell parsing',
+    async () => {
+      let result: Awaited<ReturnType<typeof runProcess>> | undefined
+      const directory = "D:\\installed app's files\\"
+      await terminateDirectoryProcesses(directory, async (executable, args, options) => {
+        // Keep the real argument binding, but replace process enumeration/termination with a
+        // read-only probe. This must never inspect or stop processes on the test host.
+        const script = args[3].replace(/Get-CimInstance[\s\S]*$/, '[Console]::Write($root)')
+        result = await runProcess(executable, [...args.slice(0, 3), script, ...args.slice(4)], {
+          ...options,
+          allowNonZero: true
+        })
+        return result
+      })
+      expect(result?.code, result?.stderr).toBe(0)
+      expect(result?.stdout).toBe(directory)
+    }
+  )
 
   it('derives the packaged version from stable and nightly installer names', () => {
     expect(installerVersion('aipoch-open-science-0.8.0-win-x64-setup.exe')).toBe('0.8.0')
@@ -871,7 +905,8 @@ Open-Science Web: http://127.0.0.1:52378/?token=iUFHGSACwBz2k1kSJfPixHbclDywVg0C
     expect(packagedResourcePaths(installDirectory)).toEqual([
       join(installDirectory, 'open-science.exe'),
       join(installDirectory, 'resources', 'app.asar'),
-      join(installDirectory, 'resources', 'micromamba.exe'),
+      join(installDirectory, 'resources', 'backend', 'resources', 'micromamba.exe'),
+      join(installDirectory, 'resources', 'backend', 'resources', 'micromamba-compat.exe'),
       join(installDirectory, 'resources', 'notebook-network-sandbox', 'wsl2', 'manifest.json'),
       join(
         installDirectory,
@@ -884,6 +919,54 @@ Open-Science Web: http://127.0.0.1:52378/?token=iUFHGSACwBz2k1kSJfPixHbclDywVg0C
     ])
   })
 
+  it('requires backend runners for current installs and allows the old layout only during upgrade certification', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'windows-runner-layout-'))
+    const resources = join(root, 'resources')
+    const backendResources = join(resources, 'backend', 'resources')
+    const current = join(backendResources, 'micromamba.exe')
+    const compatibility = join(backendResources, 'micromamba-compat.exe')
+    const legacy = join(resources, 'micromamba.exe')
+    try {
+      await mkdir(join(backendResources, 'prisma-client'), { recursive: true })
+      for (const path of [
+        join(root, 'open-science.exe'),
+        join(resources, 'app.asar'),
+        legacy,
+        join(backendResources, 'prisma-client', 'query_engine-windows.dll.node')
+      ])
+        await writeFile(path, '')
+      await expect(assertPackagedResources(root, { certifyWslPreview: false })).rejects.toThrow(
+        /micromamba/
+      )
+      await expect(
+        assertPackagedResources(root, {
+          certifyWslPreview: false,
+          allowLegacyMicromamba: true
+        })
+      ).resolves.toBe(legacy)
+      await writeFile(current, '')
+      // An incomplete new layout must not silently use the legacy copy, even in an old phase.
+      await expect(
+        assertPackagedResources(root, {
+          certifyWslPreview: false,
+          allowLegacyMicromamba: true
+        })
+      ).rejects.toThrow(/micromamba-compat/)
+      await writeFile(compatibility, '')
+      await expect(assertPackagedResources(root, { certifyWslPreview: false })).resolves.toBe(
+        current
+      )
+      await expect(
+        assertPackagedResources(root, {
+          certifyWslPreview: false,
+          allowLegacyMicromamba: true
+        })
+      ).resolves.toBe(current)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('requires exactly one native Windows Prisma engine', async () => {
     const installDirectory = await mkdtemp(join(tmpdir(), 'open-science-windows-engine-'))
     const resources = join(installDirectory, 'resources')
@@ -892,7 +975,8 @@ Open-Science Web: http://127.0.0.1:52378/?token=iUFHGSACwBz2k1kSJfPixHbclDywVg0C
     await Promise.all([
       writeFile(join(installDirectory, 'open-science.exe'), ''),
       writeFile(join(resources, 'app.asar'), ''),
-      writeFile(join(resources, 'micromamba.exe'), ''),
+      writeFile(join(resources, 'backend', 'resources', 'micromamba.exe'), ''),
+      writeFile(join(resources, 'backend', 'resources', 'micromamba-compat.exe'), ''),
       mkdir(join(resources, 'notebook-network-sandbox', 'wsl2'), { recursive: true }).then(() =>
         writeFile(
           join(resources, 'notebook-network-sandbox', 'wsl2', 'manifest.json'),
@@ -902,7 +986,9 @@ Open-Science Web: http://127.0.0.1:52378/?token=iUFHGSACwBz2k1kSJfPixHbclDywVg0C
       writeFile(join(prismaClient, 'query_engine-windows.dll.node'), '')
     ])
 
-    await expect(assertPackagedResources(installDirectory)).resolves.toBeUndefined()
+    await expect(assertPackagedResources(installDirectory)).resolves.toBe(
+      join(resources, 'backend', 'resources', 'micromamba.exe')
+    )
     await writeFile(
       join(resources, 'notebook-network-sandbox', 'wsl2', 'manifest.json'),
       JSON.stringify({
@@ -916,7 +1002,7 @@ Open-Science Web: http://127.0.0.1:52378/?token=iUFHGSACwBz2k1kSJfPixHbclDywVg0C
     await rm(join(resources, 'notebook-network-sandbox'), { recursive: true, force: true })
     await expect(
       assertPackagedResources(installDirectory, { certifyWslPreview: false })
-    ).resolves.toBeUndefined()
+    ).resolves.toBe(join(resources, 'backend', 'resources', 'micromamba.exe'))
     await mkdir(join(resources, 'notebook-network-sandbox', 'wsl2'), { recursive: true })
     await writeFile(
       join(resources, 'notebook-network-sandbox', 'wsl2', 'manifest.json'),

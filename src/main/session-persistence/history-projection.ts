@@ -5,9 +5,9 @@ import {
   resolveActiveConversationActivities,
   resolveActiveConversationMessages
 } from '../../shared/conversation-graph'
-import { sanitizeMessage } from '../../shared/session-persistence/message-codec'
-import { sanitizeArtifact } from '../../shared/session-persistence/message-content'
 import {
+  sanitizeMessage,
+  sanitizeArtifact,
   retainRecentSessionEventIds,
   sanitizeActivityGroup,
   sanitizeToolActivity

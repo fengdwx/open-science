@@ -38,6 +38,8 @@ export const useNetworkStore = create<NetworkStore>((set, get) => {
 
   const runProbe = async ({ announce = false, invalidate = false } = {}): Promise<void> => {
     const generation = ++probeGeneration
+    // A planned shutdown invalidates pending probes, but says nothing about internet access.
+    if (useDesktopRuntimeRecoveryStore.getState().closing) return
     const startedAt = Date.now()
 
     const holdAnnouncedState = async (): Promise<void> => {
@@ -60,6 +62,31 @@ export const useNetworkStore = create<NetworkStore>((set, get) => {
         reachable = true
       } else {
         try {
+          // The recovery store starts connected before its React subscriber mounts.
+          // Startup admission is separate: probing now would turn a starting backend
+          // into a sticky internet-check failure before the app can even open.
+          const startup = window.api?.runtimeStartup
+          if (startup) {
+            const state = await readWithDeadline(startup.getState, 10_000)
+            if (probeGeneration !== generation || useDesktopRuntimeRecoveryStore.getState().closing)
+              return
+            if (state.phase !== 'ready') {
+              set({ connectivity: get().isOnline ? 'unknown' : 'unreachable' })
+              return
+            }
+          }
+          // Electron can report runtime ready before the backend finishes composing its
+          // RPC owners. Database startup publishes ready only after that composition.
+          const backendStartup = window.api?.databaseStartup
+          if (backendStartup) {
+            const state = await readWithDeadline(backendStartup.getState, 10_000)
+            if (probeGeneration !== generation || useDesktopRuntimeRecoveryStore.getState().closing)
+              return
+            if (state.phase !== 'ready') {
+              set({ connectivity: get().isOnline ? 'unknown' : 'unreachable' })
+              return
+            }
+          }
           if (useDesktopRuntimeRecoveryStore.getState().phase !== 'connected') {
             throw new Error('Backend unavailable for network check.')
           }
@@ -69,6 +96,8 @@ export const useNetworkStore = create<NetworkStore>((set, get) => {
             throw new Error('Backend connection changed during network check.')
           }
         } catch (error) {
+          if (probeGeneration !== generation || useDesktopRuntimeRecoveryStore.getState().closing)
+            return
           try {
             window.api?.diagnostics?.reportRendererFailure(
               projectRendererFailure('handled-error', error, 'settings', 'network-check')
@@ -79,7 +108,11 @@ export const useNetworkStore = create<NetworkStore>((set, get) => {
           // A failed check says nothing about registry reachability. Never present an old answer
           // as the result of this attempt, including silent refreshes after runtime recovery.
           await holdAnnouncedState()
-          if (probeGeneration === generation && get().isOnline) {
+          if (
+            probeGeneration === generation &&
+            !useDesktopRuntimeRecoveryStore.getState().closing &&
+            get().isOnline
+          ) {
             set({ connectivity: 'probe-failed' })
           }
           return
@@ -88,7 +121,11 @@ export const useNetworkStore = create<NetworkStore>((set, get) => {
     }
 
     await holdAnnouncedState()
-    if (probeGeneration === generation && (get().isOnline || !reachable)) {
+    if (
+      probeGeneration === generation &&
+      !useDesktopRuntimeRecoveryStore.getState().closing &&
+      (get().isOnline || !reachable)
+    ) {
       const connectivity = reachable ? 'reachable' : 'unreachable'
       set({ connectivity })
     }
@@ -126,6 +163,13 @@ export const startNetworkMonitor = (): void => {
   if (monitorStarted || typeof window === 'undefined') return
   monitorStarted = true
 
+  window.api?.runtimeStartup?.onStateChanged(() => {
+    void useNetworkStore.getState().probeConnectivity({ invalidate: true })
+  })
+  window.api?.databaseStartup?.onStateChanged(() => {
+    void useNetworkStore.getState().probeConnectivity({ invalidate: true })
+  })
+
   useSettingsStore.subscribe((state, previous) => {
     const next = state.networkProxy
     const before = previous.networkProxy
@@ -141,6 +185,7 @@ export const startNetworkMonitor = (): void => {
 
   useDesktopRuntimeRecoveryStore.subscribe((state, previous) => {
     if (
+      state.closing !== previous.closing ||
       state.epoch !== previous.epoch ||
       (state.phase === 'connected' && previous.phase !== 'connected')
     ) {

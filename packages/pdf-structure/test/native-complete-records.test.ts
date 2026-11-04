@@ -3025,6 +3025,79 @@ const nativeCompoundMeasurements = (): ReturnType<typeof JSON.parse> => {
   }
 }
 
+function nativeTieredMarkerRecords(): ReturnType<typeof JSON.parse> {
+  const f = nativeCompoundMeasurements()
+  f.items = f.items.filter((item: { text: string }) => !['±', '0.01', '↓'].includes(item.text))
+  for (const item of f.items.filter((item: { baseline: number }) => item.baseline > 82)) {
+    item.baseline += 12
+    item.rect[1] += 12
+    item.rect[3] += 12
+  }
+  f.table.cropRect[3] += 12
+  f.rules.at(-1)[1] += 12
+  f.rules.at(-1)[3] += 12
+  f.items.push({
+    text: 'Section',
+    rect: [24, 84, 74, 96],
+    height: 12,
+    baseline: 96,
+    horizontal: true
+  })
+  const label = f.items.find((item: { text: string }) => item.text === 'Choice2')
+  f.items.push({
+    text: '∗',
+    rect: [label.rect[2], label.baseline - 13, label.rect[2] + 5, label.baseline - 5],
+    baseline: label.baseline - 5,
+    height: 8,
+    horizontal: true
+  })
+  f.items.forEach((item: { sourceItem: unknown; text: string }, index: number) => {
+    item.sourceItem = { pageNumber: 1, index, text: item.text }
+  })
+  return f
+}
+
+it.each([false, true])(
+  'keeps a raised native marker with its complete record beneath a proved tiered header with numeric underline %s',
+  (underline) => {
+    const f = nativeTieredMarkerRecords()
+    const label = f.items.find((item: { text: string }) => item.text === 'Choice2')
+    if (underline) f.rules.push([100, label.baseline - 9, 123, label.baseline - 9])
+    const result = refineTable(f.table, f.items, f.captions, [], f.rules, [])
+    expect(result.repairs).toContain('native-tiered-header-body-records-recovered')
+    expect(result.grid).toHaveLength(9)
+    expect(result.grid[4][0]).toBe('Choice2∗')
+    expect(result.grid.slice(3).map((row: string[]) => row.slice(1))).toEqual(
+      Array.from({ length: 6 }, () => Array.from({ length: 8 }, () => '0.25'))
+    )
+    expect(
+      result.cells
+        .flatMap((cell: { sourceItems?: { index: number }[] }) => cell.sourceItems ?? [])
+        .sort((a: { index: number }, b: { index: number }) => a.index - b.index)
+    ).toEqual(f.items.map((item: { sourceItem: unknown }) => item.sourceItem))
+  }
+)
+
+it.each(['stub rule', 'external alias', 'distant script'])(
+  'does not pair a tiered stub script without a unique unobstructed native anchor: %s',
+  (change) => {
+    const f = nativeTieredMarkerRecords()
+    const label = f.items.find((item: { text: string }) => item.text === 'Choice2')
+    const script = f.items.find((item: { text: string }) => item.text === '∗')
+    if (change === 'stub rule') f.rules.push([24, label.baseline - 9, 85, label.baseline - 9])
+    if (change === 'external alias') f.items.push({ ...script, rect: [800, 10, 805, 18] })
+    if (change === 'distant script') {
+      script.rect[0] += 8
+      script.rect[2] += 8
+    }
+    const result = refineTable(f.table, f.items, f.captions, [], f.rules, [])
+    expect(result.grid).toHaveLength(10)
+    expect(
+      result.grid.some((row: string[]) => row[0] === '∗' && row.slice(1).every((s) => !s))
+    ).toBe(true)
+  }
+)
+
 it('keeps complete compound source leaves when a later scalar header plan crosses their fonts', () => {
   const f = nativeCompoundMeasurements(),
     before = structuredClone(f),
@@ -4953,6 +5026,62 @@ const anonymousLoweredSuffix = (): ReturnType<typeof JSON.parse> => {
     runs
   }
 }
+
+it.each(['complete', 'missing-program', 'wrong-literal', 'ordinary-baseline', 'duplicate-program'])(
+  'retains a shallow native subscript only with complete source programs: %s',
+  (condition) => {
+    const f = anonymousLoweredSuffix()
+    f.items.splice(4, 1)
+    f.runs.splice(4, 1)
+    Object.assign(f.items[3], {
+      text: 'AB',
+      baseline: 131.2,
+      height: 8,
+      rect: [50, 123.2, 62, 131.2]
+    })
+    if (condition === 'ordinary-baseline')
+      Object.assign(f.items[3], { baseline: 130, rect: [50, 122, 62, 130] })
+    Object.assign(f.runs[3], {
+      ...f.items[3],
+      literalGlyphs: ['A', 'B'],
+      glyphRuns: [3, 3]
+    })
+    f.items.forEach((item: ReturnType<typeof JSON.parse>, index: number) => {
+      item.sourceItem = { pageNumber: 1, index, text: item.text }
+    })
+    if (condition === 'missing-program') f.runs.splice(3, 1)
+    if (condition === 'wrong-literal') f.runs[3].literalGlyphs = ['A', '?']
+    if (condition === 'duplicate-program') f.runs.push(structuredClone(f.runs[3]))
+    const before = structuredClone(f)
+    const result = refineTable(
+      f.table,
+      f.items,
+      f.captions,
+      [],
+      f.rules,
+      f.runs,
+      undefined,
+      new Map()
+    )
+    const cell = result.cells.find(
+      (c: ReturnType<typeof JSON.parse>) => c.row === 1 && c.column === 0
+    )
+    if (condition === 'complete') {
+      expect(result.repairs).toContain('native-closed-leaf-complete-records-recovered')
+      expect(cell.textRuns).toEqual([
+        { text: 'q', position: 'normal' },
+        { text: 'AB', position: 'subscript' }
+      ])
+      expect(cell.sourceItems).toEqual(
+        f.items.slice(2, 4).map((i: ReturnType<typeof JSON.parse>) => i.sourceItem)
+      )
+    } else
+      expect(cell.textRuns?.some((r: { position: string }) => r.position === 'subscript')).not.toBe(
+        true
+      )
+    expect(f).toEqual(before)
+  }
+)
 
 it('keeps a touching terminal lowered fragment with its unique native script parent', () => {
   const f = anonymousLoweredSuffix(),
@@ -9550,10 +9679,6 @@ it.each([
   'missing-title',
   'duplicate-title',
   'missing-closing',
-  'missing-observed-TJ',
-  'inside-glyph-TJ-gap',
-  'duplicate-observed-run',
-  'metadata-run-mismatch',
   'native-interior-wall'
 ])(
   'refuses the partial-rule parent projection without unique complete native owners: %s',
@@ -9563,8 +9688,6 @@ it.each([
         .filter((r: number[]) => r[2] - r[0] < 200)
         .sort((a: number[], b: number[]) => a[0] - b[0]),
       top = Math.min(...f.items.map((i: { baseline: number }) => i.baseline)),
-      parent = f.items.find((i: { text: string }) => i.text === '97.5XX XXX.'),
-      observed = f.runs.find((i: { text: string }) => i.text === parent.text),
       last = partial.at(-1)
     if (control === 'missing-partial-rule') f.rules = f.rules.filter((r: unknown) => r !== last)
     if (control === 'partial-rule-center-shift') {
@@ -9587,15 +9710,6 @@ it.each([
     if (control === 'missing-title') f.captions = []
     if (control === 'duplicate-title') f.captions.push(structuredClone(f.captions[0]))
     if (control === 'missing-closing') f.rules.splice(2, 1)
-    if (control === 'missing-observed-TJ') f.runs = f.runs.filter((r: unknown) => r !== observed)
-    if (control === 'inside-glyph-TJ-gap')
-      observed.gaps = observed.gaps.map((g: { left: number; right: number; index: number }) => ({
-        ...g,
-        left: g.left + 4,
-        right: g.right + 4
-      }))
-    if (control === 'duplicate-observed-run') f.runs.push(structuredClone(observed))
-    if (control === 'metadata-run-mismatch') observed.height += 0.2
     if (control === 'native-interior-wall') f.rules.push([350, f.rules[0][1], 350, f.rules[2][1]])
     const before = structuredClone(f),
       result = literalOutput(f)
@@ -9603,6 +9717,94 @@ it.each([
     expect(f).toEqual(before)
   }
 )
+
+const partialRuleRunFaults = [
+  'missing-observed-TJ',
+  'inside-glyph-TJ-gap',
+  'duplicate-observed-run',
+  'metadata-run-mismatch'
+]
+const damagePartialRuleRun = (f: ReturnType<typeof JSON.parse>, control: string): void => {
+  const observed = f.runs.find((run: { text: string }) => run.text === '97.5XX XXX.')
+  if (control === 'missing-observed-TJ') f.runs = f.runs.filter((run: unknown) => run !== observed)
+  if (control === 'inside-glyph-TJ-gap')
+    observed.gaps = observed.gaps.map((gap: { left: number; right: number; index: number }) => ({
+      ...gap,
+      left: gap.left + 4,
+      right: gap.right + 4
+    }))
+  if (control === 'duplicate-observed-run') f.runs.push(structuredClone(observed))
+  if (control === 'metadata-run-mismatch') observed.height += 0.2
+}
+it.each(partialRuleRunFaults)(
+  'preserves complete partial-rule parent source owners without splitting on %s',
+  (control) => {
+    const f = partialRuleParents()
+    damagePartialRuleRun(f, control)
+    const before = structuredClone(f),
+      result = literalOutput(f)
+    expect(result.grid).toEqual(partialRuleParentGrid)
+    const parent = result.cells.find(
+      (cell: { row: number; column: number }) => cell.row === 0 && cell.column === 6
+    )
+    const original = f.items.find((item: { text: string }) => item.text === '97.5XX XXX.')
+    expect(parent.sourceTokens).toEqual([original])
+    expect(parent.sourceRects).toEqual([original.rect])
+    expect(
+      result.cells
+        .flatMap((cell: { sourceTokens: unknown[] }) => cell.sourceTokens)
+        .map(literalNativeSignature)
+        .sort()
+    ).toEqual(f.items.map(literalNativeSignature).sort())
+    expect(result.unassigned).toEqual([])
+    expect(f).toEqual(before)
+  }
+)
+const splitPartialRuleOwners = (
+  f: ReturnType<typeof JSON.parse>
+): ReturnType<typeof JSON.parse> => {
+  // Explicit coarse donors exercise the measured-gap gate even though the
+  // public header path now keeps the original fused token intact.
+  const table = {
+    ...structuredClone(f.table),
+    grid: structuredClone(f.expectedGrid),
+    cells: structuredClone([...f.retainedCells, ...f.initialFaultyParentCells]),
+    notes: []
+  }
+  for (const cell of table.cells) table.grid[cell.row][cell.column] = cell.text
+  return table
+}
+it('accepts explicitly split partial-rule donors only with their unique measured native gap', () => {
+  const f = partialRuleParents(),
+    table = splitPartialRuleOwners(f),
+    before = structuredClone(table)
+  expect(
+    lateFencedGroupHelpers.proveNativePartialRuleParentOwners(
+      table,
+      f.items,
+      f.captions,
+      f.rules,
+      f.runs
+    )?.replacements
+  ).toHaveLength(2)
+  expect(table).toEqual(before)
+})
+it.each(partialRuleRunFaults)('rejects explicitly split partial-rule donors with %s', (control) => {
+  const f = partialRuleParents(),
+    table = splitPartialRuleOwners(f)
+  damagePartialRuleRun(f, control)
+  const before = structuredClone({ f, table })
+  expect(
+    lateFencedGroupHelpers.proveNativePartialRuleParentOwners(
+      table,
+      f.items,
+      f.captions,
+      f.rules,
+      f.runs
+    )
+  ).toBeUndefined()
+  expect({ f, table }).toEqual(before)
+})
 
 it('counts redundant native paint once for an otherwise uniquely proved parent tier', () => {
   const f = partialRuleParents(),
@@ -10428,13 +10630,53 @@ it('recovers independent multiplier leaves and complete native-fenced model grou
   expect(f).toEqual(before)
 })
 
+it('bounds anchor inspection when a dense ruled face must fall through to another recovery', async () => {
+  const { recoverRuledRecordFaces } = await import(
+    pathToFileURL(resolve('resources/literature-pdf-ruled-record-faces.mjs')).href
+  )
+  const f = fixture('fenced-smallcaps-stub-owner')
+  let textReads = 0
+  for (const item of f.items) {
+    const text = item.text
+    Object.defineProperty(item, 'text', {
+      enumerable: true,
+      get: () => {
+        textReads++
+        return text
+      }
+    })
+  }
+  const result = recoverRuledRecordFaces(f.table, f.items, f.captions, f.rules)
+  // Count work, not elapsed time: column refinement must not repeat the all-pairs scan.
+  expect(textReads).toBeLessThan(f.items.length ** 2 * 6)
+  expect(result).toBeUndefined()
+})
+
 it('repairs only a same-baseline small-caps native fenced stub without rebuilding rich peers', () => {
   const f = fixture('fenced-smallcaps-stub-owner'),
     before = structuredClone(f),
     result = literalOutput(f)
   expect(result.grid).toEqual(f.expectedGrid)
   expect(result.cells).toHaveLength(f.expectedCellCount)
-  for (const expected of f.expectedCells)
+  const headerRun = f.runs.find(
+    (run: { text: string }) => run.text === 'Model XXXXXXXX-4 XXXXXXXX-3 XXXXXXXXXX'
+  )
+  // Earlier snapshots divided this header by character counts. Its native TJ
+  // gaps supply the actual ink edges; every unrelated rich cell stays exact.
+  const expectedCells = structuredClone(f.expectedCells)
+  for (const cell of expectedCells) {
+    if (cell.row !== 0 || cell.column < 1 || cell.column > 4) continue
+    const part = cell.column - 1
+    const rect = [
+      part ? headerRun.gaps[part - 1].right : headerRun.rect[0],
+      headerRun.rect[1],
+      part < 3 ? headerRun.gaps[part].left : headerRun.rect[2],
+      headerRun.rect[3]
+    ]
+    cell.sourceRects = [rect]
+    cell.sourceTokens[0].rect = rect
+  }
+  for (const expected of expectedCells)
     expect(
       result.cells.find(
         (c: { row: number; column: number }) =>

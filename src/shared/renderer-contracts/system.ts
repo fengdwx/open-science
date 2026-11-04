@@ -1,3 +1,5 @@
+import type { PackageOperationSnapshot } from '../session-package'
+import { RUNTIME_STARTUP_CHANNELS, type RuntimeStartupState } from '../runtime-startup'
 import {
   DESKTOP_RUNTIME_RECOVERY_CHANNELS,
   type DesktopRuntimeRecoveryState
@@ -40,6 +42,44 @@ export const cliGetStatusContracts = {
 } as const
 
 export const databaseStartupGetStateContracts = {
+  'packagePresentation.getState': callable<() => Promise<PackageOperationSnapshot | null>>()(
+    'sessions',
+    ['package-presentation:get-state', ELECTRON],
+    { optionalRoot: true }
+  ),
+  'packagePresentation.onStateChanged': callable<
+    (listener: AcpListener<PackageOperationSnapshot | null>) => RemoveListener
+  >()('sessions', ['package-presentation:changed', ELECTRON_EVENT], { optionalRoot: true }),
+  'packagePresentation.cancelTransfer': callable<(id: string) => Promise<void>>()(
+    'sessions',
+    ['package-presentation:cancel-transfer', ELECTRON],
+    { optionalRoot: true }
+  ),
+  'runtimeStartup.getState': callable<() => Promise<RuntimeStartupState>>()(
+    'runtime-startup',
+    [RUNTIME_STARTUP_CHANNELS.getState, ELECTRON],
+    { optionalRoot: true }
+  ),
+  'runtimeStartup.stopAndContinue': callable<() => Promise<RuntimeStartupState>>()(
+    'runtime-startup',
+    [RUNTIME_STARTUP_CHANNELS.stopAndContinue, ELECTRON],
+    { optionalRoot: true }
+  ),
+  'runtimeStartup.recover': callable<() => Promise<RuntimeStartupState>>()(
+    'runtime-startup',
+    [RUNTIME_STARTUP_CHANNELS.recover, ELECTRON],
+    { optionalRoot: true }
+  ),
+  'runtimeStartup.quit': callable<() => Promise<void>>()(
+    'runtime-startup',
+    [RUNTIME_STARTUP_CHANNELS.quit, ELECTRON],
+    { optionalRoot: true }
+  ),
+  'runtimeStartup.onStateChanged': callable<
+    (listener: AcpListener<RuntimeStartupState>) => RemoveListener
+  >()('runtime-startup', [RUNTIME_STARTUP_CHANNELS.onStateChanged, ELECTRON_EVENT], {
+    optionalRoot: true
+  }),
   'desktopRuntime.getState': callable<() => Promise<DesktopRuntimeRecoveryState>>()(
     'desktop-runtime',
     [DESKTOP_RUNTIME_RECOVERY_CHANNELS.getState, ELECTRON],
@@ -115,8 +155,11 @@ export const lifecycleClaimRuntimeWriterContracts = {
 
 export const logsGetStatusContracts = {
   'logs.getStatus': callable<() => Promise<LogFileStatus>>()('logs', ['logs:get-status', LOCAL]),
-  'logs.openFile': callable<() => Promise<OpenLogFileResult>>()('logs', ['logs:open-file', LOCAL]),
-  'logs.revealInFolder': callable<() => Promise<RevealLogFileResult>>()('logs', [
+  'logs.openFile': callable<(name?: string) => Promise<OpenLogFileResult>>()('logs', [
+    'logs:open-file',
+    LOCAL
+  ]),
+  'logs.revealInFolder': callable<(name?: string) => Promise<RevealLogFileResult>>()('logs', [
     'logs:reveal-in-folder',
     LOCAL
   ])

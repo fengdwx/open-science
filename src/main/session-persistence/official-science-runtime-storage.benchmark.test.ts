@@ -492,13 +492,18 @@ it.skipIf(phase !== 'write' && phase !== 'probe')(
           session = admission.session
           latestCommitted = session
           samples.push(admission.sample)
-          // Preserve all original provider chunks and timestamps. Four successive 500ms input
-          // batches share one explicit flush, matching the original Main 2s batching interval
-          // without sleeping or including scheduler wait time in commit latency.
-          const flushIntervalMs = 2_000
-          const batchesPerFlush = flushIntervalMs / continuation.metadata.batchIntervalMs
-          expect(batchesPerFlush).toBe(4)
+          // Preserve all input chunks and timestamps. By default four 500ms batches share
+          // one flush (the original Main 2s interval). An explicit larger group bounds a smoke
+          // run's disk writes; report its interval instead of treating it as production timing.
           const inputMessageBatches = continuationBatches.filter(({ kind }) => kind === 'message')
+          const batchesPerFlush = Number(process.env.OPEN_SCIENCE_RUNTIME_BATCHES_PER_FLUSH ?? 4)
+          if (
+            !Number.isSafeInteger(batchesPerFlush) ||
+            batchesPerFlush < 1 ||
+            inputMessageBatches.length % batchesPerFlush !== 0
+          )
+            throw new Error('Flush batch count must be a positive divisor of the input batches')
+          const flushIntervalMs = batchesPerFlush * continuation.metadata.batchIntervalMs
           const groupedBatches: Array<
             Pick<OfficialScienceContinuationBatch, 'kind' | 'virtualTimeMs' | 'events'>
           > = []
@@ -511,7 +516,7 @@ it.skipIf(phase !== 'write' && phase !== 'probe')(
               events: group.flatMap(({ events }) => events)
             })
           }
-          expect(groupedBatches).toHaveLength(48)
+          expect(groupedBatches).toHaveLength(inputMessageBatches.length / batchesPerFlush)
           expect(groupedBatches.flatMap(({ events }) => events)).toEqual(
             inputMessageBatches.flatMap(({ events }) => events)
           )
@@ -555,7 +560,7 @@ it.skipIf(phase !== 'write' && phase !== 'probe')(
               )
           }
           expect(terminalPublications).toBe(1)
-          expect(samples).toHaveLength(probe ? 5 : 51)
+          expect(samples).toHaveLength(batches.length + 2)
           const completedSession = canonical(session, root).session
           const completed = completedSession.conversationGraph!
           expect(completedSession.artifacts).toEqual(originalSession.artifacts)

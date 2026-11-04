@@ -1,7 +1,8 @@
 /* eslint-disable @typescript-eslint/explicit-function-return-type */
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -9,7 +10,8 @@ import {
   classifyChanges,
   fixtureTestPatterns,
   matchesPath,
-  parseNameStatus
+  parseNameStatus,
+  playwrightReaderTests
 } from './classify-pr-changes.mjs'
 import { loadModuleImpactManifest } from './load-module-impact.mjs'
 import { validateModuleImpactManifest } from './validate-module-impact.mjs'
@@ -17,7 +19,48 @@ import { packageTestSelectedRoots, createPackageTestPlan } from './package-test-
 import { resolveModuleImpactInputs } from './module-impact-inputs.mjs'
 import { isModuleRoutableOwnerPath } from './module-ownership-paths.mjs'
 
-const defaultManifest = loadModuleImpactManifest()
+import {
+  derivedConsumersPath,
+  loadDerivedConsumers,
+  withDerivedConsumers,
+  usesReviewedBoundary
+} from './module-graph/policy.mjs'
+
+// When the committed index is absent (runtime-generated), generate it lazily so preflight
+// (git-archived code without node_modules) never imports the typescript dependency.
+async function loadOrGenerateDerivedConsumers(
+  manifest = loadModuleImpactManifest(),
+  cwd = process.cwd(),
+  revision
+) {
+  // A generated local index describes the checkout, not the requested revision; only an index
+  // committed at that revision is authoritative for it.
+  const committedAtRevision =
+    revision &&
+    execFileSync('git', ['ls-tree', '--name-only', revision, '--', derivedConsumersPath], {
+      cwd,
+      encoding: 'utf8'
+    }).trim() === derivedConsumersPath
+  if (!revision || committedAtRevision) {
+    const loaded = loadDerivedConsumers()
+    if (Object.keys(loaded.modules).length > 0) return loaded
+  }
+  // Generate from the requested revision or checkout. Failures propagate; an empty index
+  // would silently narrow selection to explicit tests only.
+  const { consumerDependencyGraph, generateDerivedConsumers, sourceSnapshot, workingTreeSource } =
+    await import('./module-graph/index.mjs')
+  // A revision range is planned from its immutable head, never a possibly dirty checkout.
+  const source = revision ? sourceSnapshot(revision, cwd) : workingTreeSource(cwd)
+  const runtimeEdges = Object.entries(
+    JSON.parse(source.read('scripts/ci/module-runtime-consumers.json') ?? '{}')
+  )
+  return generateDerivedConsumers(manifest, consumerDependencyGraph(source, runtimeEdges).reverse)
+}
+
+// Synchronous planners cannot generate the index (module load must stay free of the TypeScript
+// parser for trusted preflight). Every production caller passes an effective manifest; the
+// default only carries a committed index, if any.
+const defaultManifest = withDerivedConsumers(loadModuleImpactManifest(), loadDerivedConsumers())
 const packageRegistryPath = new URL('./package-test-boundaries.json', import.meta.url)
 // Older trusted extraction bundles have no registry: retain all tests rather than guess.
 const packageRegistry = existsSync(packageRegistryPath)
@@ -56,7 +99,7 @@ function sorted(values) {
 }
 
 function declaredTests(module) {
-  return testKinds.flatMap((kind) => module.testFiles[kind])
+  return testKinds.flatMap((kind) => module.testFiles[kind] ?? [])
 }
 
 export function modulesForPath(manifest, path) {
@@ -78,16 +121,17 @@ export function modulesForPath(manifest, path) {
   // cannot establish ownership; unmatched implementations still fall back to full.
   const ownerTest = path.replace(/(\.[cm]?[jt]sx?)$/, '.test$1')
   return Object.entries(manifest.modules)
-    .filter(([, module]) => module.testFiles.owner.includes(ownerTest))
+    .filter(([, module]) => (module.testFiles.owner ?? []).includes(ownerTest))
     .map(([moduleId]) => moduleId)
 }
 
-function expandConsumers(manifest, seeds) {
+function expandConsumers(manifest, seeds, testsOnly = false) {
   const selected = new Set()
   const visit = (moduleId) => {
     if (selected.has(moduleId)) return
     selected.add(moduleId)
-    for (const consumer of manifest.modules[moduleId].consumerModules) visit(consumer)
+    if (testsOnly && usesReviewedBoundary(moduleId, manifest.modules[moduleId])) return
+    for (const consumer of manifest.modules[moduleId].consumerModules ?? []) visit(consumer)
   }
   for (const seed of seeds) visit(seed)
   return Object.keys(manifest.modules).filter((moduleId) => selected.has(moduleId))
@@ -114,6 +158,19 @@ function selectivePlan(manifest, moduleIds, reasonChains, graph) {
   }
 }
 
+function explainDerivedTests(plan, manifest) {
+  const selected = new Set(plan.testFiles)
+  plan.reasonChains = sorted([
+    ...plan.reasonChains,
+    ...plan.modules.flatMap((id) =>
+      (manifest.modules[id].derivedConsumerTests ?? [])
+        .filter((test) => selected.has(test))
+        .map((test) => `${id} -> derived dependency evidence -> ${test}`)
+    )
+  ])
+  return plan
+}
+
 function fullPlan(reason) {
   return {
     mode: 'full',
@@ -137,9 +194,12 @@ export function createModuleTestPlan(moduleId, manifest = defaultManifest) {
     status: 'not-requested',
     testFiles: []
   })
-  return applyPackageBoundary(
-    plan,
-    manifest.modules[moduleId].ownerPaths.filter((path) => path.startsWith('packages/'))
+  return explainDerivedTests(
+    applyPackageBoundary(
+      plan,
+      manifest.modules[moduleId].ownerPaths.filter((path) => path.startsWith('packages/'))
+    ),
+    manifest
   )
 }
 
@@ -183,10 +243,16 @@ export function createAffectedTestPlan(
       reasons.push(`${change.path} -> documentation lane -> no module tests`)
       continue
     }
-    // Browser fixtures/specs execute in the complete browser lane, not Vitest. This explicit
-    // owner must remain selected in mixed diffs; unknown E2E helpers still fall back to full.
-    if (pathPlan.roots.includes('renderer_browser_e2e') && !pathPlan.bundles.includes('unit')) {
-      reasons.push(`${change.path} -> renderer browser E2E lane -> no module tests`)
+    // Playwright specs and fixtures execute in their E2E lanes, not Vitest. Only declared
+    // readers run here; unattributed E2E files still fall back to full through the classifier.
+    const readerTests = playwrightReaderTests(change.path)
+    if (pathPlan.mode === 'selective' && readerTests) {
+      for (const test of readerTests) directTests.add(test)
+      reasons.push(
+        readerTests.length > 0
+          ? `${change.path} -> Playwright E2E input -> declared readers ${readerTests.join(', ')}`
+          : `${change.path} -> Playwright E2E lane -> no module tests`
+      )
       continue
     }
     for (const path of [change.path, change.previousPath].filter(Boolean)) {
@@ -228,7 +294,8 @@ export function createAffectedTestPlan(
     }
   }
 
-  const modules = expandConsumers(manifest, [...seeds])
+  const capabilityModules = expandConsumers(manifest, [...seeds])
+  const modules = expandConsumers(manifest, [...seeds], true)
   // A consumer's full marker describes edits to its own contract, not selecting
   // its tests as evidence for another owner. Retain the entire consumer closure.
   const fullModule = [...seeds, ...testModules].find(
@@ -239,16 +306,25 @@ export function createAffectedTestPlan(
   }
   for (const moduleId of seeds) {
     const visit = (consumer, chain) => {
-      reasons.push([...chain, consumer].join(' -> '))
-      for (const next of manifest.modules[consumer].consumerModules) {
+      reasons.push(
+        [
+          ...chain,
+          consumer,
+          ...(!modules.includes(consumer) ? ['capability routing only'] : [])
+        ].join(' -> ')
+      )
+      for (const next of manifest.modules[consumer].consumerModules ?? []) {
         visit(next, [...chain, consumer])
       }
     }
-    for (const consumer of manifest.modules[moduleId].consumerModules) {
+    for (const consumer of manifest.modules[moduleId].consumerModules ?? []) {
       visit(consumer, [moduleId])
     }
   }
   const plan = selectivePlan(manifest, [...modules, ...testModules], reasons, graph)
+  const capabilityPlan = selectivePlan(manifest, [...capabilityModules, ...testModules], [], graph)
+  plan.capabilityOverlays = capabilityPlan.capabilityOverlays
+  plan.fallbackCapabilities = capabilityPlan.fallbackCapabilities
   // Editing a registered test runs that test; changing implementations or shared fixtures
   // still runs every declared owner, contract and transitive consumer test.
   plan.testFiles = sorted([
@@ -256,9 +332,12 @@ export function createAffectedTestPlan(
     ...directTests,
     ...graph.testFiles
   ])
-  return applyPackageBoundary(
-    plan,
-    changes.flatMap((change) => [change.path, change.previousPath].filter(Boolean))
+  return explainDerivedTests(
+    applyPackageBoundary(
+      plan,
+      changes.flatMap((change) => [change.path, change.previousPath].filter(Boolean))
+    ),
+    manifest
   )
 }
 
@@ -282,6 +361,60 @@ function isPortableVitestFile(path) {
     !path.startsWith('e2e/') &&
     /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path)
   )
+}
+
+// PR and queue full plans defer the complete portable suite to scheduled acceptance. They still
+// run the declared closure of each owned change, so a full marker or a global input cannot remove
+// its owner, contract and consumer tests before merge. Deleted paths and paths that only resolve
+// to full validation remain covered by the deferred suite. The floor uses declared evidence only:
+// graph candidates are collected for every changed path, including those the floor excludes, and
+// trusted preflight has no graph, so both sides must select the same files.
+const declaredFloorGraph = Object.freeze({
+  status: 'not-used',
+  reason: 'full-plan floor uses declared module evidence only',
+  testFiles: []
+})
+
+export function createFullPlanFloor(changes, manifest = defaultManifest, registrationModules = []) {
+  const graph = declaredFloorGraph
+  const modules = Object.fromEntries(
+    Object.entries(manifest.modules).map(([moduleId, module]) => {
+      const floorModule = { ...module }
+      delete floorModule.fullTestReason
+      return [moduleId, floorModule]
+    })
+  )
+  const floorManifest = { ...manifest, modules }
+  // Each change joins the floor only when it has its own bounded selection, so one unowned or
+  // global path cannot remove the floor of the owned changes beside it. A rename joins only when
+  // both its source and destination are bounded, and selects both owners. Deleted, type-changed,
+  // unmerged and unknown changes add no floor.
+  const bounded = (path) =>
+    createAffectedTestPlan(
+      [{ path, status: 'modified' }],
+      graph,
+      floorManifest,
+      registrationModules
+    ).mode === 'selective'
+  const floorChanges = changes.flatMap((change) => {
+    if (['added', 'modified', 'copied'].includes(change.status)) {
+      return bounded(change.path) ? [{ path: change.path, status: 'modified' }] : []
+    }
+    if (change.status === 'renamed' && bounded(change.path) && bounded(change.previousPath)) {
+      return [change.previousPath, change.path].map((path) => ({ path, status: 'modified' }))
+    }
+    return []
+  })
+  const plan = createAffectedTestPlan(floorChanges, graph, floorManifest, registrationModules)
+  if (plan.mode !== 'selective' || plan.testFiles.length === 0) return undefined
+  return {
+    ...plan,
+    floorPaths: sorted(floorChanges.map(({ path }) => path)),
+    reasonChains: sorted([
+      ...plan.reasonChains,
+      'full plan -> declared module test floor; complete portable suite deferred to scheduled acceptance'
+    ])
+  }
 }
 
 export function collectCodeGraphTests(
@@ -387,10 +520,25 @@ export function executeModuleTestPlan(
     )
   }
   const command = npmExecPath ? nodeExecutable : 'npm'
-  const arguments_ = npmExecPath ? [npmExecPath, ...npmArguments] : npmArguments
-  const result = spawn(command, arguments_, { cwd, env: environment, stdio: 'inherit' })
-  if (result.error) throw result.error
-  return result.status ?? 1
+  let arguments_ = npmExecPath ? [npmExecPath, ...npmArguments] : npmArguments
+  let argumentDirectory
+  try {
+    // npm also crosses cmd.exe on Windows (8,191 characters). Leave room for its wrapper.
+    if (!mergeReports && JSON.stringify([command, ...arguments_]).length > 6000) {
+      argumentDirectory = mkdtempSync(resolve(tmpdir(), 'open-science-vitest-'))
+      const argumentFile = resolve(argumentDirectory, 'arguments.json')
+      writeFileSync(argumentFile, JSON.stringify(['run', ...npmArguments.slice(2)]), {
+        mode: 0o600
+      })
+      const fileArguments = ['run', 'test:module:arguments', '--', argumentFile]
+      arguments_ = npmExecPath ? [npmExecPath, ...fileArguments] : fileArguments
+    }
+    const result = spawn(command, arguments_, { cwd, env: environment, stdio: 'inherit' })
+    if (result.error) throw result.error
+    return result.status ?? 1
+  } finally {
+    if (argumentDirectory) rmSync(argumentDirectory, { recursive: true, force: true })
+  }
 }
 
 function argumentValue(arguments_, name) {
@@ -407,7 +555,11 @@ export async function runModuleTestCli(arguments_ = process.argv.slice(2), optio
   if (command === 'module') {
     const moduleId = arguments_[1]
     if (!moduleId || moduleId.startsWith('--')) throw new Error('Module id is required')
-    const plan = createModuleTestPlan(moduleId)
+    const manifest = loadModuleImpactManifest()
+    const derived =
+      options.derivedConsumers ??
+      (await loadOrGenerateDerivedConsumers(manifest, options.cwd ?? process.cwd()))
+    const plan = createModuleTestPlan(moduleId, withDerivedConsumers(manifest, derived))
     return executeModuleTestPlan(plan, { ...options, testArguments })
   }
   if (command !== 'affected') throw new Error(`Unknown module test-impact command: ${command}`)
@@ -425,60 +577,11 @@ export async function runModuleTestCli(arguments_ = process.argv.slice(2), optio
   if (arguments_.includes('--coverage-changed') && !coverageChanged) {
     throw new Error('--coverage-changed requires a Git revision')
   }
-  const changes = changesFromGit(base, head, options)
-  const paths = sorted(
-    changes.flatMap(({ path, previousPath }) => [path, previousPath].filter(Boolean))
-  )
-  const graph = collectCodeGraphTests(paths, options)
-  const { manifest, registrationModules, registrationOnly } = resolveModuleImpactInputs(changes, {
-    base,
-    head,
+  const { plan, changes } = await resolveAffectedTestPlan(base, head, {
+    tier,
+    fullFloor: arguments_.includes('--full-floor'),
     ...options
   })
-  let plan = createAffectedTestPlan(changes, graph, manifest, registrationModules, registrationOnly)
-  // Keep preflight dependency-free; refine only the installed test runner's package-only plan.
-  if (
-    plan.mode === 'selective' &&
-    changes.length &&
-    changes.every(({ path }) => path.startsWith('packages/')) &&
-    !packageTestSelectedRoots(options.environment ?? process.env).includes('packages')
-  ) {
-    try {
-      const { refinePackageHostTests } = await import('./package-host-test-impact.mjs')
-      plan = refinePackageHostTests(plan, changes, manifest, {
-        base,
-        head,
-        graphTests: graph.testFiles,
-        tier,
-        ...options
-      })
-    } catch {
-      plan.reasonChains.push(
-        'package host evidence unavailable -> retain complete declared selection'
-      )
-    }
-  }
-  if (
-    plan.mode === 'selective' &&
-    tier === 'pr' &&
-    changes.length &&
-    changes.every(({ path }) => path.startsWith('src/'))
-  ) {
-    try {
-      const { refineHostTests } = await import('./package-host-test-impact.mjs')
-      plan = refineHostTests(plan, changes, manifest, {
-        base,
-        head,
-        graphTests: graph.testFiles,
-        tier,
-        ...options
-      })
-    } catch {
-      plan.reasonChains.push(
-        'host consumer evidence unavailable -> retain complete declared selection'
-      )
-    }
-  }
   if (arguments_.includes('--require-selective') && plan.mode !== 'selective') {
     throw new Error(
       `Selective test plan required; refusing full execution.\n${formatModuleTestPlan(plan)}`
@@ -519,6 +622,108 @@ export async function runModuleTestCli(arguments_ = process.argv.slice(2), optio
         ]
       : testArguments
   })
+}
+
+// The plan `affected` executes for a revision range, including CodeGraph and host/package
+// refinement. Shadow reports compare against this, not the unrefined registered plan.
+export async function resolveAffectedTestPlan(
+  base,
+  head,
+  { tier = 'queue', fullFloor = false, ...options } = {}
+) {
+  const derivedConsumers =
+    options.derivedConsumers ??
+    (await loadOrGenerateDerivedConsumers(
+      loadModuleImpactManifest(),
+      options.cwd ?? process.cwd(),
+      // Tests run against the checked-out commit (a merge commit in pull_request jobs), so the
+      // evidence is that commit's immutable snapshot, not --head and not the mutable worktree.
+      'HEAD'
+    ))
+  const { manifest, registrationModules, registrationOnly, changes } = resolveModuleImpactInputs(
+    changesFromGit(base, head, options),
+    { base, head, ...options, derivedConsumers }
+  )
+  const paths = sorted(
+    changes.flatMap(({ path, previousPath }) => [path, previousPath].filter(Boolean))
+  )
+  const graph = collectCodeGraphTests(paths, options)
+  let plan = createAffectedTestPlan(changes, graph, manifest, registrationModules, registrationOnly)
+  // Trusted preflight selected the floor for a full plan. Run it as declared, without narrowing
+  // refinements, which evaluate the complete change set the floor excludes. Changed-source
+  // coverage is limited to the floor's changes; the deferred suite covers the remainder.
+  if (fullFloor && plan.mode === 'full') {
+    const floor = createFullPlanFloor(changes, manifest, registrationModules)
+    if (floor) {
+      const floorChanges = changes.filter(({ path }) => floor.floorPaths.includes(path))
+      return { plan: floor, changes: floorChanges, manifest, registrationModules, registrationOnly }
+    }
+  }
+  // Documentation and trusted additive records do not turn a source boundary into a
+  // mixed product change. Keep their plan evidence and capability selection intact.
+  const sourceChanges = changes.filter((change) => {
+    const pathPlan = classifyChanges([change], undefined, {
+      moduleManifest: manifest,
+      registrationModules
+    })
+    return (
+      !pathPlan.roots.includes('module_registration') &&
+      !(pathPlan.lanes.includes('docs') && !pathPlan.bundles.includes('unit'))
+    )
+  })
+  if (
+    plan.mode === 'selective' &&
+    sourceChanges.some(({ path }) => path.startsWith('src/')) &&
+    sourceChanges.some(({ path }) => path.startsWith('packages/'))
+  )
+    plan.reasonChains.push(
+      'mixed host/package product boundaries -> retain complete declared selection'
+    )
+  // Keep preflight dependency-free; refinement runs only in the installed test runner.
+  if (
+    plan.mode === 'selective' &&
+    sourceChanges.length &&
+    sourceChanges.every(({ path }) => path.startsWith('packages/')) &&
+    !packageTestSelectedRoots(options.environment ?? process.env).includes('packages')
+  ) {
+    try {
+      const { refinePackageHostTests } = await import('./package-host-test-impact.mjs')
+      plan = refinePackageHostTests(plan, sourceChanges, manifest, {
+        registrationModules,
+        base,
+        head,
+        graphTests: graph.testFiles,
+        tier,
+        ...options
+      })
+    } catch {
+      plan.reasonChains.push(
+        'package host evidence unavailable -> retain complete declared selection'
+      )
+    }
+  }
+  if (
+    plan.mode === 'selective' &&
+    sourceChanges.length &&
+    sourceChanges.every(({ path }) => path.startsWith('src/'))
+  ) {
+    try {
+      const { refineHostTests } = await import('./package-host-test-impact.mjs')
+      plan = refineHostTests(plan, sourceChanges, manifest, {
+        registrationModules,
+        base,
+        head,
+        graphTests: graph.testFiles,
+        tier,
+        ...options
+      })
+    } catch {
+      plan.reasonChains.push(
+        'host consumer evidence unavailable -> retain complete declared selection'
+      )
+    }
+  }
+  return { plan, changes, manifest, registrationModules, registrationOnly }
 }
 
 const isDirectExecution =

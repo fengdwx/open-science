@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
 import {
+  acquireCredentialBootstrapLease,
   acquireRuntimeDirectory,
   RUNTIME_LOCK_FILE,
   RuntimeDirectoryOwnership,
@@ -34,6 +35,49 @@ afterEach(async () => {
 })
 
 describe('shared Node/Electron runtime ownership', () => {
+  it('excludes another writer and releases runtime directories beyond the Windows path limit', async () => {
+    let directory = await root()
+    while (join(directory, RUNTIME_LOCK_FILE).length < 280) {
+      directory = join(directory, 'delegated-attempt-runtime')
+    }
+    const first = await acquireRuntimeDirectory(directory)
+    leases.push(first)
+    await expect(acquireRuntimeDirectory(directory)).rejects.toBeInstanceOf(
+      RuntimeOwnershipConflict
+    )
+    first.release()
+    const next = await acquireRuntimeDirectory(directory)
+    leases.push(next)
+    next.release()
+    await rm(directory, { recursive: true })
+  })
+
+  it('isolates Windows credential bootstrap by profile while excluding the same profile', async () => {
+    const home = await root()
+    const options = { home, profilePath: join(home, 'profile-a'), platform: 'win32' as const }
+    const first = acquireCredentialBootstrapLease(options)
+    leases.push(first)
+    leases.push(
+      acquireCredentialBootstrapLease({ ...options, profilePath: join(home, 'profile-b') })
+    )
+    expect(() => acquireCredentialBootstrapLease(options)).toThrow(RuntimeOwnershipConflict)
+    first.release()
+    leases.push(acquireCredentialBootstrapLease(options))
+  })
+
+  it.each(['darwin', 'linux'] as const)(
+    'retains shared credential bootstrap exclusion on %s',
+    async (platform) => {
+      const home = await root()
+      leases.push(
+        acquireCredentialBootstrapLease({ home, profilePath: join(home, 'profile-a'), platform })
+      )
+      expect(() =>
+        acquireCredentialBootstrapLease({ home, profilePath: join(home, 'profile-b'), platform })
+      ).toThrow(RuntimeOwnershipConflict)
+    }
+  )
+
   it('excludes another writer and permits acquisition after idempotent release', async () => {
     const path = await root()
     const first = await acquireRuntimeDirectory(path)

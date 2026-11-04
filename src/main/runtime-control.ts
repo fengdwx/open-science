@@ -1,3 +1,7 @@
+import { processBirthIdentity } from './process-birth-identity'
+import type { LocalServiceLifetime } from './local-service-lifetime'
+import { z } from 'zod'
+import { runtimeStartupOptionsSchema, type RuntimeStartupOptions } from './desktop-runtime-info'
 import { randomUUID, timingSafeEqual } from 'node:crypto'
 import { createServer } from 'node:http'
 import { readFile, rm } from 'node:fs/promises'
@@ -11,6 +15,7 @@ export type RuntimeOwnerRecord = Readonly<{
   schemaVersion: 1
   generation: string
   pid: number
+  birthToken?: string
   host: 'node' | 'electron'
   port: number
   desktop?: DesktopEndpoint
@@ -22,8 +27,14 @@ export async function startRuntimeControl(
   configRoot: string,
   host: RuntimeOwnerRecord['host'],
   ensureWeb: (port: number) => Promise<unknown>,
-  desktop?: DesktopEndpoint
+  desktop?: DesktopEndpoint,
+  startupOptions?: RuntimeStartupOptions,
+  isStopping?: () => boolean,
+  service?: { lifetime: LocalServiceLifetime; entryPath: string; launch: 'desktop' | 'cli' }
 ): Promise<{ close(): Promise<void> }> {
+  const verifiedOptions = startupOptions
+    ? runtimeStartupOptionsSchema.parse(startupOptions)
+    : undefined
   const token = Buffer.from(await loadOrCreateWebToken(configRoot))
   const generation = randomUUID()
   const path = join(configRoot, RUNTIME_OWNER_FILE)
@@ -42,7 +53,57 @@ export async function startRuntimeControl(
     }
     if (request.method === 'GET' && url.pathname === '/owner') {
       response.writeHead(200, { 'content-type': 'application/json' })
-      response.end(JSON.stringify({ generation, pid: process.pid }))
+      response.end(
+        JSON.stringify({
+          generation,
+          pid: process.pid,
+          ...(service
+            ? {
+                entryPath: service.entryPath,
+                launch: service.launch,
+                lifetime: service.lifetime.snapshot()
+              }
+            : {}),
+          ...(isStopping?.() ? { stopping: true } : {}),
+          ...(verifiedOptions && desktop
+            ? {
+                startupOptions: verifiedOptions,
+                desktopGeneration: z.string().uuid().parse(desktop.generation)
+              }
+            : {})
+        })
+      )
+      return
+    }
+    if (
+      service &&
+      request.method === 'POST' &&
+      ['/service/start', '/service/stop', '/service/force-stop', '/service/retire'].includes(
+        url.pathname
+      )
+    ) {
+      if (
+        (request.headers['content-length'] && request.headers['content-length'] !== '0') ||
+        request.headers['transfer-encoding']
+      ) {
+        response.writeHead(400).end()
+        return
+      }
+      const operation =
+        url.pathname === '/service/start'
+          ? service.lifetime.start()
+          : url.pathname === '/service/retire'
+            ? service.lifetime.retireIfUnused()
+            : service.lifetime.stop(url.pathname === '/service/force-stop')
+      void operation.then(
+        (lifetime) => {
+          response.writeHead(200, { 'content-type': 'application/json' })
+          response.end(JSON.stringify({ generation, pid: process.pid, lifetime }))
+        },
+        () => {
+          response.writeHead(409).end()
+        }
+      )
       return
     }
     const port = Number(url.searchParams.get('port'))
@@ -101,6 +162,7 @@ export async function startRuntimeControl(
         schemaVersion: 1,
         generation,
         pid: process.pid,
+        birthToken: processBirthIdentity(process.pid),
         host,
         port: (server.address() as { port: number }).port,
         ...(desktop ? { desktop } : {})

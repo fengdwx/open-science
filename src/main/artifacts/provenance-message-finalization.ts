@@ -69,18 +69,26 @@ type ArtifactProvenanceMessageFinalizerOptions = {
 const isExpiredTransactionError = (error: unknown): boolean =>
   typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2028'
 
+const FINALIZATION_TRANSACTION_OPTIONS = {
+  maxWait: 10_000,
+  // The default five-second interactive transaction budget is too small for a large pending run
+  // on a busy Project database. The proof read and ownership update remain fenced together; the
+  // post-commit read in finalizeVerifiedRun deliberately lives outside this budget.
+  timeout: 30_000
+} as const
+
 const runFinalizationTransaction = async <Result>(
   client: Pick<PrismaClient, '$transaction'>,
   operation: (transaction: Prisma.TransactionClient) => Promise<Result>
 ): Promise<Result> => {
   try {
-    return await client.$transaction(operation, { maxWait: 10_000 })
+    return await client.$transaction(operation, FINALIZATION_TRANSACTION_OPTIONS)
   } catch (error) {
     // An interactive transaction can outlive the process suspension that started it. Prisma then
     // reports P2028 when the client resumes; replaying this fenced database operation once starts
     // from a fresh transaction without repeating the external file publication.
     if (!isExpiredTransactionError(error)) throw error
-    return client.$transaction(operation, { maxWait: 10_000 })
+    return client.$transaction(operation, FINALIZATION_TRANSACTION_OPTIONS)
   }
 }
 
@@ -122,9 +130,9 @@ export class ArtifactOwnershipPersistenceRaceError extends ArtifactFinalizationP
   }
 }
 
-const assertSafeSegment = (value: string, label: string): string => {
-  if (!SAFE_SEGMENT_PATTERN.test(value)) {
-    throw new Error(`Invalid ${label}: ${value}`)
+const assertSafeSegment = (value: unknown, label: string): string => {
+  if (typeof value !== 'string' || value.length === 0 || !SAFE_SEGMENT_PATTERN.test(value)) {
+    throw new Error(`Invalid ${label}: ${String(value)}`)
   }
   return value
 }
@@ -467,7 +475,12 @@ export class ArtifactProvenanceMessageFinalizer {
         where: { id: { in: matching.map((version) => version.id) }, managedVisibleAt: null },
         data: { managedVisibleAt: publishedAt }
       })
-      await this.activateLineageHeads(transaction, matching)
+      // Visibility and head promotion commit atomically. Replaying an already visible row must
+      // not migrate historical heads suppressed by earlier app versions.
+      await this.activateLineageHeads(
+        transaction,
+        matching.filter((version) => !version.managedVisibleAt)
+      )
       return matching.map((version) => ({
         ...version,
         managedVisibleAt: version.managedVisibleAt ?? publishedAt
@@ -489,7 +502,7 @@ export class ArtifactProvenanceMessageFinalizer {
   ): Promise<ArtifactVersionFile[]> {
     const normalizedRequest = normalizeArtifactFinalizationProofRequest(request)
     const client = await this.options.getClient()
-    const versions = await runFinalizationTransaction(client, async (transaction) => {
+    const matchingVersionIds = await runFinalizationTransaction(client, async (transaction) => {
       const matching = await loadArtifactFinalizationProofVersions(transaction, normalizedRequest)
       // Validate the complete proof from the same transaction that commits message ownership. Recovery
       // does not touch compatibility storage until this transaction succeeds.
@@ -503,18 +516,24 @@ export class ArtifactProvenanceMessageFinalizer {
         data: { state: 'finalized', messageId: normalizedRequest.messageId }
       })
 
-      return (
-        await transaction.artifactVersion.findMany({
-          where: {
-            id: { in: matching.map((version) => version.id) },
-            originKind: 'agent_generated',
-            state: 'finalized'
-          },
-          include: { artifact: true },
-          orderBy: [{ artifactId: 'asc' }, { versionNumber: 'asc' }]
-        })
-      ).map(requireAgentArtifactVersion)
+      return matching.map((version) => version.id)
     })
+
+    // This read is deliberately outside the ownership transaction. A large run can make the
+    // relation-heavy read outlive Prisma's interactive transaction budget even when the proof and
+    // update have already succeeded; keeping it here prevents a committed finalization from being
+    // reported as a failed transaction and rolled back from the caller's perspective.
+    const versions = (
+      await client.artifactVersion.findMany({
+        where: {
+          id: { in: matchingVersionIds },
+          originKind: 'agent_generated',
+          state: 'finalized'
+        },
+        include: { artifact: true },
+        orderBy: [{ artifactId: 'asc' }, { versionNumber: 'asc' }]
+      })
+    ).map(requireAgentArtifactVersion)
 
     return Promise.all(
       versions.map((version) =>
@@ -548,6 +567,8 @@ export class ArtifactProvenanceMessageFinalizer {
         !lineage.currentVersion ||
         lineage.currentVersion.versionNumber < latestMatching.versionNumber
       ) {
+        // Each valid new publication becomes current, even when its bytes match history.
+        // The version-number guard above keeps old completion retries from moving the head back.
         await transaction.artifactLineage.update({
           where: { id: artifactId },
           data: { currentVersionId: latestMatching.id }

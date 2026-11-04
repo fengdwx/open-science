@@ -2,12 +2,378 @@
 import { captionKind } from './literature-pdf-caption-group.mjs'
 import { area, intersection as intersect } from './literature-pdf-page-geometry.mjs'
 import { inside, isAdjacentTableScript, rebaseTableCrop } from './literature-pdf-table-geometry.mjs'
-import { clusterTableRulePositions } from './literature-pdf-table-rules.mjs'
+import { clusterTableRulePositions, classifyTableRuleEdge } from './literature-pdf-table-rules.mjs'
 import {
   proveNativeCompleteRuledSourcePacket,
+  proveNativeIntervalColumnSourcePacket,
+  proveNativeClosedRecordSourcePacket,
   nativeWholeFontOrigins,
   nativeCompleteRuledPaintCrop
 } from './literature-pdf-native-leaf-record-repair.mjs'
+import { groupSourceRowsWithScripts } from './literature-pdf-source-records.mjs'
+
+// eslint-disable-next-line no-control-regex -- This intentionally detects C0/C1 control glyphs in source text.
+const encodedControls = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u
+const validRect = (rect) =>
+  Array.isArray(rect) &&
+  rect.length === 4 &&
+  rect.every(Number.isFinite) &&
+  rect[2] > rect[0] &&
+  rect[3] > rect[1]
+const sameRect = (left, right) =>
+  validRect(left) &&
+  validRect(right) &&
+  left.every((value, index) => Math.abs(value - right[index]) < 1e-6)
+const containsRect = (outer, inner) =>
+  validRect(outer) &&
+  validRect(inner) &&
+  inner[0] >= outer[0] &&
+  inner[1] >= outer[1] &&
+  inner[2] <= outer[2] &&
+  inner[3] <= outer[3]
+
+function provedSingleHeaderBottom(table, glyphs, rules) {
+  if (table.grid?.length !== 2 || table.cells.some((cell) => (cell.rowSpan ?? 1) !== 1)) return
+  const header = table.cells.filter((cell) => cell.row === 0 && cell.sourceRects?.length)
+  if (header.length < 2) return
+  const sourceRects = table.cells.flatMap((cell) => cell.sourceRects ?? [])
+  if (!sourceRects.length || sourceRects.some((rect) => !containsRect(table.cropRect, rect))) return
+  const left = Math.min(...sourceRects.map((rect) => rect[0])),
+    right = Math.max(...sourceRects.map((rect) => rect[2]))
+  const fullRules = rules
+    .filter(
+      (rule) =>
+        Array.isArray(rule) &&
+        rule.length === 4 &&
+        rule.every(Number.isFinite) &&
+        rule[1] === rule[3] &&
+        rule[0] <= left &&
+        rule[2] >= right &&
+        rule[1] >= table.cropRect[1] &&
+        rule[1] <= table.cropRect[3]
+    )
+    .sort((a, b) => a[1] - b[1])
+  if (
+    fullRules.length !== 3 ||
+    fullRules.some(
+      (rule) =>
+        Math.abs(rule[0] - fullRules[0][0]) > 0.02 || Math.abs(rule[2] - fullRules[0][2]) > 0.02
+    )
+  )
+    return
+  const [top, headerBottom, bodyBottom] = fullRules,
+    upper = glyphs.filter(
+      (glyph) =>
+        glyph.text.trim() &&
+        glyph.horizontal &&
+        glyph.rect[0] >= top[0] &&
+        glyph.rect[2] <= top[2] &&
+        glyph.baseline > top[1] &&
+        glyph.baseline < headerBottom[1]
+    )
+  if (
+    !upper.length ||
+    upper.some(
+      (glyph) =>
+        header.filter((cell) => cell.sourceRects.some((rect) => sameRect(rect, glyph.rect)))
+          .length !== 1
+    ) ||
+    header.some((cell) =>
+      cell.sourceRects.some((rect) => !upper.some((glyph) => sameRect(rect, glyph.rect)))
+    )
+  )
+    return
+  const height = Math.max(...upper.map((glyph) => glyph.height)),
+    ordinary = upper.filter((glyph) => glyph.height >= height * 0.8)
+  if (
+    !ordinary.length ||
+    ordinary.some((glyph) => Math.abs(glyph.baseline - ordinary[0].baseline) > height * 0.15) ||
+    upper.some(
+      (glyph) =>
+        Math.abs(glyph.baseline - ordinary[0].baseline) > height * 0.15 &&
+        !ordinary.some((parent) => isAdjacentTableScript(glyph, parent))
+    )
+  )
+    return
+  return { headerBottom: headerBottom[1], bodyBottom: bodyBottom[1] }
+}
+
+export function nativeOwnedControlGlyphs(table, nativeGlyphs, sourceContent, rules = []) {
+  if (
+    !validRect(table?.cropRect) ||
+    table.parts ||
+    !table.caption ||
+    !table.cells?.length ||
+    !Array.isArray(nativeGlyphs) ||
+    !Array.isArray(sourceContent?.items) ||
+    !Array.isArray(rules)
+  )
+    return []
+  const body = provedSingleHeaderBottom(table, nativeGlyphs, rules)
+  if (!body) return []
+  return nativeGlyphs.filter((glyph) => {
+    const origin = glyph.sourceItem
+    if (
+      !origin ||
+      origin.pageNumber !== table.page ||
+      !encodedControls.test(glyph.text) ||
+      !containsRect(table.cropRect, glyph.rect) ||
+      !glyph.horizontal ||
+      !Number.isFinite(glyph.baseline) ||
+      glyph.baseline <= body.headerBottom ||
+      glyph.baseline >= body.bodyBottom ||
+      glyph.rect[3] > body.bodyBottom ||
+      (glyph.rect[1] <= body.headerBottom &&
+        glyph.baseline - body.headerBottom < glyph.height * 0.5)
+    )
+      return false
+    const original = sourceContent.items.filter(
+      (item) =>
+        item.sourceItem?.pageNumber === origin.pageNumber && item.sourceItem?.index === origin.index
+    )
+    if (
+      original.length !== 1 ||
+      original[0].str !== glyph.text ||
+      origin.text !== glyph.text ||
+      !(original[0].width > 0) ||
+      !(original[0].height > 0)
+    )
+      return false
+    const owners = table.cells.filter((cell) =>
+      cell.sourceRects?.some((rect) => sameRect(rect, glyph.rect))
+    )
+    return owners.length === 1 && owners[0].row > 0
+  })
+}
+
+export function encodedControlImageOnlyTable(table, nativeGlyphs, sourceContent, rules = []) {
+  if (!nativeOwnedControlGlyphs(table, nativeGlyphs, sourceContent, rules).length) return
+  return {
+    id: table.id,
+    page: table.page,
+    caption: table.caption,
+    notes: table.notes,
+    captionIssue: table.captionIssue,
+    sourceViewport: table.sourceViewport,
+    cropRect: table.cropRect,
+    grid: [],
+    cells: [],
+    unassigned: [],
+    issues: [...new Set([...(table.issues ?? []), 'no-source-cell-grid'])]
+  }
+}
+
+// A short stub and one scalar/unit value anchor a continued narrative cell.
+// Numeric paint within that prose does not establish additional record owners.
+// This conservative recovery recognizes exactly two records and three leaves.
+export function recoverNativeClosedParameterRows(table, items, rules, context) {
+  const crop = table?.cropRect
+  if (
+    !validRect(crop) ||
+    table.parts ||
+    table.spans?.length ||
+    !Array.isArray(items) ||
+    !Array.isArray(rules) ||
+    table.structure?.objects?.some((o) => /header|spanning/.test(o.label))
+  )
+    return
+  const paint =
+    context?.rulePaintBounds instanceof Map
+      ? context.rulePaintBounds
+      : Array.isArray(context?.rulePaintBounds)
+        ? new Map(context.rulePaintBounds)
+        : undefined
+  if (!paint) return
+  const local = rules.filter(
+    (r) => r[0] >= crop[0] - 1 && r[2] <= crop[2] + 1 && r[1] >= crop[1] - 1 && r[3] <= crop[3] + 1
+  )
+  const horizontal = local.filter((r) => r[1] === r[3]),
+    vertical = local.filter((r) => r[0] === r[2])
+  const xs = [...new Set(vertical.map((r) => r[0]))].sort((a, b) => a - b),
+    ys = [...new Set(horizontal.map((r) => r[1]))].sort((a, b) => a - b)
+  if (xs.length !== 4 || ys.length !== 3) return
+  const frame = [
+    Math.min(...horizontal.map((r) => r[0])),
+    ys[0],
+    Math.max(...horizontal.map((r) => r[2])),
+    ys[2]
+  ]
+  const native = items.filter((i) => intersect(i.rect, frame) > 0)
+  if (!native.length || native.some((i) => !containsRect(frame, i.rect))) return
+  if (!proveNativeClosedRecordSourcePacket(native, rules, context, frame)) return
+  if (
+    native.some((i) =>
+      local.some(
+        (r) => validRect(paint.get(r.join(','))) && intersect(i.rect, paint.get(r.join(','))) > 0
+      )
+    )
+  )
+    return
+  const near = (a, b) => Math.abs(a - b) <= Math.max(1, Math.abs(a), Math.abs(b)) * 2 ** -23 * 2
+  const reaches = (a, b) => a <= b || near(a, b)
+  const hPaint = ys.map((y) =>
+    horizontal.filter((r) => r[1] === y).map((r) => paint.get(r.join(',')))
+  )
+  if (
+    hPaint.some(
+      (list) =>
+        !list.length ||
+        list.some((r) => !validRect(r) || !reaches(r[0], xs[0]) || !reaches(xs[3], r[2]))
+    )
+  )
+    return
+  for (let row = 0; row < 2; row++)
+    for (const x of xs) {
+      const edges = vertical.filter((r) => r[0] === x && r[1] >= ys[row] && r[3] <= ys[row + 1])
+      if (edges.length !== 1) return
+      const ink = paint.get(edges[0].join(','))
+      if (!validRect(ink) || classifyTableRuleEdge(edges, 0, x, ys[row], ys[row + 1]) !== 1) return
+    }
+  const originKey = (o) => o && `${o.pageNumber}:${o.index}`
+  const references = items.flatMap((i) => [
+    i.sourceItem,
+    i.sourceSegment,
+    i.sourceToken,
+    i.sourceToken?.sourceItem,
+    i.sourceToken?.sourceSegment
+  ])
+  if (
+    native.some(
+      (i) =>
+        !i.sourceItem ||
+        i.sourceSegment ||
+        i.sourceToken ||
+        references.filter((o) => originKey(o) === originKey(i.sourceItem)).length !== 1
+    )
+  )
+    return
+  const rows = []
+  for (let row = 0; row < 2; row++) {
+    const fonts = native.filter((i) => i.rect[1] >= ys[row] && i.rect[3] <= ys[row + 1])
+    const lanes = xs
+      .slice(1)
+      .map((right, c) => fonts.filter((i) => i.rect[0] >= xs[c] && i.rect[2] <= right))
+    if (lanes.some((l) => !l.length) || lanes.flat().length !== fonts.length) return
+    const stub = lanes[0],
+      base = stub.reduce((a, b) => (a.height >= b.height ? a : b))
+    if (
+      !/^[\p{L}]+$/u.test(base.text) ||
+      stub.some((i) => i !== base && !isAdjacentTableScript(i, base))
+    )
+      return
+    const valueLines = groupSourceRowsWithScripts(
+      [...lanes[1]].sort((a, b) => a.baseline - b.baseline || a.rect[0] - b.rect[0]),
+      Math.max(...lanes[1].map((i) => i.height)),
+      0.2
+    )
+    if (!valueLines?.length || valueLines.length > 2) return
+    const normalValue = valueLines[0].filter(
+      (i) => !valueLines[0].some((p) => p !== i && isAdjacentTableScript(i, p))
+    )
+    normalValue.sort((a, b) => a.rect[0] - b.rect[0])
+    if (normalValue.some((i, n) => n && Math.abs(i.rect[0] - normalValue[n - 1].rect[2]) >= 0.02))
+      return
+    const valueText = normalValue.map((i) => i.text).join('')
+    if (
+      !/^(?:[+−-]?\d+(?:\.\d+)?|\p{L})$/u.test(valueText) ||
+      normalValue.some((i) => !near(i.baseline, base.baseline))
+    )
+      return
+    if (valueLines[1]) {
+      const unit = valueLines[1].filter((i) => /^\p{L}+$/u.test(i.text))
+      if (
+        unit.length !== 1 ||
+        valueLines[1].some((i) => i !== unit[0] && i.height >= unit[0].height * 0.8)
+      )
+        return
+    }
+    const height = Math.max(...lanes[2].map((i) => i.height))
+    const ordinary = lanes[2].filter((i) => i.height >= height * 0.8)
+    const prose = groupSourceRowsWithScripts(
+      [...ordinary].sort((a, b) => a.baseline - b.baseline || a.rect[0] - b.rect[0]),
+      height,
+      0.15
+    )
+    if (!prose || prose.length < 2) return
+    // Small inline paint must belong to one already witnessed prose baseline.
+    // Bracketing ordinary fonts also cover raised symbols whose preceding PDF
+    // word includes a space; this establishes ownership, not script formatting.
+    for (const glyph of lanes[2].filter((i) => !ordinary.includes(i))) {
+      const owners = prose.filter(
+        (line) =>
+          line.some((p) => isAdjacentTableScript(glyph, p)) ||
+          line.some((left) =>
+            line.some(
+              (right) =>
+                left !== right &&
+                left.rect[2] <= glyph.rect[0] &&
+                glyph.rect[2] <= right.rect[0] &&
+                glyph.rect[1] < left.rect[3] &&
+                glyph.rect[3] > left.rect[1] &&
+                glyph.rect[0] - left.rect[2] <= height * 0.5 &&
+                right.rect[0] - glyph.rect[2] <= height * 0.5
+            )
+          )
+      )
+      if (owners.length !== 1) return
+      owners[0].push(glyph)
+    }
+    const starts = prose.map(
+      (line) => line.filter((i) => ordinary.includes(i)).sort((a, b) => a.rect[0] - b.rect[0])[0]
+    )
+    if (
+      starts.some((i) => !i || !/\p{L}{2,}/u.test(i.text)) ||
+      starts.some((i) => Math.abs(i.rect[0] - starts[0].rect[0]) > height * 0.15)
+    )
+      return
+    for (const line of prose) {
+      const ordered = [...line].sort((a, b) => a.rect[0] - b.rect[0])
+      if (
+        ordered.some(
+          (i, n) =>
+            n &&
+            (i.rect[0] - ordered[n - 1].rect[2] > height ||
+              i.rect[0] - ordered[n - 1].rect[2] < -height * 0.1)
+        )
+      )
+        return
+    }
+    // A recurring independent numeric column is a second record domain, even
+    // if a nearby prose stub is present in the same closed physical cell.
+    const numbers = ordinary.filter((i) => /^[+−-]?\d+(?:\.\d+)?$/.test(i.text))
+    if (
+      numbers.some((a) =>
+        numbers.some(
+          (b) =>
+            a !== b &&
+            Math.abs(a.baseline - b.baseline) > height * 0.15 &&
+            (Math.abs(a.rect[0] - b.rect[0]) <= height * 0.15 ||
+              Math.abs(a.rect[2] - b.rect[2]) <= height * 0.15)
+        )
+      )
+    )
+      return
+    rows.push(fonts)
+  }
+  if (rows.flat().length !== native.length) return
+  const completeCrop = nativeCompleteRuledPaintCrop(
+    frame,
+    local,
+    { ...context, rulePaintBounds: paint },
+    native
+  )
+  if (!completeCrop) return
+  return {
+    cropRect: completeCrop,
+    rows: ys.slice(1).map((bottom, r) => [frame[0], ys[r], frame[2], bottom]),
+    columns: xs.slice(1).map((right, c) => [xs[c], frame[1], right, frame[3]]),
+    headerRows: [],
+    spans: [],
+    completeSpans: true,
+    ownedTokens: new Set(native),
+    repair: 'native-closed-parameter-records-recovered'
+  }
+}
 
 // A closed three-leaf prose/sign/prose body owns each physical record locally.
 // Full-width section rows are witnessed by the absence of both inner fences,
@@ -449,6 +815,489 @@ export function deduplicateTableRegions(tables, items, captions = []) {
     kept.push(table)
   }
   return tables.filter((table) => kept.includes(table))
+}
+
+// Equal cell inventories may survive model-crop deduplication. Remove an uncaptioned
+// duplicate, or one whose caption remains on a separate proven owner. Retained
+// objects, including their captions, thumbnails and metadata, are not rewritten.
+function deduplicateEquivalentSourceTables(tables, tokens, measuredWhitespace) {
+  const key = (s) => `${s.pageNumber}:${s.index}`
+  const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+  const rect = (r) =>
+    Array.isArray(r) && r.length === 4 && r.every(Number.isFinite) && r[2] > r[0] && r[3] > r[1]
+  const contains = (a, b) =>
+    b[0] >= a[0] - 1e-6 && b[1] >= a[1] - 1e-6 && b[2] <= a[2] + 1e-6 && b[3] <= a[3] + 1e-6
+  const intersects = (a, b) =>
+    Math.min(a[2], b[2]) > Math.max(a[0], b[0]) && Math.min(a[3], b[3]) > Math.max(a[1], b[1])
+  function refs(t) {
+    return [
+      t.sourceItem,
+      t.sourceToken,
+      t.sourceSegment,
+      t.sourceSegment?.sourceItem,
+      t.sourceSegment?.sourceToken,
+      t.sourceToken?.sourceItem,
+      t.sourceToken?.sourceSegment
+    ].filter((s) => s && Number.isSafeInteger(s.index) && Number.isSafeInteger(s.pageNumber))
+  }
+
+  const global = new Map()
+  for (const t of tokens)
+    for (const s of refs(t)) {
+      const k = key(s)
+      if (!global.has(k)) global.set(k, [])
+      global.get(k).push({ token: t, source: s })
+    }
+  const proof = (t) => {
+    if (
+      t.parts ||
+      t.unassigned?.length ||
+      t.clipped?.length ||
+      t.notes?.length ||
+      // A detector shape warning is obsolete only for the uncaptioned copy:
+      // the complete native grid below must still equal a clean captioned owner.
+      (t.issues?.length &&
+        (t.caption || t.issues.some((issue) => issue !== 'missing-row-or-column'))) ||
+      !rect(t.cropRect) ||
+      !t.grid?.length ||
+      !t.grid[0]?.length ||
+      t.grid.some((r) => r.length !== t.grid[0].length)
+    )
+      return
+    let seen = new Set(),
+      slots = new Set()
+    for (const c of t.cells) {
+      if (
+        c.sourceSegments ||
+        c.rowSpan !== 1 ||
+        c.colSpan !== 1 ||
+        !Number.isSafeInteger(c.row) ||
+        !Number.isSafeInteger(c.column) ||
+        c.row < 0 ||
+        c.column < 0 ||
+        t.grid[c.row]?.[c.column] !== c.text ||
+        slots.has(`${c.row}:${c.column}`)
+      )
+        return
+      slots.add(`${c.row}:${c.column}`)
+      if (
+        !c.sourceItems?.length ||
+        !c.sourceRects?.length ||
+        c.sourceItems
+          .map((s) => s.text)
+          .join('')
+          .replace(/\s/gu, '') !== c.text.replace(/\s/gu, '')
+      )
+        return
+      const cellOwners = []
+      for (let j = 0; j < c.sourceItems.length; j++) {
+        let s = c.sourceItems[j],
+          k = key(s),
+          g = global.get(k)
+        if (
+          seen.has(k) ||
+          s.pageNumber !== t.page ||
+          g?.length !== 1 ||
+          !g[0].token.horizontal ||
+          !rect(g[0].token.rect) ||
+          g[0].token.text !== s.text ||
+          g[0].source.text !== s.text ||
+          !contains(t.cropRect, g[0].token.rect)
+        )
+          return
+        seen.add(k)
+        cellOwners.push({ native: g[0].token, rects: [] })
+      }
+      for (const r of c.sourceRects) {
+        if (!rect(r)) return
+        const candidates = cellOwners.filter(
+          ({ native }) =>
+            contains(native.rect, r) &&
+            Math.abs(native.rect[1] - r[1]) < 1e-6 &&
+            Math.abs(native.rect[3] - r[3]) < 1e-6
+        )
+        if (candidates.length !== 1) return
+        candidates[0].rects.push(r)
+      }
+      for (const { native, rects } of cellOwners) {
+        rects.sort((a, b) => a[0] - b[0])
+        if (
+          !rects.length ||
+          rects[0][0] !== native.rect[0] ||
+          rects.at(-1)[2] !== native.rect[2] ||
+          rects.some((r, i) => i && r[0] < rects[i - 1][2]) ||
+          (rects.length > 1 && !measuredWhitespace(native, rects))
+        )
+          return
+      }
+    }
+    if (slots.size !== t.grid.length * t.grid[0].length) return
+    for (const tok of tokens) {
+      if (
+        tok.text?.trim() &&
+        rect(tok.rect) &&
+        intersects(t.cropRect, tok.rect) &&
+        (!tok.sourceItem || !seen.has(key(tok.sourceItem)))
+      )
+        return
+    }
+    // Compare transported cell evidence, retaining every other field (including unknown ones).
+    // These three assembly fields are removed by tableTransportData/serializeWorkerResult.
+    const cells = t.cells.map((cell) => {
+      const semantic = { ...cell }
+      delete semantic.rect
+      delete semantic.origin
+      delete semantic.sourceTokens
+      // Word rectangles are equivalent only after the measured whitespace proof.
+      semantic.sourceRects = cell.sourceItems.map((s) => global.get(key(s))[0].token.rect)
+      return semantic
+    })
+    return { keys: seen, cells: cells.toSorted((a, b) => a.row - b.row || a.column - b.column) }
+  }
+  const proofs = tables.map(proof),
+    removed = new Set()
+  for (let a = 0; a < tables.length; a++)
+    for (let b = a + 1; b < tables.length; b++) {
+      let A = tables[a],
+        B = tables[b],
+        pa = proofs[a],
+        pb = proofs[b]
+      if (
+        !pa ||
+        !pb ||
+        A.page !== B.page ||
+        !eq(A.grid, B.grid) ||
+        !eq(pa.cells, pb.cells) ||
+        [A, B].some(
+          (t) =>
+            t.caption && (!t.caption.text || t.caption.page !== t.page || !rect(t.caption.rect))
+        )
+      )
+        continue
+      if (
+        tables.some(
+          (t, i) =>
+            i !== a &&
+            i !== b &&
+            [t, ...(t.parts ?? [])].some((part) =>
+              part.cells?.some((c) =>
+                [...(c.sourceItems ?? []), ...(c.sourceSegments ?? [])].some((s) =>
+                  pa.keys.has(key(s))
+                )
+              )
+            )
+        )
+      )
+        continue
+      const validCaption = (t) =>
+        t.caption?.text && t.caption.page === t.page && rect(t.caption.rect)
+      if ([A, B].filter(validCaption).length === 1) {
+        removed.add(A.caption ? b : a)
+      } else if (validCaption(A) && validCaption(B) && !eq(A.caption, B.caption)) {
+        // A duplicate may also carry the caption of a different, disjoint table.
+        // Remove it only if that exact caption remains on that independent owner.
+        const preservedElsewhere = (candidate) =>
+          tables.filter(
+            (t, i) =>
+              i !== a &&
+              i !== b &&
+              !removed.has(i) &&
+              t.page === candidate.page &&
+              validCaption(t) &&
+              eq(t.caption, candidate.caption) &&
+              rect(t.cropRect) &&
+              !intersects(t.cropRect, candidate.cropRect) &&
+              t.cells?.some((c) => c.sourceItems?.length) &&
+              [t, ...(t.parts ?? [])].every((part) =>
+                part.cells?.every((c) =>
+                  [...(c.sourceItems ?? []), ...(c.sourceSegments ?? [])].every(
+                    (s) => !pa.keys.has(key(s))
+                  )
+                )
+              )
+          ).length === 1
+        const dropA = preservedElsewhere(A),
+          dropB = preservedElsewhere(B)
+        if (dropA !== dropB) removed.add(dropA ? a : b)
+      }
+    }
+  return tables.filter((_, i) => !removed.has(i))
+}
+
+// A narrow detector and a complete detector can survive early deduplication
+// because the latter owns an additional column. Compare original PDF identities
+// only after cell assembly; equal strings or overlapping crops are not owners.
+export function deduplicateSourceOwnedTableSubsets(tables, nativeTokens, measuredRuns = []) {
+  const key = (source) => `${source.pageNumber}:${source.index}`
+  const normalize = (text) => text.replace(/\s/gu, '')
+  const originals = new Map()
+  for (const token of nativeTokens) {
+    const source = token.sourceItem
+    if (!source) continue
+    const identity = key(source)
+    originals.set(identity, originals.has(identity) ? undefined : token)
+  }
+  const measuredWhitespace = (native, rects) => {
+    // Identity was established independently through sourceItem above. Matching
+    // one unique observation supplies only glyph advances, never a new owner.
+    if (
+      nativeTokens.filter(
+        (token) => token.text === native.text && sameRect(token.rect, native.rect)
+      ).length !== 1
+    )
+      return false
+    const runs = measuredRuns.filter(
+      (run) => run.text === native.text && sameRect(run.rect, native.rect)
+    )
+    const words = [...native.text.matchAll(/\S+/gu)]
+    if (
+      runs.length !== 1 ||
+      words.length !== rects.length ||
+      runs[0].gaps.length !== rects.length - 1
+    )
+      return false
+    let characters = 0
+    return words.every((word, index) => {
+      characters += Array.from(word[0]).length
+      if (index === words.length - 1) return true
+      const gap = runs[0].gaps[index],
+        next = words[index + 1]
+      return (
+        !!native.text.slice(word.index + word[0].length, next.index).match(/^\s+$/u) &&
+        gap.index === characters &&
+        Number.isFinite(gap.left) &&
+        Number.isFinite(gap.right) &&
+        gap.right > gap.left &&
+        Math.abs(gap.left - rects[index][2]) <= 1e-6 &&
+        Math.abs(gap.right - rects[index + 1][0]) <= 1e-6
+      )
+    })
+  }
+  tables = deduplicateEquivalentSourceTables(tables, nativeTokens, measuredWhitespace)
+  const prove = (table) => {
+    if (
+      table.parts ||
+      !validRect(table.cropRect) ||
+      !table.cells?.length ||
+      (table.captionIssue && table.captionIssue !== 'shared-table-caption') ||
+      table.unassigned?.length ||
+      table.notes?.length ||
+      table.grid?.length < 2 ||
+      !table.grid?.[0]?.length ||
+      table.grid.some((row) => row.length !== table.grid[0].length)
+    )
+      return
+    const origins = new Map(),
+      slots = new Set()
+    for (const cell of table.cells) {
+      if (cell.rowSpan !== 1 || cell.colSpan !== 1 || cell.sourceSegments) return
+      const slot = `${cell.row}:${cell.column}`
+      if (
+        slots.has(slot) ||
+        cell.row < 0 ||
+        cell.row >= table.grid.length ||
+        cell.column < 0 ||
+        cell.column >= table.grid[0].length
+      )
+        return
+      if (table.grid[cell.row][cell.column] !== cell.text) return
+      slots.add(slot)
+      if (!cell.text.trim() && !cell.sourceItems?.length && !cell.sourceRects?.length) continue
+      if (
+        !cell.sourceItems?.length ||
+        !cell.sourceRects?.length ||
+        normalize(cell.sourceItems.map((item) => item.text).join('')) !== normalize(cell.text)
+      )
+        return
+      const owners = []
+      for (const source of cell.sourceItems) {
+        const identity = key(source),
+          native = originals.get(identity)
+        if (
+          !Number.isSafeInteger(source.index) ||
+          source.index < 0 ||
+          source.pageNumber !== table.page ||
+          origins.has(identity) ||
+          !native?.horizontal ||
+          !validRect(native.rect) ||
+          native.text !== source.text ||
+          native.sourceItem.text !== source.text
+        )
+          return
+        const owner = { cell, native, rects: [] }
+        owners.push(owner)
+        origins.set(identity, owner)
+      }
+      for (const rect of cell.sourceRects) {
+        if (!validRect(rect)) return
+        const exact = owners.filter(({ native }) => sameRect(native.rect, rect))
+        const matches = exact.length
+          ? exact
+          : owners.filter(
+              ({ native }) =>
+                rect[0] >= native.rect[0] - 1e-6 &&
+                rect[2] <= native.rect[2] + 1e-6 &&
+                Math.abs(rect[1] - native.rect[1]) < 1e-6 &&
+                Math.abs(rect[3] - native.rect[3]) < 1e-6
+            )
+        if (matches.length !== 1) return
+        matches[0].rects.push(rect)
+      }
+      for (const { native, rects } of owners) {
+        if (!rects.length) return
+        rects.sort((a, b) => a[0] - b[0])
+        if (
+          rects.some((rect, index) => index && rect[0] < rects[index - 1][2] - 1e-6) ||
+          (rects.some((rect, index) => index && rect[0] > rects[index - 1][2] + 1e-6) &&
+            !measuredWhitespace(native, rects)) ||
+          !sameRect(
+            [
+              rects[0][0],
+              Math.min(...rects.map((r) => r[1])),
+              rects.at(-1)[2],
+              Math.max(...rects.map((r) => r[3]))
+            ],
+            native.rect
+          )
+        )
+          return
+      }
+    }
+    if (table.grid.some((row, r) => row.some((text, c) => text.trim() && !slots.has(`${r}:${c}`))))
+      return
+    return origins.size ? origins : undefined
+  }
+  const proofs = tables.map(prove),
+    plans = []
+  for (const [index, narrow] of tables.entries()) {
+    const source = proofs[index]
+    if (
+      !source ||
+      !narrow.caption ||
+      narrow.caption.page !== narrow.page ||
+      !validRect(narrow.caption.rect) ||
+      !narrow.issues?.includes('text-crosses-crop-boundary')
+    )
+      continue
+    const candidates = []
+    for (const [otherIndex, complete] of tables.entries()) {
+      const target = proofs[otherIndex]
+      if (
+        otherIndex === index ||
+        !target ||
+        complete.page !== narrow.page ||
+        complete.caption ||
+        complete.grid.length !== narrow.grid.length ||
+        target.size <= source.size ||
+        [...source.keys()].some((identity) => !target.has(identity))
+      )
+        continue
+      const shared = [...source]
+      if (
+        shared.some(
+          ([identity, owner]) =>
+            target.get(identity).cell.row !== owner.cell.row ||
+            shared.some(
+              ([otherIdentity, otherOwner]) =>
+                otherOwner.cell.row === owner.cell.row &&
+                otherOwner.cell.column > owner.cell.column &&
+                target.get(otherIdentity).cell.column < target.get(identity).cell.column
+            )
+        )
+      )
+        continue
+      // Every extra origin belongs exclusively to a complete final column.
+      const extra = [...target].filter(([identity]) => !source.has(identity))
+      const lastColumn = complete.grid[0].length - 1,
+        rows = new Set()
+      const right = Math.max(...[...source.values()].map(({ native }) => native.rect[2]))
+      const rowBands = complete.grid.map((_, row) => {
+        const rects = [...target]
+          .filter(([identity, owner]) => source.has(identity) && owner.cell.row === row)
+          .map(([, { native }]) => native.rect)
+        return rects.length
+          ? [Math.min(...rects.map((rect) => rect[1])), Math.max(...rects.map((rect) => rect[3]))]
+          : undefined
+      })
+      if (
+        extra.some(
+          ([, { cell, native }]) =>
+            cell.column !== lastColumn ||
+            native.rect[0] <= right ||
+            cell.sourceItems.some((origin) => source.has(key(origin))) ||
+            !rowBands[cell.row] ||
+            native.rect[1] < rowBands[cell.row][0] - 1e-6 ||
+            native.rect[3] > rowBands[cell.row][1] + 1e-6 ||
+            rowBands.some(
+              (band, row) =>
+                row !== cell.row &&
+                band &&
+                Math.min(band[1], native.rect[3]) > Math.max(band[0], native.rect[1])
+            )
+        )
+      )
+        continue
+      for (const [, { cell }] of extra) rows.add(cell.row)
+      if (rows.size !== complete.grid.length) continue
+      if ([...target.values()].some(({ native }) => !containsRect(complete.cropRect, native.rect)))
+        continue
+      // An unaccounted native item inside the retained crop defeats completeness.
+      if (
+        nativeTokens.some(
+          (token) =>
+            token.text?.trim() &&
+            intersect(token.rect, complete.cropRect) > 0 &&
+            (!token.sourceItem || !target.has(key(token.sourceItem)))
+        )
+      )
+        continue
+      // A third candidate must not compete, even if its own proof is incomplete.
+      if (
+        tables.some(
+          (third, thirdIndex) =>
+            thirdIndex !== index &&
+            thirdIndex !== otherIndex &&
+            (third.caption === narrow.caption ||
+              (third.caption?.page === narrow.caption.page &&
+                validRect(third.caption.rect) &&
+                intersect(third.caption.rect, narrow.caption.rect) > 0) ||
+              (third.page === narrow.page &&
+                validRect(third.cropRect) &&
+                [...target.values()].some(
+                  ({ native }) => intersect(native.rect, third.cropRect) > 0
+                )) ||
+              [third, ...(third.parts ?? [])].some((part) =>
+                part.cells?.some((cell) =>
+                  [...(cell.sourceItems ?? []), ...(cell.sourceSegments ?? [])].some((origin) =>
+                    target.has(key(origin))
+                  )
+                )
+              ))
+        )
+      )
+        continue
+      candidates.push(otherIndex)
+    }
+    if (candidates.length === 1) plans.push({ index, target: candidates[0] })
+  }
+  const removed = new Set(),
+    captions = new Map()
+  for (const plan of plans) {
+    if (plans.filter((other) => other.target === plan.target).length !== 1) continue
+    removed.add(plan.index)
+    captions.set(plan.target, tables[plan.index].caption)
+  }
+  return tables.flatMap((table, index) => {
+    if (removed.has(index)) return []
+    if (!captions.has(index)) return [table]
+    const retained = {
+      ...table,
+      caption: captions.get(index),
+      repairs: [...(table.repairs ?? []), 'source-owned-subset-deduplicated']
+    }
+    if (retained.captionIssue === 'shared-table-caption') delete retained.captionIssue
+    return [retained]
+  })
 }
 
 // A detector can retain an earlier, wider refinement around a real table in
@@ -907,21 +1756,41 @@ export function recoverRuledTable(items, rules, pageNumber, caption = undefined)
 // pair, the horizontal rule span plus the surviving interior column rules still
 // prove a separate table. Reconstruct row bands from native text baselines so
 // the fallback preserves every visible row without broadening ordinary prose.
-function recoverCaptionedOpenRuleTable(items, rules, pageNumber, caption, captions) {
+function recoverCaptionedOpenRuleTable(items, rules, pageNumber, caption, captions, below = false) {
   const overlap = (a, b) => Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0]))
   const cluster = (values, tolerance = 1.5) =>
     values
       .sort((a, b) => a - b)
       .filter((value, index, sorted) => !index || value - sorted[index - 1] > tolerance)
-  const horizontalCandidates = rules
+  let horizontalCandidates = rules
     .filter(
       (rule) =>
         rule[1] === rule[3] &&
-        rule[1] >= caption.rect[3] - 2 &&
+        (below ? rule[1] < caption.rect[1] : rule[1] >= caption.rect[3] - 2) &&
         overlap(rule, caption.rect) >=
           Math.min(caption.rect[2] - caption.rect[0], rule[2] - rule[0]) * 0.5
     )
     .sort((a, b) => a[1] - b[1])
+  if (below) {
+    const closing = horizontalCandidates.at(-1)
+    const height = Math.min(
+      caption.rect[3] - caption.rect[1],
+      Math.max(...items.filter((i) => i.text?.trim()).map((i) => i.height || 0))
+    )
+    if (!closing || caption.rect[1] - closing[1] > height * 2) return
+    const previous = captions.filter(
+      (c) =>
+        c !== caption &&
+        c.page === caption.page &&
+        c.rect[3] < closing[1] &&
+        overlap(c.rect, closing) > 0
+    )
+    const lower = Math.max(-Infinity, ...previous.map((c) => c.rect[3]))
+    horizontalCandidates = horizontalCandidates.filter(
+      (r) => r[1] > lower && Math.abs(r[0] - closing[0]) < 1.5 && Math.abs(r[2] - closing[2]) < 1.5
+    )
+    if (horizontalCandidates.length < 3) return
+  }
   if (horizontalCandidates.length < 2) return
   const maxRuleGap = Math.max(180, (caption.rect[3] - caption.rect[1]) * 6)
   const horizontal = [horizontalCandidates[0]]
@@ -946,7 +1815,11 @@ function recoverCaptionedOpenRuleTable(items, rules, pageNumber, caption, captio
   if (bottom - top < 30) return
   const left = Math.min(...horizontal.map((rule) => rule[0]))
   const right = Math.max(...horizontal.map((rule) => rule[2]))
-  if (!(right > left) || overlap([left, top, right, bottom], caption.rect) < (right - left) * 0.5)
+  if (
+    !(right > left) ||
+    overlap([left, top, right, bottom], caption.rect) <
+      Math.min(right - left, caption.rect[2] - caption.rect[0]) * 0.5
+  )
     return
   // Centered titles of different widths need not share a left edge. The first
   // surviving rule can therefore belong to a later, narrower table. Refuse
@@ -964,7 +1837,7 @@ function recoverCaptionedOpenRuleTable(items, rules, pageNumber, caption, captio
         nextNumber &&
         nextNumber.toLowerCase() !== number.toLowerCase() &&
         other.rect[1] > caption.rect[3] &&
-        other.rect[3] <= top + 2 &&
+        other.rect[1] < bottom &&
         overlap(other.rect, [left, top, right, bottom]) >=
           Math.min(other.rect[2] - other.rect[0], right - left) * 0.5
       )
@@ -996,6 +1869,7 @@ function recoverCaptionedOpenRuleTable(items, rules, pageNumber, caption, captio
         rule[3] - rule[1] >= 10
     )
     if (segments.length) {
+      if (below || left < caption.rect[0] - 2) return
       const covered = segments.reduce(
         (sum, rule) => sum + Math.max(0, Math.min(bottom, rule[3]) - Math.max(top, rule[1])),
         0
@@ -1003,25 +1877,40 @@ function recoverCaptionedOpenRuleTable(items, rules, pageNumber, caption, captio
       if (covered / Math.max(1, bottom - top) < 0.8) return
     }
   }
-  if (
+  const incompleteVertical =
     vertical.length >= 2 &&
     vertical.some((x) => {
       const segments = verticalSegments.filter((rule) => Math.abs(rule[0] - x) <= 1.5)
       const covered = segments.reduce((sum, rule) => sum + Math.max(0, rule[3] - rule[1]), 0)
       return covered < (bottom - top) * 0.8
     })
-  )
-    return
+  if (incompleteVertical) {
+    if (!below) return
+    vertical.length = 0
+  }
   const source = items
     .filter(
       (item) =>
         item.horizontal &&
         item.text?.trim() &&
-        item.rect?.[1] >= caption.rect[3] - 2 &&
+        item.rect?.[1] >= top - 2 &&
         item.rect?.[3] <= bottom + 2 &&
         overlap(item.rect, [left, top, right, bottom]) > 0
     )
     .sort((a, b) => a.rect[1] - b.rect[1] || a.rect[0] - b.rect[0])
+  if (
+    below &&
+    (caption.page !== pageNumber ||
+      source.some((i) => i.rect[0] < left || i.rect[2] > right || i.rect[1] < top - 2) ||
+      items.some(
+        (i) =>
+          i.text?.trim() &&
+          overlap(i.rect, [left, top, right, bottom]) > 0 &&
+          i.rect[1] >= bottom + 2 &&
+          i.rect[3] < caption.rect[1]
+      ))
+  )
+    return
   const centers = []
   for (const item of source) {
     const center = (item.rect[1] + item.rect[3]) / 2
@@ -1082,6 +1971,47 @@ function recoverCaptionedOpenRuleTable(items, rules, pageNumber, caption, captio
       ]
     } else {
       xs = [left, ...starts.slice(1).map((start, index) => (starts[index] + start) / 2), right]
+    }
+  }
+  if (below) {
+    // Repeated literal values prove leaf gutters even when native vertical
+    // strokes separate metric groups rather than their individual fields.
+    const records = centers
+      .map(({ items: row }) =>
+        row
+          .filter((i) => /^[-+−]?\d+(?:\.\d+)?$/u.test(i.text.trim()))
+          .sort((a, b) => a.rect[0] - b.rect[0])
+      )
+      .filter((row) => row.length >= 3)
+    if (records.length >= 2 && records.every((row) => row.length === records[0].length)) {
+      const leaves = records[0].map((_, c) => [
+        Math.min(...records.map((row) => row[c].rect[0])),
+        Math.max(...records.map((row) => row[c].rect[2]))
+      ])
+      const fences = cluster(
+        rules
+          .filter(
+            (r) =>
+              r[0] === r[2] &&
+              r[0] > left + 2 &&
+              r[0] < leaves[0][0] &&
+              r[1] >= top - 2 &&
+              r[3] <= bottom + 2
+          )
+          .map((r) => r[0])
+      )
+      if (
+        fences.length >= 1 &&
+        fences.length <= 2 &&
+        leaves.slice(1).every((leaf, c) => leaf[0] > leaves[c][1])
+      ) {
+        xs = [
+          left,
+          ...fences,
+          ...leaves.slice(1).map((leaf, c) => (leaves[c][1] + leaf[0]) / 2),
+          right
+        ]
+      }
     }
   }
   const rowEdges = [
@@ -1710,7 +2640,8 @@ export function recoverCaptionedRuledTables(
         caption,
         rulePaintBounds,
         runs
-      )
+      ) ??
+      recoverCaptionedOpenRuleTable(items, rules, pageNumber, caption, candidates, true)
     if (closed) {
       if (
         ![...existing, ...tables].some(
@@ -1742,7 +2673,18 @@ export function recoverCaptionedRuledTables(
     const ruled = recoverRuledTable(items, bounded, pageNumber, caption)
     const openRule = hasCompleteCaptionedTable(caption)
       ? undefined
-      : recoverCaptionedOpenRuleTable(items, bounded, pageNumber, caption, candidates)
+      : recoverCaptionedOpenRuleTable(
+          items,
+          rules.filter(
+            (r) =>
+              r[2] >= caption.rect[0] - 2 &&
+              r[1] >= caption.rect[3] - 2 &&
+              r[3] <= (next?.rect[1] ?? Infinity)
+          ),
+          pageNumber,
+          caption,
+          candidates
+        )
     const recovered =
       openRule &&
       (!ruled ||
@@ -1778,6 +2720,161 @@ export function recoverCaptionedRuledTables(
     tables.push(recovered)
   }
   return tables
+}
+
+// Numbered symbolic records can prove an image region without proving cells.
+// Require an independent upper text boundary, a nearby lower table caption,
+// complete consecutive records and stable empty gutters across the whole block.
+export function recoverCaptionedBorderlessMathTables(
+  items,
+  rules,
+  captions,
+  pageNumber,
+  existing = [],
+  graphics = []
+) {
+  const recovered = []
+  const visible = items.filter((item) => item.text?.trim() && item.rect?.every(Number.isFinite))
+  for (const caption of captions.filter(
+    (c) => c.page === pageNumber && captionKind(c.lines?.[0]) === 'table'
+  )) {
+    const above = visible.filter(
+      (item) =>
+        item.rect[3] < caption.rect[1] &&
+        item.rect[2] > caption.rect[0] &&
+        item.rect[0] < caption.rect[2]
+    )
+    const heights = above
+      .map((item) => item.height)
+      .filter((h) => h > 0)
+      .sort((a, b) => a - b)
+    const h = heights[heights.length >> 1]
+    if (!(h > 0) || !above.length) continue
+    const bands = []
+    for (const item of above.toSorted((a, b) => a.rect[1] - b.rect[1])) {
+      const last = bands.at(-1)
+      if (last && item.rect[1] - last.bottom < h * 1.4) {
+        last.items.push(item)
+        last.bottom = Math.max(last.bottom, item.rect[3])
+      } else bands.push({ items: [item], top: item.rect[1], bottom: item.rect[3] })
+    }
+    const band = bands.at(-1),
+      before = bands.at(-2)
+    if (
+      !before ||
+      !band ||
+      caption.rect[1] - band.bottom < h * 0.6 ||
+      caption.rect[1] - band.bottom > h * 3 ||
+      band.top - before.bottom < h * 1.4
+    )
+      continue
+    const source = band.items
+    if (source.some((item) => !item.horizontal || !Number.isFinite(item.baseline))) continue
+    const left = Math.min(...source.map((item) => item.rect[0]))
+    const right = Math.max(...source.map((item) => item.rect[2]))
+    // Project all text, including scripts and continuations, before finding
+    // gutters: a gap in only one printed line cannot establish a column.
+    const intervals = []
+    for (const item of source.toSorted((a, b) => a.rect[0] - b.rect[0])) {
+      const last = intervals.at(-1)
+      if (last && item.rect[0] - last[1] < h * 0.7) last[1] = Math.max(last[1], item.rect[2])
+      else intervals.push([item.rect[0], item.rect[2]])
+    }
+    if (intervals.length !== 4) continue
+    const lane = (item) =>
+      intervals.findIndex(
+        (range) => item.rect[0] >= range[0] - 0.02 && item.rect[2] <= range[1] + 0.02
+      )
+    const anchors = source
+      .filter(
+        (item) =>
+          lane(item) === 0 &&
+          /^\d{1,2}$/u.test(item.text.trim()) &&
+          Math.abs(item.rect[0] - left) < h * 0.1
+      )
+      .sort((a, b) => a.baseline - b.baseline)
+    if (
+      anchors.length < 4 ||
+      Number(anchors[0].text) > 1 ||
+      anchors.some(
+        (item, n) =>
+          Number(item.text) !== Number(anchors[0].text) + n ||
+          (n &&
+            (item.baseline - anchors[n - 1].baseline < h * 1.8 ||
+              item.baseline - anchors[n - 1].baseline > h * 4))
+      )
+    )
+      continue
+    if (anchors[0].rect[1] - band.top > h * 0.3) continue
+    const records = anchors.map(() => [])
+    let invalid = false
+    for (const item of source) {
+      const index = anchors.findLastIndex((anchor) => item.rect[1] >= anchor.rect[1] - h * 0.3)
+      if (index < 0 || lane(item) < 0) {
+        invalid = true
+        break
+      }
+      records[index].push(item)
+    }
+    if (
+      invalid ||
+      records.some((record, index) => {
+        const first = record.filter((item) => lane(item) === 0)
+        const lastBaseline = Math.max(...record.map((item) => item.baseline))
+        return (
+          !first.some(
+            (item) =>
+              item.text.trim() === ':' &&
+              Math.abs(item.baseline - anchors[index].baseline) < h * 0.1
+          ) ||
+          [1, 2, 3].some((column) => {
+            const fields = record.filter((item) => lane(item) === column)
+            return (
+              !fields.length ||
+              !fields.some((item) => /[=→⟩√∈]/u.test(item.text)) ||
+              !fields.some((item) => Math.abs(item.baseline - lastBaseline) < h * 0.5)
+            )
+          })
+        )
+      })
+    )
+      continue
+    const rect = [left - 2, band.top - 2, right + 2, band.bottom + 2]
+    // A caption's width does not prove the table's side boundaries. Include
+    // the surrounding blank gaps when checking paint: an outer border can
+    // sit beyond the first or last text baseline without touching a glyph.
+    if (
+      graphics.some(
+        ({ rect: ink }) =>
+          !ink?.every(Number.isFinite) ||
+          (ink[3] > before.bottom &&
+            ink[1] < caption.rect[1] &&
+            (ink[0] < rect[0] || ink[1] < rect[1] || ink[2] > rect[2] || ink[3] > rect[3]))
+      )
+    )
+      continue
+    if (
+      visible.some(
+        (item) => item.rect[3] > rect[1] && item.rect[1] < rect[3] && !source.includes(item)
+      ) ||
+      captions.some((other) => other !== caption && intersect(other.rect, rect) > 0) ||
+      existing.some((table) => table.cropRect && intersect(table.cropRect, rect) > 0) ||
+      rules.some(
+        (rule) =>
+          Math.min(rule[1], rule[3]) < caption.rect[1] &&
+          Math.max(rule[1], rule[3]) > before.bottom &&
+          (Math.min(rule[0], rule[2]) < rect[0] ||
+            Math.max(rule[0], rule[2]) > rect[2] ||
+            Math.min(rule[1], rule[3]) < rect[1] ||
+            Math.max(rule[1], rule[3]) > rect[3] ||
+            Math.abs(rule[2] - rule[0]) > (right - left) * 0.5 ||
+            Math.abs(rule[3] - rule[1]) > h * 2)
+      )
+    )
+      continue
+    recovered.push({ cropRect: rect, caption })
+  }
+  return recovered
 }
 
 // Consecutive table numbers with full-width rules or separate centered titles
@@ -1859,4 +2956,294 @@ export function splitCaptionedTableRegions(table, captions, rules) {
   return parts.every((p) => p.structure.objects.filter((o) => o.label === 'table row').length >= 3)
     ? parts
     : [table]
+}
+
+// Two independently captioned booktabs frames can prove that a padded model
+// crop trespasses into its neighbor. Move the whole candidate boundary only;
+// never clip a font box or discard an unproved duplicate after assignment.
+export function boundNativeSideBySideTable(table, items, captions, rules) {
+  if (!validRect(table?.cropRect) || !Array.isArray(table.structure?.objects)) return
+  if (items.some((item) => item.text?.trim() && !validRect(item.rect))) return
+  const epsilon = 0.02
+  const groups = []
+  for (const rule of rules) {
+    if (
+      !Array.isArray(rule) ||
+      rule.length !== 4 ||
+      !rule.every(Number.isFinite) ||
+      rule[1] !== rule[3] ||
+      rule[2] <= rule[0]
+    )
+      continue
+    let group = groups.find(
+      (g) => Math.abs(g[0][0] - rule[0]) <= epsilon && Math.abs(g[0][2] - rule[2]) <= epsilon
+    )
+    if (!group) {
+      group = []
+      groups.push(group)
+    }
+    if (!group.some((r) => Math.abs(r[1] - rule[1]) <= epsilon)) group.push(rule)
+  }
+  const frames = groups.flatMap((group) => {
+    if (group.length !== 3) return []
+    const ordered = [...group].sort((a, b) => a[1] - b[1])
+    const rect = [ordered[0][0], ordered[0][1], ordered[0][2], ordered[2][1]]
+    const owners = captions.filter(
+      (caption) =>
+        validRect(caption.rect) &&
+        captionKind(caption.lines?.[0] ?? '') === 'table' &&
+        caption.rect[0] >= rect[0] - epsilon &&
+        caption.rect[2] <= rect[2] + epsilon &&
+        caption.rect[3] < rect[1] &&
+        rect[1] - caption.rect[3] <= (caption.rect[3] - caption.rect[1]) * 2
+    )
+    return owners.length === 1 ? [{ rect, ordered, caption: owners[0] }] : []
+  })
+  const crop = table.cropRect
+  const columns = table.structure.objects.filter((object) => object.label === 'table column')
+  if (columns.length < 2) return
+  const selected = frames.filter(
+    ({ rect, caption }) =>
+      rect[1] >= crop[1] - epsilon &&
+      rect[3] <= crop[3] + epsilon &&
+      columns.every((column) => {
+        const center = (column.rect[0] + column.rect[2]) / 2 + crop[0]
+        return center > rect[0] && center < rect[2]
+      }) &&
+      (caption.rect[0] + caption.rect[2]) / 2 > crop[0] &&
+      (caption.rect[0] + caption.rect[2]) / 2 < crop[2]
+  )
+  if (selected.length !== 1) return
+  const owner = selected[0]
+  const peers = frames.filter(
+    (frame) =>
+      frame !== owner &&
+      frame.caption !== owner.caption &&
+      frame.caption.page === owner.caption.page &&
+      frame.ordered.every((r, n) => Math.abs(r[1] - owner.ordered[n][1]) <= epsilon)
+  )
+  if (peers.length !== 1) return
+  const pair = [owner, peers[0]].sort((a, b) => a.rect[0] - b.rect[0])
+  if (pair[0].rect[2] >= pair[1].rect[0] - epsilon) return
+  const boundary = owner === pair[0] ? 2 : 0
+  const crossesPeer = boundary === 0 ? crop[0] < pair[0].rect[2] : crop[2] > pair[1].rect[0]
+  const clipsOwner = boundary === 0 ? crop[0] > owner.rect[0] : crop[2] < owner.rect[2]
+  if (!crossesPeer && !clipsOwner) return
+  const insideFrame = (rect, frame) =>
+    rect.every((v, n) => (n < 2 ? v >= frame[n] - epsilon : v <= frame[n] + epsilon))
+  const relevant = items.filter(
+    (item) =>
+      item.text?.trim() &&
+      validRect(item.rect) &&
+      item.rect[3] > owner.rect[1] &&
+      item.rect[1] < owner.rect[3] &&
+      item.rect[2] > pair[0].rect[0] &&
+      item.rect[0] < pair[1].rect[2]
+  )
+  if (
+    !relevant.length ||
+    relevant.some(
+      (item) =>
+        !item.horizontal || pair.filter((frame) => insideFrame(item.rect, frame.rect)).length !== 1
+    )
+  )
+    return
+  const sources = pair.map((frame) => relevant.filter((item) => insideFrame(item.rect, frame.rect)))
+  if (
+    sources.some(
+      (source) =>
+        !source.some((i) => i.rect[3] <= owner.ordered[1][1]) ||
+        new Set(source.filter((i) => i.rect[1] >= owner.ordered[1][1]).map((i) => i.baseline))
+          .size < 2
+    )
+  )
+    return
+  const references = new Map()
+  for (const item of items)
+    for (const origin of [
+      item.sourceItem,
+      item.sourceSegment,
+      item.sourceToken,
+      item.sourceToken?.sourceItem,
+      item.sourceToken?.sourceSegment
+    ]) {
+      if (!origin) continue
+      const key = `${origin.pageNumber}:${origin.index}`
+      references.set(key, (references.get(key) ?? 0) + 1)
+    }
+  for (const item of relevant) {
+    const origins = nativeWholeFontOrigins([item])
+    if (
+      origins?.length !== 1 ||
+      origins[0].pageNumber !== owner.caption.page ||
+      origins[0].text !== item.text ||
+      references.get(`${origins[0].pageNumber}:${origins[0].index}`) !== 1
+    )
+      return
+  }
+  const next = [...crop]
+  next[boundary] = owner.rect[boundary]
+  return rebaseTableCrop(table, next, clipsOwner)
+}
+
+// Repair model columns only when continuous native rules, complete interval
+// records and measured header glyphs independently prove one physical field.
+export function recoverNativeRuledIntervalColumns(table, items, rules, measured, context) {
+  if (!validRect(table?.cropRect) || !table.structure?.objects?.length || !Array.isArray(rules))
+    return
+  const key = (s) => `${s?.pageNumber}:${s?.index}`
+  const valid = (r) =>
+    Array.isArray(r) && r.length === 4 && r.every(Number.isFinite) && r[2] > r[0] && r[3] > r[1]
+  const inside = (a, b) =>
+    b[0] >= a[0] - 1e-6 && b[1] >= a[1] - 1e-6 && b[2] <= a[2] + 1e-6 && b[3] <= a[3] + 1e-6
+  const cross = (a, b) =>
+    Math.min(a[2], b[2]) > Math.max(a[0], b[0]) && Math.min(a[3], b[3]) > Math.max(a[1], b[1])
+  const refs = (t) =>
+    [
+      t.sourceItem,
+      t.sourceToken,
+      t.sourceSegment,
+      t.sourceSegment?.sourceItem,
+      t.sourceSegment?.sourceToken,
+      t.sourceToken?.sourceItem,
+      t.sourceToken?.sourceSegment
+    ].filter((s) => s && Number.isSafeInteger(s.index))
+  const lineText = (tokens) => {
+    const a = tokens.toSorted((a, b) => a.rect[0] - b.rect[0])
+    let out = ''
+    for (let i = 0; i < a.length; i++) {
+      if (i && a[i].rect[0] < a[i - 1].rect[2] - 1e-6) return
+      out += (i && a[i].rect[0] > a[i - 1].rect[2] + 1e-6 ? ' ' : '') + a[i].text
+    }
+    return out
+  }
+  const interval = /^[+−-]?\d+(?:\.\d+)?\s*[−–-]\s*[+−-]?\d+(?:\.\d+)?$/u
+  const crop = table.cropRect
+  const count = new Map()
+  for (const t of items) for (const s of refs(t)) count.set(key(s), (count.get(key(s)) ?? 0) + 1)
+  const selected = items.filter((t) => valid(t.rect) && cross(crop, t.rect))
+  if (
+    !selected.length ||
+    selected.some(
+      (t) =>
+        !inside(crop, t.rect) ||
+        !t.horizontal ||
+        !Number.isFinite(t.baseline) ||
+        !t.sourceItem ||
+        t.text !== t.sourceItem.text ||
+        refs(t).length !== 1 ||
+        count.get(key(t.sourceItem)) !== 1
+    )
+  )
+    return
+  const height = selected.map((t) => t.height).sort((a, b) => a - b)[
+      Math.floor(selected.length / 2)
+    ],
+    rows = groupSourceRowsWithScripts(
+      selected.toSorted((a, b) => a.baseline - b.baseline || a.rect[0] - b.rect[0]),
+      height,
+      0.2
+    )
+  if (!rows || rows.length < 4) return
+  const bands = rows.map((r) => [
+    Math.min(...r.map((t) => t.rect[1])),
+    Math.max(...r.map((t) => t.rect[3]))
+  ])
+  if (bands.some((b, i) => i && b[0] <= bands[i - 1][1])) return
+  const horizontal = rules.filter((r) => r[1] === r[3] && r[1] >= crop[1] && r[1] <= crop[3]),
+    vertical = rules.filter((r) => r[0] === r[2] && r[0] > crop[0] && r[0] < crop[2])
+  const top = horizontal.filter((r) => r[1] < bands[0][0]).at(-1),
+    header = horizontal.filter((r) => r[1] > bands[0][1] && r[1] < bands[1][0]).at(-1),
+    bottom = horizontal.find((r) => r[1] > bands.at(-1)[1])
+  if (
+    !top ||
+    !header ||
+    !bottom ||
+    [header, bottom].some((r) => Math.abs(r[0] - top[0]) > 1e-6 || Math.abs(r[2] - top[2]) > 1e-6)
+  )
+    return
+  const xs = clusterTableRulePositions(vertical.map((r) => r[0]))
+  if (
+    !xs.length ||
+    xs.some((v) => classifyTableRuleEdge(vertical, 0, v, header[1], bottom[1]) !== 1)
+  )
+    return
+  const cuts = [top[0], ...xs, top[2]]
+  if (cuts.some((value, index) => index && value <= cuts[index - 1])) return
+  if (
+    selected.some(
+      (t) =>
+        t.rect[0] < cuts[0] ||
+        t.rect[2] > cuts.at(-1) ||
+        xs.some((v) => t.rect[0] < v && t.rect[2] > v)
+    )
+  )
+    return
+  const cols = table.structure.objects
+    .filter((o) => o.label === 'table column')
+    .toSorted((a, b) => a.rect[0] - b.rect[0])
+  if (!cols.length || cols.some((column) => !validRect(column.rect))) return
+  const ownership = cuts.slice(1).map((r, i) =>
+    cols.filter((c) => {
+      const center = (c.rect[0] + c.rect[2]) / 2 + crop[0]
+      return center > cuts[i] && center < r
+    })
+  )
+  if (ownership.some((c) => !c.length) || ownership.flat().length !== cols.length) return
+  let merged = false
+  for (let c = 0; c < ownership.length; c++) {
+    if (ownership[c].length === 1) continue
+    const groups = rows.map((row) =>
+      row.filter((t) => t.rect[0] >= cuts[c] - 1e-6 && t.rect[2] <= cuts[c + 1] + 1e-6)
+    )
+    if (
+      groups.some((g) => !g.length) ||
+      !groups
+        .slice(1)
+        .every(
+          (g) =>
+            g.every((t) => Math.abs(t.baseline - g[0].baseline) < 1e-6) &&
+            interval.test(lineText(g) ?? '')
+        )
+    )
+      return
+    // A model cut crossed by a connected printed interval is not a native field edge.
+    const internal = ownership[c]
+      .slice(1)
+      .map((col, i) => (ownership[c][i].rect[2] + col.rect[0]) / 2 + crop[0])
+    if (internal.some((v) => vertical.some((r) => Math.abs(r[0] - v) < 1))) return
+    // Independent printed leaf headings leave a native gap; do not merge them.
+    // A whole PDF item may itself span fields: measured whitespace must disprove that gap.
+    for (const v of internal) {
+      const witnesses = groups[0].filter((t) => t.rect[0] < v && t.rect[2] > v)
+      if (witnesses.length !== 1) return
+      const t = witnesses[0]
+      const runs = (measured ?? []).filter(
+        (r) => r.text === t.text && r.rect.every((z, i) => Math.abs(z - t.rect[i]) < 1e-6)
+      )
+      if (runs.length !== 1 || runs[0].gaps.some((g) => v >= g.left && v <= g.right)) return
+    }
+
+    merged = true
+  }
+  if (!merged || !proveNativeIntervalColumnSourcePacket(selected, rules, context, crop)) return
+  const out = structuredClone(table)
+  out.structure.objects = out.structure.objects
+    .filter((o) => o.label !== 'table column')
+    .concat(
+      cuts.slice(1).map((r, i) => ({
+        label: 'table column',
+        score: 1,
+        rect: [cuts[i] - crop[0], top[1] - crop[1], r - crop[0], bottom[1] - crop[1]]
+      }))
+    )
+  return {
+    table: out,
+    proof: {
+      cuts,
+      rows: rows.length,
+      mergedColumns: cols.length - (cuts.length - 1),
+      nativeSources: selected.map((t) => t.sourceItem)
+    }
+  }
 }

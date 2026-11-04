@@ -35,11 +35,15 @@ type NotificationOpenIntent = {
 
 const PENDING_NOTIFICATION_HANDLER_RETRY_MS = 100
 
+const isNotificationRuntimeClosing = (error: unknown): boolean =>
+  error instanceof Error && error.message.endsWith('Desktop runtime is shutting down.')
+
 const isPendingNotificationCommandUnavailable = (error: unknown): boolean =>
   error instanceof Error &&
-  /(?:No handler registered for|Unknown application command:|Unknown Web RPC channel:).*notifications:(?:peek|take)-pending-open-session/i.test(
+  (/(?:No handler registered for|Unknown application command:|Unknown Web RPC channel:).*notifications:(?:peek|take)-pending-open-session/i.test(
     error.message
-  )
+  ) ||
+    error.message.endsWith('Desktop is recovering. This operation was not submitted.'))
 
 type ApplicationEventBindingsInput = Readonly<{
   startupView: StartupView | undefined
@@ -163,8 +167,7 @@ const useApplicationEventBindings = ({
         view,
         presentations: {
           closeConfirmation: isCloseConfirmOpen,
-          webEventRecovery:
-            webEventConnectionPhase !== 'live' || desktopRecoveryPhase !== 'connected',
+          webEventRecovery: webEventConnectionPhase !== 'live',
           dataRootRecovery: hasDataRootRecovery,
           legacyDataMove: hasLegacyDataMove,
           update: isUpdateDialogOpen,
@@ -193,7 +196,6 @@ const useApplicationEventBindings = ({
       sessionPersistence.isLoading,
       startupView,
       webEventConnectionPhase,
-      desktopRecoveryPhase,
       view
     ]
   )
@@ -376,20 +378,61 @@ const useApplicationEventBindings = ({
 
   const openPendingNotificationSession = useCallback(
     (intent: NotificationOpenIntent = notificationOpenIntent.current): Promise<void> => {
+      const retryEpoch = pendingNotificationRetryEpoch.current
       const attempt = async (): Promise<void> => {
+        if (pendingNotificationRetryEpoch.current !== retryEpoch) return
         if (intent.generation !== notificationOpenIntent.current.generation) return
-        const retryEpoch = pendingNotificationRetryEpoch.current
         if (pendingNotificationRetryTimer.current !== undefined) {
           clearTimeout(pendingNotificationRetryTimer.current)
           pendingNotificationRetryTimer.current = undefined
         }
-        let pending: OpenSessionFromNotificationRequest | null
+        if (useDesktopRuntimeRecoveryStore.getState().phase !== 'connected') return
         try {
-          pending = await window.api.notifications.peekPendingOpenSession()
+          const pending = await window.api.notifications.peekPendingOpenSession()
+          if (pendingNotificationRetryEpoch.current !== retryEpoch) return
+          if (!pending || intent.generation !== notificationOpenIntent.current.generation) return
+
+          const sessionExists =
+            sessionPersistence.isHydrated &&
+            useSessionStore.getState().sessions.some((session) => session.id === pending.sessionId)
+          if (!sessionExists && !sessionPersistence.isReady) {
+            if (
+              useNavigationStore.getState().userNavigationRevision === intent.userNavigationRevision
+            ) {
+              const deferred = deferredNotification.current
+              if (!deferred || pending.token > deferred.token)
+                deferredNotification.current = pending
+            } else {
+              await window.api.notifications.takePendingOpenSession(pending.token)
+            }
+            return
+          }
+
+          const consumed = await window.api.notifications.takePendingOpenSession(pending.token)
+          if (pendingNotificationRetryEpoch.current !== retryEpoch) return
+          if (!consumed) return
+          if (deferredNotification.current?.token === consumed.token) {
+            deferredNotification.current = undefined
+          }
+          if (
+            intent.generation !== notificationOpenIntent.current.generation ||
+            useNavigationStore.getState().userNavigationRevision !== intent.userNavigationRevision
+          ) {
+            return
+          }
+          if (!sessionExists) {
+            setUnavailableNotificationToken(consumed.token)
+            return
+          }
+          setUnavailableNotificationToken(undefined)
+          useNavigationStore.getState().openSessionById(consumed.sessionId, 'notification')
         } catch (error) {
-          // The startup window mounts before full IPC adapters are installed (index.ts).
+          if (isNotificationRuntimeClosing(error)) return
+          // Startup/recovery can reject commands before submission. Retry the same intent;
+          // generation, navigation revision and cleanup still govern whether it can open.
           if (!isPendingNotificationCommandUnavailable(error)) throw error
           if (pendingNotificationRetryEpoch.current !== retryEpoch) return
+          if (useDesktopRuntimeRecoveryStore.getState().phase !== 'connected') return
           pendingNotificationRetryTimer.current = setTimeout(() => {
             pendingNotificationRetryTimer.current = undefined
             if (pendingNotificationRetryEpoch.current !== retryEpoch) return
@@ -398,40 +441,6 @@ const useApplicationEventBindings = ({
           }, PENDING_NOTIFICATION_HANDLER_RETRY_MS)
           return
         }
-        if (!pending || intent.generation !== notificationOpenIntent.current.generation) return
-
-        const sessionExists =
-          sessionPersistence.isHydrated &&
-          useSessionStore.getState().sessions.some((session) => session.id === pending.sessionId)
-        if (!sessionExists && !sessionPersistence.isReady) {
-          if (
-            useNavigationStore.getState().userNavigationRevision === intent.userNavigationRevision
-          ) {
-            const deferred = deferredNotification.current
-            if (!deferred || pending.token > deferred.token) deferredNotification.current = pending
-          } else {
-            await window.api.notifications.takePendingOpenSession(pending.token)
-          }
-          return
-        }
-
-        const consumed = await window.api.notifications.takePendingOpenSession(pending.token)
-        if (!consumed) return
-        if (deferredNotification.current?.token === consumed.token) {
-          deferredNotification.current = undefined
-        }
-        if (
-          intent.generation !== notificationOpenIntent.current.generation ||
-          useNavigationStore.getState().userNavigationRevision !== intent.userNavigationRevision
-        ) {
-          return
-        }
-        if (!sessionExists) {
-          setUnavailableNotificationToken(consumed.token)
-          return
-        }
-        setUnavailableNotificationToken(undefined)
-        useNavigationStore.getState().openSessionById(consumed.sessionId, 'notification')
       }
 
       pendingNotificationOpenQueue.current = pendingNotificationOpenQueue.current.then(
@@ -451,7 +460,11 @@ const useApplicationEventBindings = ({
         if (!deferred) return
         deferredNotification.current = undefined
         void window.api.notifications.takePendingOpenSession(deferred.token).catch((error) => {
-          if (!isPendingNotificationCommandUnavailable(error)) throw error
+          if (
+            !isNotificationRuntimeClosing(error) &&
+            !isPendingNotificationCommandUnavailable(error)
+          )
+            throw error
         })
       }),
     []
@@ -470,8 +483,6 @@ const useApplicationEventBindings = ({
   )
   useEffect(() => {
     const epoch = ++pendingNotificationRetryEpoch.current
-    openPendingNotificationSessionRef.current = openPendingNotificationSession
-    void openPendingNotificationSession()
     return () => {
       if (pendingNotificationRetryEpoch.current === epoch)
         pendingNotificationRetryEpoch.current += 1
@@ -480,7 +491,11 @@ const useApplicationEventBindings = ({
         pendingNotificationRetryTimer.current = undefined
       }
     }
-  }, [openPendingNotificationSession])
+  }, [])
+  useEffect(() => {
+    openPendingNotificationSessionRef.current = openPendingNotificationSession
+    void openPendingNotificationSession()
+  }, [openPendingNotificationSession, desktopRecoveryPhase])
 
   useEffect(() => {
     const removeRequest = window.api.compute.onApprovalRequest(enqueueComputeApproval)

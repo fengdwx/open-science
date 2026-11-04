@@ -11,6 +11,9 @@ import {
 } from '@/components/action-menu/action-menu-model'
 import type { ChatSession } from '@/stores/session-store'
 import { useUpdateStore } from '@/stores/update-store'
+import { useComputeStore } from '@/stores/compute-store'
+import { useSettingsStore } from '@/stores/settings-store'
+import { createInitialSkillImportState, useSkillImportStore } from '@/stores/skill-import-store'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createI18nTestStub } from '../../../../../test/i18n-test-stub'
@@ -197,7 +200,8 @@ type SidebarProject = { id: string; name: string; description: string }
 
 const mountProjectSidebar = async (
   otherProjects: readonly SidebarProject[],
-  onOpenProject: (projectId: string) => void = vi.fn()
+  onOpenProject: (projectId: string) => void = vi.fn(),
+  onOpenSession: (sessionId: string) => void = vi.fn()
 ): Promise<{
   container: HTMLElement
   cleanup: () => void
@@ -230,7 +234,7 @@ const mountProjectSidebar = async (
         onNewConversation={vi.fn()}
         isFilesOpen={false}
         onOpenFiles={vi.fn()}
-        onOpenSession={vi.fn()}
+        onOpenSession={onOpenSession}
         onOpenProject={onOpenProject}
         onRenameSession={vi.fn()}
         canDownloadArtifacts
@@ -335,6 +339,9 @@ const getTextContent = (node: ReactNode): string => {
 }
 
 beforeEach(() => {
+  useComputeStore.setState({ pendingApprovals: [] })
+  useSettingsStore.setState({ pendingApprovals: [], pendingCredentialRequests: [] })
+  useSkillImportStore.setState(createInitialSkillImportState())
   useUpdateStore.setState({
     status: { state: 'up-to-date', current: '0.2.0', latest: '0.2.0' },
     isDialogOpen: false
@@ -349,6 +356,72 @@ const waitForPreviewDwell = async (): Promise<void> => {
 }
 
 describe('WorkspaceSidebar accessible render', () => {
+  it.each([
+    { mobileMode: false, canMutateConversations: true },
+    { mobileMode: true, canMutateConversations: true },
+    { mobileMode: false, canMutateConversations: false },
+    { mobileMode: true, canMutateConversations: false }
+  ])(
+    'opens the existing Session editor on double-click when permitted (mobile: $mobileMode, mutate: $canMutateConversations)',
+    async ({ mobileMode, canMutateConversations }) => {
+      const { WorkspaceSidebarView } = await import('./WorkspaceSidebar')
+      const active = createSession({ id: 'active', status: 'idle' })
+      const target = createSession({
+        id: 'target',
+        title: 'Target session',
+        status: 'idle',
+        contentLoaded: false
+      })
+      const onOpenSession = vi.fn()
+      const onRenameSession = vi.fn()
+      const tree = WorkspaceSidebarView({
+        now: Date.now(),
+        projectName: 'Example project',
+        sessions: [active, target],
+        activeSessionId: active.id,
+        canCreateConversation: true,
+        canMutateConversations,
+        canDeleteConversations: true,
+        onGoHome: vi.fn(),
+        onNewConversation: vi.fn(),
+        isFilesOpen: false,
+        onOpenFiles: vi.fn(),
+        onOpenSession,
+        onRenameSession,
+        canDownloadArtifacts: true,
+        onDownloadArtifacts: vi.fn(),
+        onViewNotebook: vi.fn(),
+        onTogglePin: vi.fn(),
+        onDeleteSession: vi.fn(),
+        onOpenSettings: vi.fn(),
+        onOpenProjectSettings: vi.fn(),
+        onNewProject: vi.fn(),
+        mobileMode
+      })
+      const elements = collectElements(tree)
+      const button = elements.find(
+        (element) =>
+          element.props['data-slot'] === 'session-open-button' &&
+          getTextContent(element).includes(target.title)
+      )
+      expect(button).toBeDefined()
+
+      ;(button?.props.onClick as (event: { detail: number }) => void)({ detail: 1 })
+      expect(onOpenSession).toHaveBeenCalledExactlyOnceWith(target.id, 1)
+      expect(onRenameSession).not.toHaveBeenCalled()
+
+      ;(button?.props.onDoubleClick as () => void)()
+      if (canMutateConversations) {
+        expect(onRenameSession).toHaveBeenCalledExactlyOnceWith(target)
+      } else {
+        expect(onRenameSession).not.toHaveBeenCalled()
+      }
+      const row = elements.find((element) => element.props['data-session-id'] === target.id)
+      expect(row).toBeDefined()
+      expect(row?.props.onDoubleClick).toBeUndefined()
+    }
+  )
+
   it('renders only affected rows when fresh page callbacks accompany selection and Session updates', async () => {
     const rowComponent = SessionRow as unknown as {
       type: (props: Record<string, unknown>) => ReactElement
@@ -2500,8 +2573,8 @@ describe('WorkspaceSidebar accessible render', () => {
     const secondTarget = getSessionActionTargetProps(tree, sessions[1].id)
 
     expect(notebookButton?.props.onClick).toBeTypeOf('function')
-    ;(notebookButton?.props.onClick as () => void)()
-    expect(onOpenSession).toHaveBeenCalledWith('session-a')
+    ;(notebookButton?.props.onClick as (event: { detail: number }) => void)({ detail: 1 })
+    expect(onOpenSession).toHaveBeenCalledWith('session-a', 1)
 
     await secondTarget.bindings.edit?.execute(secondTarget.invocation)
     expect(onRenameSession).toHaveBeenCalledWith(sessions[1])
@@ -2522,10 +2595,11 @@ describe('WorkspaceSidebar accessible render', () => {
     expect(onDeleteSession).toHaveBeenCalledWith(sessions[0])
   })
 
-  it('renders Customize, Files, Compute, and Literature after New and wires their entries', async () => {
+  it('renders Customize, Files, Compute, Literature, and Marketplace after New and wires their entries', async () => {
     const { WorkspaceSidebarView } = await import('./WorkspaceSidebar')
     const onOpenFiles = vi.fn()
     const onOpenLiterature = vi.fn()
+    const onOpenMarketplace = vi.fn()
     const onOpenSettings = vi.fn()
     const onOpenCompute = vi.fn()
     const tree = WorkspaceSidebarView({
@@ -2541,6 +2615,8 @@ describe('WorkspaceSidebar accessible render', () => {
       isFilesOpen: true,
       onOpenFiles,
       onOpenLiterature,
+      onOpenMarketplace,
+      isMarketplaceOpen: true,
       isLibraryOpen: true,
       isComputeOpen: false,
       onOpenCompute,
@@ -2565,6 +2641,14 @@ describe('WorkspaceSidebar accessible render', () => {
     const literatureButton = buttons.find((button) => getTextContent(button).trim() === 'Library')
     const computeButton = buttons.find((button) => getTextContent(button).trim() === 'Compute')
 
+    const marketplaceButton = buttons.find(
+      (button) => getTextContent(button).trim() === 'Sharing marketplace'
+    )
+    expect(buttons[newButtonIndex + 5]).toBe(marketplaceButton)
+    expect(marketplaceButton?.props['aria-controls']).toBe('right-panel')
+    expect(marketplaceButton?.props['aria-pressed']).toBe(true)
+    ;(marketplaceButton?.props.onClick as () => void)()
+    expect(onOpenMarketplace).toHaveBeenCalledTimes(1)
     expect(newButtonIndex).toBeGreaterThanOrEqual(0)
     expect(buttons[newButtonIndex + 1]).toBe(customizeButton)
     expect(buttons[newButtonIndex + 2]).toBe(filesButton)
@@ -2785,6 +2869,78 @@ describe('WorkspaceSidebar accessible render', () => {
 
     expect(html).toContain('>Active<')
     expect(html).toContain('Session status: Waiting for your answer')
+  })
+
+  it('keeps a remote approval in Active with its permission status until it settles', async () => {
+    const session = createSession({
+      id: 'remote-session',
+      title: 'Remote analysis',
+      status: 'idle',
+      updatedAt: 1
+    })
+    useComputeStore.setState({
+      pendingApprovals: [
+        {
+          id: 'remote-approval',
+          sessionId: session.id,
+          providerId: 'ssh:cluster',
+          providerName: 'Cluster',
+          operation: 'call_command',
+          shape: 'command',
+          intent: 'Run analysis',
+          willPersistUnencrypted: false,
+          commandPreview: 'python analysis.py',
+          commandFull: 'python analysis.py'
+        }
+      ]
+    })
+
+    const onOpenSession = vi.fn()
+    const originalApi = window.api
+    window.api = { ...originalApi, platform: 'linux' } as never
+    const sidebar = await mountProjectSidebar([], vi.fn(), onOpenSession)
+    try {
+      await sidebar.rerenderSessions([
+        createSession({
+          id: 'older-result',
+          title: 'Earlier result',
+          status: 'idle',
+          updatedAt: 1
+        }),
+        session
+      ])
+      expect(sidebar.container.innerHTML).toContain('>Active<')
+      expect(sidebar.container.innerHTML).toContain('Session status: Waiting for permission')
+      await act(async () =>
+        window.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: '1',
+            ctrlKey: true,
+            bubbles: true,
+            cancelable: true
+          })
+        )
+      )
+      expect(onOpenSession).toHaveBeenLastCalledWith(session.id)
+
+      await act(async () => useComputeStore.getState().dismissApproval('remote-approval'))
+      expect(sidebar.container.innerHTML).not.toContain('>Active<')
+      expect(sidebar.container.innerHTML).toContain('Session status: Idle')
+      await act(async () =>
+        window.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: '1',
+            ctrlKey: true,
+            bubbles: true,
+            cancelable: true
+          })
+        )
+      )
+      expect(onOpenSession).toHaveBeenLastCalledWith('older-result')
+    } finally {
+      sidebar.cleanup()
+      window.api = originalApi
+    }
   })
 
   it('moves a recently completed idle session to Today when its Active grace period expires', async () => {

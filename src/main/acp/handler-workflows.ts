@@ -84,7 +84,11 @@ type AcpHandlerWorkflows = {
 type InterruptedTurnSessionSource = {
   loadSession(projectId: string, sessionId: string): Promise<PersistedChatSession | undefined>
   prepareRuntimeResume?(projectId: string, sessionId: string): Promise<void>
-  completeRuntimeAttachment?(projectId: string, sessionId: string): Promise<void>
+  completeRuntimeAttachment?(
+    projectId: string,
+    sessionId: string,
+    attached: AcpCreateSessionResponse
+  ): Promise<void>
 }
 
 type SaveAsSkillAdmission = (sessionId: string) => void | Promise<void>
@@ -102,6 +106,7 @@ const saveAsSkillReplayTargetForBackend = (
 ): HistoryReplayTarget => {
   if (backend.framework.id === 'opencode') return 'opencode'
   if (backend.framework.id === 'codebuddy') return 'codebuddy'
+  if (backend.framework.id === 'pi') return 'pi'
   if (backend.framework.id === 'codex') {
     return backend.modelRoute === 'codex-bridge' ? 'codex-bridge' : 'codex-response'
   }
@@ -300,7 +305,11 @@ const createAcpHandlerWorkflows = (
     const startedAt = Date.now()
     const context = {
       operationId: randomUUID(),
-      sessionHash: resumeSessionHash(request.sessionId)
+      sessionHash: resumeSessionHash(request.sessionId),
+      sessionId: request.sessionId,
+      projectId: request.projectId,
+      frameworkId: request.agentTarget?.frameworkId,
+      previousFrameworkId: request.previousFrameworkId
     }
     logResumeDiagnostic('info', 'acp:resume-session started', context)
 
@@ -314,7 +323,11 @@ const createAcpHandlerWorkflows = (
           await interruptedTurnSessions.prepareRuntimeResume(projectId, request.sessionId)
         }
         const attached = await runtime.resumeSession(bound)
-        await interruptedTurnSessions?.completeRuntimeAttachment?.(projectId, request.sessionId)
+        await interruptedTurnSessions?.completeRuntimeAttachment?.(
+          projectId,
+          request.sessionId,
+          attached
+        )
         return attached
       }
       const result = archiveAvailability
@@ -333,7 +346,8 @@ const createAcpHandlerWorkflows = (
       logResumeDiagnostic('error', 'acp:resume-session failed', {
         ...context,
         durationMs: Math.max(0, Date.now() - startedAt),
-        ...resumeErrorDiagnosticFields(error)
+        ...resumeErrorDiagnosticFields(error),
+        ...errorLogFields(error)
       })
       throw error
     }
@@ -379,7 +393,19 @@ const createAcpHandlerWorkflows = (
       request.sessionId,
       async () => undefined
     )
-    return run()
+    try {
+      return await run()
+    } catch (error) {
+      logResumeDiagnostic('error', 'acp:continue-interrupted-turn failed', {
+        operation: 'continue-interrupted-turn',
+        projectId: request.projectId,
+        sessionId: request.sessionId,
+        promptMessageId: request.promptMessageId,
+        runtimeSegmentId: request.contextReset?.runtimeSegmentId,
+        ...errorLogFields(error)
+      })
+      throw error
+    }
   },
 
   async saveAsSkill(request): Promise<AcpRuntimeState> {

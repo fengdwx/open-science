@@ -39,6 +39,71 @@ Module's curated owner, contract, and representative consumer tests; it is not c
 verification for an Interface change. Use `test:affected` or the exact-head PR Gate plan when an
 Interface or its consumers may have changed.
 
+Module and affected-test commands plan from source snapshots before preparing application outputs.
+When tests are selected, the delegated npm test command runs the Prisma check and package build
+once through `pretest`. Explain-only runs, empty unsharded selections and report merging do not prepare
+application outputs. Installed dependencies are still required for source analysis and report merging.
+
+Large `test:module` and `test:affected` selections use a temporary argument file to avoid operating
+system command-line limits, including Windows npm's shell limit. The internal
+`test:module:arguments` script runs the same `pretest` preparation and restores the complete argument
+list before starting the installed Vitest CLI. Filters, exclusions, coverage and shard options keep
+their normal meaning; the selection is neither truncated nor expanded to the full suite. The parent
+removes the temporary file after the command exits, including test or spawn failures. Forced parent
+termination can leave a file in the OS temporary directory; it contains test arguments only.
+
+### Dependency boundaries and explainable convergence
+
+`test:affected` refines a declared selection against immutable merge-base, head and actual checkout
+sources. Documentation and validated additive registrations retain their own evidence without
+turning an otherwise homogeneous source change into a mixed boundary. Policy changes, deletions,
+unknown ownership, dirty checkouts and unavailable evidence keep the conservative selection.
+
+Both PR and queue tiers may exclude a host test reached only through module expansion when a
+complete dependency traversal proves it cannot reach the actual changed files in **all three**
+snapshots. Selecting a consumer module never makes its other sources new change seeds: two owners
+wired into one composition do not automatically affect each other's independent tests. Changed
+owners' direct declarations, contracts, changed tests, graph evidence and new registration evidence
+are protected. Runtime-only traversal excludes erased type imports; typechecks and structural
+architecture checks still cover those relationships. Mixed imports, schemas, side effects, mocks
+and registered dynamic contracts remain runtime dependencies.
+
+PR additionally keeps the existing direct-consumer/one-adapter boundary and defers farther consumers
+to blocking merge queue. That distance rule is **not** proof of independence. Queue retains real
+multi-hop consumers. Opaque IPC, event, filesystem, native or unresolved imports cannot establish
+independence and retain tests. `test:affected:explain -- --base <base> --head <head> --tier pr` shows
+exclusions, retained boundary reasons, deferrals, capabilities and fallback reasons.
+
+`node scripts/ci/module-graph/relationships.mjs <revision>` exports all registered modules with file-role
+layers, public interfaces, test counts, unresolved runtime files and file evidence for each edge.
+Runtime imports, type imports and explicit dynamic contracts point **consumer → dependency**;
+`test-routing` points **changed owner → consumer evidence**, while `capability-routing` points
+**changed owner → platform/fallback obligations only** for reviewed source-derived boundaries. These graphs must not be conflated.
+Layers describe file roles; a mixed legacy module can occupy several roles. The classifier is shared
+with trusted consumer validation; see the [reviewed layer rules](ci.md#reviewed-source-derived-boundaries). The architecture guard
+prevents foundation dependencies, shared-to-host/presentation imports, owner-to-composition imports,
+repository-to-command imports, infrastructure-to-service imports, and private imports across the
+PDF/isolated-helper public boundaries. Mixed owners retain per-file roles and low-level purity checks. It does not claim complete
+encapsulation of every existing domain.
+
+Static diagnostics and selection use different engines: `npm run analyze:test-impact --
+--revision HEAD` uses the private package's external dependency engine, while generated consumers
+use the repository's TypeScript-based reader. Neither missing static edges nor a bounded runtime
+coverage sample proves independence. Dynamic evidence only covers the tests and inputs actually
+executed; IPC, events and filesystem relationships still need explicit contracts.
+
+The derived-consumer reader also follows literal relative and renderer-alias imports of SVG, PNG,
+JPEG, GIF, WebP, AVIF, ICO and CSS files, including `?raw`, `?url`, `?inline`, `?no-inline` and
+fragment suffixes. These edges add consumers but remain incomplete for retirement/pruning:
+resource contents, CSS imports/URLs and arbitrary loader plugins are not analyzed. Reviewed
+source-derived boundaries may instead pin exact asset inputs and resource behavior tests under
+[the explicit resource rules](ci.md#reviewed-source-derived-boundaries); that policy is not an
+independent-history proof. Computed
+imports and unsupported query combinations retain uncertainty. Resource consumers can be registered
+explicitly in their owning module; the generated index stores only additional memberships.
+Tests that read resource contents through filesystem APIs such as `readFileSync` need explicit
+`testFiles.consumer` entries; import analysis does not discover those relationships.
+
 ### Full fallback
 
 Run `npm run typecheck`, `npm run lint`, and `npm test` when any of these apply:
@@ -93,6 +158,38 @@ reply/failure waits and scenario-specific assertions in the caller. The explicit
 `activatePermissionDecisionViaDom` preserves an existing Windows overlay workaround for permission
 state tests; it must not replace real pointer activation in hit-testing or accessibility journeys.
 
+## Fast impact-registration gate
+
+After dependencies are installed, run this fixed registration suite from the repository root:
+
+```bash
+npx vitest run --config scripts/ci/vitest.registration.config.ts
+```
+
+It checks module schema and path references, exact source/test ownership, test consumer evidence
+(including declared runtime-loading edges), package dependency registration, classifier invariants
+and platform/core-check selection. This includes the Windows source-signal check that otherwise
+could be missed by selective test execution. The explicit inventory is independent of
+`change-impact.json` and module registration data; it does not run application behavior tests.
+
+PR Gate runs it in the independent **Impact registration** job on every PR and merge group,
+including documentation-only and full-fallback plans. The job installs the locked parsing/test
+toolchain with lifecycle scripts disabled, as CI Integrity does; this is not an application
+installation. The dedicated Vitest config needs no app setup, Prisma generation, package build,
+Electron or browser launch. The final PR Gate requires success even if affected tests would not
+select these suites. Failure, cancellation, skipping or a missing result blocks admission.
+
+The gate catches violations of the existing registration rules. It cannot infer arbitrary IPC,
+events or filesystem relationships; those still require the explicit contracts described below.
+Behavior tests and trusted-base Integrity preservation checks remain separate requirements.
+
+The workflow, fixed inventory and assertions execute from the candidate checkout. They are
+protected CI policy under `/scripts/ci/` and `/.github/workflows/`, requiring CI-owner approval;
+new commits dismiss stale approvals under the main-branch ruleset. Independence here means that
+registration data cannot select or skip its own checks. Changes to the checking policy itself use
+the existing [CI control-plane approval](ci.md#ci-control-plane-approval) process, while trusted-base
+Integrity continues to validate registration data and preservation rules.
+
 ## Module-impact registration
 
 Module registration is part of the same change as the source and tests, not a follow-up after CI
@@ -108,13 +205,15 @@ Before committing:
 - Register new tests in the appropriate `testFiles` category: `owner` for the module's behavior,
   `contract` for its interfaces, or `consumer` for downstream behavior depending on it. Within one
   module, list a test in only one category; the same test may provide evidence for multiple modules.
-- Check upstream modules when adding a test or changing imports, re-exports or mocks. The
-  consumer-coverage guard follows transitive dependencies: registering a test only in its owning
-  module may leave several upstream modules without evidence. For each reported
-  `<module-id> -> <test-path>` gap, add the test to that module's appropriate category, normally
-  `testFiles.consumer` for a downstream test. Do not remove valid dependency edges to silence it.
+- After changing tests, imports, mocks or runtime-loading declarations, run
+  `npm run generate:module-consumers`, then `npm run check:module-consumers`.
+  The generated index records additional reachable tests without repeated manual registrations.
+  Preserve explicit consumer contracts, including IPC, event and filesystem relationships;
+  static reachability alone does not prove behavioral coverage or justify removing a contract.
 - Keep public boundaries in `interfacePaths`, including test files that export helpers used by other
-  tests. Keep `consumerModules` accurate for module-to-module relationships; it does not replace
+  tests. Keep `consumerModules` accurate for module-to-module relationships (reviewed
+  [source-derived boundaries](ci.md#reviewed-source-derived-boundaries) retain these edges only
+  for capability routing); it does not replace
   explicit test evidence. Native/worker loading edges use `scripts/ci/module-runtime-consumers.json`.
   IPC, events, filesystem protocols and other dynamic relationships still need explicit contract
   tests; static analysis cannot prove them all.
@@ -132,7 +231,7 @@ Run from the repository root:
 
 ```bash
 node scripts/ci/audit-module-ownership.mjs
-npx vitest run scripts/ci/validate-module-impact.test.ts scripts/ci/check-module-ownership.test.ts scripts/ci/module-consumer-coverage.test.ts
+npx vitest run scripts/ci/validate-module-impact.test.ts scripts/ci/check-module-ownership.test.ts scripts/ci/module-graph/consumer-coverage.test.ts
 ```
 
 These checks validate registration, not the changed product behavior. Also run

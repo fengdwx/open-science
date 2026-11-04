@@ -107,6 +107,22 @@ const createWorkflow = (overrides: Record<string, unknown> = {}): TestHarness =>
 }
 
 describe('AcpConnectionCloseWorkflow', () => {
+  it('detaches an unexpected close after a process error so sessions can reconnect', () => {
+    let status: AcpStateSnapshot['status'] = 'error'
+    const { workflow, state, resources } = createWorkflow({ currentStatus: () => status })
+    state.setStatus.mockImplementation((next: AcpStateSnapshot['status']) => {
+      status = next
+    })
+
+    workflow.handleUnexpectedClose()
+    workflow.handleUnexpectedClose()
+
+    expect(resources.cleanupUnexpectedClose).toHaveBeenCalledOnce()
+    expect(state.detachSessionConnections).toHaveBeenCalledExactlyOnceWith(false)
+    expect(state.publishInterruptedPromptFailures).toHaveBeenCalledExactlyOnceWith(['prompt'])
+    expect(status).toBe('closed')
+  })
+
   it('coordinates expected teardown while preserving owner ordering', async () => {
     const { workflow, actions, resources, transitions, state } = createWorkflow()
 
@@ -118,6 +134,11 @@ describe('AcpConnectionCloseWorkflow', () => {
     expect(resources.closeMcp).toHaveBeenCalledOnce()
     expect(state.clearPromptContent).toHaveBeenCalledWith(2)
     expect(state.cancelPendingStatePublication).toHaveBeenCalledOnce()
+    expect(state.settleActivePrompts).toHaveBeenCalledOnce()
+    expect(state.publishInterruptedPromptFailures).toHaveBeenCalledWith(
+      ['prompt'],
+      'connection-lost'
+    )
     expect(actions).toEqual([
       'model-cancel',
       'invalidate',
@@ -127,6 +148,7 @@ describe('AcpConnectionCloseWorkflow', () => {
       'reviewer',
       'plan',
       'interactions',
+      'prompt-failures',
       'usage',
       'models',
       'capabilities',
@@ -154,6 +176,20 @@ describe('AcpConnectionCloseWorkflow', () => {
 
     expect(resources.restorePublished).toHaveBeenCalledOnce()
     expect(state.cancelPendingStatePublication).toHaveBeenCalledOnce()
+  })
+
+  it('settles interrupted prompts even when disconnect cleanup fails', async () => {
+    const { workflow, state } = createWorkflow()
+    state.disposeActiveSessions.mockImplementation((recordFailure) => {
+      recordFailure('primary-session', new Error('dispose failed'))
+    })
+
+    await expect(workflow.disconnect()).rejects.toThrow('dispose failed')
+
+    expect(state.publishInterruptedPromptFailures).toHaveBeenCalledExactlyOnceWith(
+      ['prompt'],
+      'connection-lost'
+    )
   })
 
   it('cleans an unexpected close once, reports interrupted prompts, then reevaluates intents', () => {
@@ -205,6 +241,7 @@ describe('AcpConnectionCloseWorkflow', () => {
     expect(state.clearPlanInteractions).toHaveBeenCalledOnce()
     expect(state.clearSessionProjection).toHaveBeenCalledOnce()
     expect(state.cancelPendingStatePublication).toHaveBeenCalledOnce()
+    expect(state.publishInterruptedPromptFailures).toHaveBeenCalledWith(['prompt'], 'app-restart')
   })
 
   it('clears Plan interactions during synchronous shutdown', () => {

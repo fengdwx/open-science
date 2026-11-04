@@ -1248,7 +1248,10 @@ it('does not start queued automatic inference after automatic updates are disabl
       smartAutoUpdate: false
     })
     release()
-    await vi.waitFor(async () => expect((await owner.view(id)).run?.state).toBe('cancelled'))
+    // The preceding run commits its result and usage before this queued run can cancel.
+    await vi.waitFor(async () => expect((await owner.view(id)).run?.state).toBe('cancelled'), {
+      timeout: 15000
+    })
     expect(classify).toHaveBeenCalledOnce()
     expect((await owner.view(id)).counts.pending).toBe(1)
     await refresh(id)
@@ -2405,7 +2408,8 @@ it('drains paid requests and retains a durable pause when both result and failur
   // Resume drains every real SQLite commit, including the final assessment and pause clear.
   await vi.waitFor(async () => expect((await owner.view(id)).matches).toBe(8), { timeout: 15000 })
   expect((await owner.view(id)).automaticPauseReason).toBeUndefined()
-}, 30000)
+  // Three sequential 15-second phases plus real SQLite setup/cleanup need a larger total budget.
+}, 60000)
 
 it('drains an active classifier before deleting its collection', async () => {
   const id = await create()

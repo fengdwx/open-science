@@ -1,7 +1,38 @@
+import { createNativeRuledAlgorithmCaptionReader } from './ruled-algorithm-packets.js'
+import { createNativeTaggedReferenceReader } from './tagged-reference-packets.js'
+import { terminalContactSources } from './terminal-contact-source.js'
+import { readNativeCommandAdvances } from './compound-reference-boundary.js'
+import {
+  readNativeAppendixOverview,
+  readNativeOutlineRestart,
+  readNativeOnlineAppendixRestart,
+  readNativeContentsReference,
+  createNativeTerminalCaptionReader,
+  bindNativeTerminalCaptionLayout
+} from './appendix-overview-boundary.js'
 import { getPdfTranslationTextContent } from './text-content.js'
-import type { PDFDocumentProxy } from 'pdfjs-dist'
+import { nativeOwnedReferenceRolesCurrent } from './unheaded-reference-packets.js'
+import {
+  readNativeReferenceEvidence,
+  readNativeTableNoteEvidence,
+  readNativeDisplayEquationEvidence,
+  readNativeNumberedPacketEvidence,
+  bindNativeReferenceRolePage,
+  nativeReferenceRolePagesCurrent
+} from './native-reference-evidence.js'
+import { readNativeSectionFontEvidence } from './wrapped-section-prose.js'
+import type { PDFDocumentProxy, PDFPageProxy, getDocument } from 'pdfjs-dist'
+import { createAuxiliaryNativeDisplayInkReader } from './auxiliary-native-ink.js'
+import { hasNativeDisplaySequence, nativeScopedDisplayOwners } from './native-display-packets.js'
+import { nativePartialNavigation } from './native-source-geometry.js'
+import { readOutlierFontNavigation, readNativeType3Navigation } from './outlier-font-navigation.js'
 import { createPdfTranslationSource, type PdfTranslationSource } from './source.js'
 import { groupPdfTranslationPages, type PdfLayoutPage, type PdfLayoutTextItem } from './layout.js'
+import {
+  readPdfMathDiagrams,
+  preservePdfMathDiagrams,
+  type PdfMathDiagram
+} from './math-diagram.js'
 
 export type PdfTranslationExclusionReason =
   'invalid-geometry' | 'unsupported-orientation' | 'outside-page'
@@ -20,8 +51,10 @@ export type PdfTranslationExtraction = Readonly<{
       reason: PdfTranslationExclusionReason
       items: readonly Readonly<{ pageNumber: number; index: number; text: string }>[]
     }>[]
-    /** Advisory grouping uncertainty; does not silently remove source text. */
+    /** Advisory grouping or decoding uncertainty; never silently removes source text. */
     warnings: readonly Readonly<{ unitId: string; reasons: readonly string[] }>[]
+    /** Painted glyphs without a native text owner; does not change translation eligibility. */
+    pageDiagnostics?: readonly Readonly<{ pageNumber: number; reason: 'unreliable-font-unicode' }>[]
   }>
 }>
 
@@ -40,18 +73,33 @@ function independentRect(
     font = Math.hypot(c, d)
   if (advance <= 0 || font <= 0 || item.width <= 0) return undefined
   const quarter = ((Math.round(Math.atan2(-b, a) / (Math.PI / 2)) % 4) + 4) % 4
-  const [ux, uy] = [
+  let [ux, uy] = [
     [1, 0],
     [0, 1],
     [-1, 0],
     [0, -1]
   ][quarter]
-  if (
-    Math.hypot(a / advance - ux, -b / advance - uy) > 0.0001 ||
-    Math.abs((a * c + b * d) / (advance * font)) > 0.0001 ||
-    a * d - b * c <= 0
-  )
-    return undefined
+  if (Math.abs((a * c + b * d) / (advance * font)) > 0.0001 || a * d - b * c <= 0) return undefined
+  if (Math.hypot(a / advance - ux, -b / advance - uy) > 0.0001) {
+    // Arbitrary angles have no metric fallback: admit only an explicit native
+    // horizontal font and finite ascent/descent. The result remains a separate
+    // original-only navigation anchor, never a glyph-ink or repaint claim.
+    if (
+      style?.vertical !== false ||
+      !Number.isFinite(style.ascent) ||
+      !Number.isFinite(style.descent) ||
+      style.ascent! <= style.descent! ||
+      style.ascent! <= 0 ||
+      style.ascent! > 1 ||
+      style.descent! > 0 ||
+      style.descent! < -1 ||
+      !item.fontName ||
+      item.height <= 0
+    )
+      return undefined
+    ux = a / advance
+    uy = -b / advance
+  }
   const ascent = style?.ascent || (style?.descent ? 1 + style.descent : 0.8)
   const points = [
     [0, -ascent * font],
@@ -82,11 +130,21 @@ function independentRect(
 export async function extractPdfTranslationSource({
   document,
   resourceRequestKey,
+  sourceIdentity,
+  nativeDocumentFactory,
   signal,
   onProgress
 }: {
-  document: Pick<PDFDocumentProxy, 'numPages' | 'fingerprints' | 'getPage'>
+  document: Pick<PDFDocumentProxy, 'numPages' | 'fingerprints' | 'getPage'> &
+    Partial<
+      Pick<
+        PDFDocumentProxy,
+        'getData' | 'getMetadata' | 'getOutline' | 'getDestination' | 'getPageIndex'
+      >
+    >
   resourceRequestKey: string
+  sourceIdentity?: Readonly<{ sourceChecksum: string; sourceSizeBytes: number }>
+  nativeDocumentFactory?: typeof getDocument
   signal: AbortSignal
   onProgress?: (pagesRead: number) => void
 }): Promise<PdfTranslationExtraction> {
@@ -94,10 +152,48 @@ export async function extractPdfTranslationSource({
   const fingerprint = document.fingerprints[0]
   if (!fingerprint || !Number.isInteger(document.numPages) || document.numPages < 1)
     throw new Error('Invalid PDF source identity')
+  const terminalCaptions = createNativeTerminalCaptionReader({
+    document,
+    sourceIdentity,
+    nativeDocumentFactory,
+    signal
+  })
+  const taggedReferences = createNativeTaggedReferenceReader(document, signal)
+  const algorithmCaptions = createNativeRuledAlgorithmCaptionReader({
+    document,
+    sourceIdentity,
+    nativeDocumentFactory,
+    signal
+  })
   const pages: PdfLayoutPage[] = []
+  const onlineContexts: Parameters<typeof readNativeOnlineAppendixRestart>[0][] = []
+  const scopedDisplays: {
+    page: PDFPageProxy
+    content: Awaited<ReturnType<PDFPageProxy['getTextContent']>>
+    viewport: ReturnType<PDFPageProxy['getViewport']>
+    pageNumber: number
+  }[] = []
+  const mathDiagrams: PdfMathDiagram[] = []
   const styles: Record<string, TextStyle>[] = []
   const pagesWithoutText: number[] = []
   const exclusions: PdfTranslationExtraction['coverage']['exclusions'][number][] = []
+  const unreliableItems = new Set<string>()
+  const outlierNavigation = new Map<string, NonNullable<ReturnType<typeof independentRect>>>()
+  const navigationPageCount = document.numPages
+  const type3Navigation: NonNullable<Awaited<ReturnType<typeof readNativeType3Navigation>>>[] = []
+  const navigationCurrent = (): boolean =>
+    document.fingerprints[0] === fingerprint && document.numPages === navigationPageCount
+  const checkType3Navigation = (): void => {
+    if (type3Navigation.some((proof) => !proof.current()))
+      throw new Error('PDF source changed during Type3 navigation verification')
+  }
+  const partialNavigation = new Map<
+    string,
+    NonNullable<ReturnType<typeof nativePartialNavigation>>
+  >()
+  const pageDiagnostics: NonNullable<
+    PdfTranslationExtraction['coverage']['pageDiagnostics']
+  >[number][] = []
   let textItemCount = 0
   for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber++) {
     signal.throwIfAborted()
@@ -110,7 +206,16 @@ export async function extractPdfTranslationSource({
       !viewport.transform.every(Number.isFinite)
     )
       throw new Error('Invalid PDF page geometry')
-    const content = await getPdfTranslationTextContent(page)
+    const content = await getPdfTranslationTextContent(
+      page,
+      (indexes) => {
+        for (const index of indexes) unreliableItems.add(`${pageNumber}:${index}`)
+      },
+      (proved) => {
+        if (proved)
+          pageDiagnostics.push(Object.freeze({ pageNumber, reason: 'unreliable-font-unicode' }))
+      }
+    )
     signal.throwIfAborted()
     let pageTextItems = 0
     const items = content.items.map((item, index) => {
@@ -140,6 +245,8 @@ export async function extractPdfTranslationSource({
       // Express PDF coordinates in the reader's default viewport, including CropBox
       // offsets and UserUnit scaling. Grouping uses a bottom-up virtual PDF axis.
       const [a, b, c, d, x, y] = item.transform
+      const partial = nativePartialNavigation(item, content.styles?.[item.fontName], viewport)
+      if (partial) partialNavigation.set(`${pageNumber}:${index}`, partial)
       const [ma, mb, mc, md, mx, my] = viewport.transform
       const scale = Math.hypot(ma, mb)
       return {
@@ -158,10 +265,36 @@ export async function extractPdfTranslationSource({
         fontName: item.fontName,
         fontAscent: content.styles?.[item.fontName]?.ascent,
         fontDescent: content.styles?.[item.fontName]?.descent,
+        fontVertical: content.styles?.[item.fontName]?.vertical,
         hasEOL: item.hasEOL
       }
     })
+    const nativeReferenceEvidence = await readNativeReferenceEvidence(page, content)
+    const nativeDisplayMathEvidence = await readNativeDisplayEquationEvidence(
+      page,
+      content,
+      nativeReferenceEvidence
+    )
+    if (!nativeDisplayMathEvidence.complete && hasNativeDisplaySequence(content))
+      scopedDisplays.push({ page, content, viewport, pageNumber })
+    for (const [index, rect] of readOutlierFontNavigation(page, content, viewport))
+      outlierNavigation.set(`${pageNumber}:${index}`, rect)
+    signal.throwIfAborted()
+    const nativeNavigation = await readNativeType3Navigation(page, content, viewport, {
+      signal,
+      current: navigationCurrent
+    })
+    signal.throwIfAborted()
+    if (nativeNavigation) {
+      if (!nativeNavigation.current())
+        throw new Error('PDF source changed during Type3 navigation verification')
+      type3Navigation.push(nativeNavigation)
+      for (const [index, rect] of nativeNavigation.regions)
+        outlierNavigation.set(pageNumber + ':' + index, rect)
+    }
     styles.push(content.styles ?? {})
+    mathDiagrams.push(...(await readPdfMathDiagrams(page, pageNumber, content)))
+    signal.throwIfAborted()
     if (pageTextItems === 0) pagesWithoutText.push(pageNumber)
     pages.push({
       page: pageNumber,
@@ -170,17 +303,105 @@ export async function extractPdfTranslationSource({
       // Item coordinates already include the default viewport rotation above. Group
       // readable horizontal prose in that space; sideways items still remain source-only.
       rotation: 0,
-      items
+      items,
+      nativeTableNoteEvidence: await readNativeTableNoteEvidence(
+        page,
+        content,
+        new Set(
+          [...unreliableItems]
+            .filter((key) => key.startsWith(pageNumber + ':'))
+            .map((key) => Number(key.split(':')[1]))
+        )
+      ),
+      nativeReferenceEvidence,
+      nativeDisplayMathEvidence,
+      nativeNumberedPacketEvidence: await readNativeNumberedPacketEvidence(
+        page,
+        content,
+        nativeReferenceEvidence,
+        nativeDisplayMathEvidence
+      ),
+      nativeFolioFontEvidence: await readNativeSectionFontEvidence(
+        page,
+        {
+          ...content,
+          items: content.items.filter((item) => 'str' in item && item.str === String(pageNumber))
+        },
+        { complete: false, reason: 'native-folio-font-subset' }
+      ),
+      nativeSectionFontEvidence: await readNativeSectionFontEvidence(
+        page,
+        content,
+        nativeReferenceEvidence
+      ),
+      nativeCommandAdvances: await readNativeCommandAdvances(page, content)
     })
+    await bindNativeReferenceRolePage(
+      pages.at(-1)!,
+      page,
+      content,
+      document,
+      signal,
+      unreliableItems,
+      viewport
+    )
+    pages.at(-1)!.nativeAppendixOverview = await readNativeAppendixOverview({
+      document,
+      page,
+      content,
+      rawPage: pages.at(-1)!,
+      sourceIdentity,
+      signal,
+      unreliable: new Set(
+        [...unreliableItems]
+          .filter((key) => key.startsWith(pageNumber + ':'))
+          .map((key) => Number(key.split(':')[1]))
+      )
+    })
+    const restartInput = {
+      document,
+      page,
+      content,
+      rawPage: pages.at(-1)!,
+      sourceIdentity,
+      signal,
+      unreliable: new Set(
+        [...unreliableItems]
+          .filter((key) => key.startsWith(pageNumber + ':'))
+          .map((key) => Number(key.split(':')[1]))
+      )
+    }
+    pages.at(-1)!.nativeOutlineRestart = await readNativeOutlineRestart(restartInput)
+    pages.at(-1)!.nativeOnlineAppendixRestart = await readNativeOnlineAppendixRestart(
+      restartInput,
+      onlineContexts.slice()
+    )
+    pages.at(-1)!.nativeContentsReference = await readNativeContentsReference(restartInput)
+    onlineContexts.push(restartInput)
+    if (onlineContexts.length > 2) onlineContexts.shift()
+    await taggedReferences.observe({ ...restartInput, viewport })
+    await algorithmCaptions.observe({ ...restartInput, viewport })
+    terminalCaptions.observe({ ...restartInput, viewport })
     onProgress?.(pageNumber)
     // Let the reader paint and deliver cancellation between page reads.
     await new Promise<void>((resolve) => setTimeout(resolve, 0))
     signal.throwIfAborted()
   }
+  checkType3Navigation()
+  await terminalCaptions.prepare(pages)
+  signal.throwIfAborted()
   // ponytail: grouping is synchronous; move it to a worker if long-document profiling requires it.
-  const layout = groupPdfTranslationPages({ pages })
+  const layout = preservePdfMathDiagrams(
+    groupPdfTranslationPages({ pages, pageCount: document.numPages }),
+    mathDiagrams
+  )
+  const terminalSource = bindNativeTerminalCaptionLayout(layout, pages, {
+    resourceRequestKey,
+    fingerprint
+  })
   const units: PdfTranslationSource['units'][number][] = []
   const independent: PdfTranslationSource['units'][number][] = []
+  const independentWarnings: PdfTranslationExtraction['coverage']['warnings'][number][] = []
   const warnings: PdfTranslationExtraction['coverage']['warnings'][number][] = []
   const accounted = new Set(
     exclusions.flatMap((entry) => entry.items.map((item) => `${item.pageNumber}:${item.index}`))
@@ -253,34 +474,125 @@ export async function extractPdfTranslationSource({
         original = fragment.items[0]
       const page = pages[fragment.pageNumber - 1],
         item = page.items[original.index]
-      const rect = independentRect(item, page, styles[fragment.pageNumber - 1][item.fontName ?? ''])
+      const rect =
+        independentRect(item, page, styles[fragment.pageNumber - 1][item.fontName ?? '']) ??
+        outlierNavigation.get(`${fragment.pageNumber}:${original.index}`)
       if (rect) {
+        const id = `rot-p${fragment.pageNumber}-i${original.index}`
         independent.push({
-          id: `rot-p${fragment.pageNumber}-i${original.index}`,
+          id,
           source: original.text,
           sourceOnly: true,
           fragments: [{ ...fragment, rect }]
         })
+        if (unreliableItems.has(`${fragment.pageNumber}:${original.index}`))
+          warnings.push(
+            Object.freeze({ unitId: id, reasons: Object.freeze(['unreliable-font-unicode']) })
+          )
         continue
       }
     }
-    if (reason)
-      exclusions.push({
-        unitId: unit.id,
-        reason,
-        items: fragments.flatMap((fragment) =>
-          fragment.items.map((item) => ({ ...item, pageNumber: fragment.pageNumber }))
-        )
-      })
-    else {
+    if (reason) {
+      const remaining = fragments.flatMap((fragment) =>
+        fragment.items.flatMap((original) => {
+          if (reason === 'outside-page') {
+            const page = pages[fragment.pageNumber - 1],
+              item = page.items[original.index],
+              style = styles[fragment.pageNumber - 1][item.fontName ?? '']
+            // One overflowing peer must not discard a complete page-in item.
+            // The broken group proves no paragraph contract: retain only a
+            // separately bounded original anchor, using explicit native metrics.
+            const rect =
+              item.fontName &&
+              style?.vertical === false &&
+              Number.isFinite(style.ascent) &&
+              Number.isFinite(style.descent)
+                ? independentRect(item, page, style)
+                : undefined
+            if (rect) {
+              const id = `inpage-p${fragment.pageNumber}-i${original.index}`
+              independent.push({
+                id,
+                source: original.text,
+                sourceOnly: true,
+                fragments: [{ pageNumber: fragment.pageNumber, rect, items: [original] }]
+              })
+              const reasons = [...unit.risks]
+              if (unreliableItems.has(`${fragment.pageNumber}:${original.index}`))
+                reasons.push('unreliable-font-unicode')
+              if (reasons.length)
+                independentWarnings.push(
+                  Object.freeze({ unitId: id, reasons: Object.freeze(reasons) })
+                )
+              return []
+            }
+            const partial = partialNavigation.get(`${fragment.pageNumber}:${original.index}`)
+            if (partial) {
+              const id = `clipped-p${fragment.pageNumber}-i${original.index}`
+              independent.push({
+                id,
+                source: original.text,
+                sourceOnly: true,
+                fragments: [{ pageNumber: fragment.pageNumber, ...partial, items: [original] }]
+              })
+              const reasons = ['partially-outside-page']
+              if (unreliableItems.has(`${fragment.pageNumber}:${original.index}`))
+                reasons.push('unreliable-font-unicode')
+              independentWarnings.push(
+                Object.freeze({ unitId: id, reasons: Object.freeze(reasons) })
+              )
+              return []
+            }
+          }
+          return [{ ...original, pageNumber: fragment.pageNumber }]
+        })
+      )
+      if (remaining.length) exclusions.push({ unitId: unit.id, reason, items: remaining })
+    } else {
+      const unreliable = fragments.some((fragment) =>
+        fragment.items.some((item) => unreliableItems.has(`${fragment.pageNumber}:${item.index}`))
+      )
+      // Keep a proved missing-Unicode symbol on its existing original navigation.
+      // Ordinary words and mixed prose retain their established admission.
+      const sourceOnly =
+        unit.sourceOnly ||
+        (unreliable &&
+          [...unit.source].length <= 32 &&
+          !/[\p{L}\p{M}]{2}/u.test(unit.source) &&
+          [...unit.source].some((character) => {
+            const code = character.codePointAt(0)!
+            return code < 32 && code !== 9 && code !== 10 && code !== 13
+          }) &&
+          fragments.length > 0 &&
+          fragments.reduce((count, fragment) => count + fragment.items.length, 0) <= 4 &&
+          fragments.every(
+            (fragment) =>
+              fragment.pageNumber === fragments[0].pageNumber &&
+              fragment.items.length > 0 &&
+              fragment.items.every((item) => {
+                const native = pages[fragment.pageNumber - 1].items[item.index]
+                return (
+                  native.str === item.text &&
+                  Number.isFinite(native.width) &&
+                  native.width > 0 &&
+                  Number.isFinite(native.height) &&
+                  native.height > 0
+                )
+              })
+          ))
       units.push({
         id: unit.id,
         source: unit.source,
-        ...(unit.sourceOnly ? { sourceOnly: true as const } : {}),
+        ...(sourceOnly ? { sourceOnly: true as const } : {}),
+        ...(unit.preserve ? { preserve: unit.preserve } : {}),
+        ...(unit.referenceBoundary ? { referenceBoundary: true as const } : {}),
         fragments
       })
-      if (unit.risks.length)
-        warnings.push(Object.freeze({ unitId: unit.id, reasons: Object.freeze([...unit.risks]) }))
+      terminalSource?.observe(unit, units.at(-1)!)
+      const reasons = [...unit.risks]
+      if (unreliable) reasons.push('unreliable-font-unicode')
+      if (reasons.length)
+        warnings.push(Object.freeze({ unitId: unit.id, reasons: Object.freeze(reasons) }))
     }
   }
   if (accounted.size !== textItemCount) throw new Error('Incomplete PDF source item coverage')
@@ -290,21 +602,73 @@ export async function extractPdfTranslationSource({
       a.fragments[0].pageNumber - b.fragments[0].pageNumber ||
       a.fragments[0].items[0].index - b.fragments[0].items[0].index
   )
+  warnings.push(...independentWarnings)
   const excludedItemCount = exclusions.reduce((count, entry) => count + entry.items.length, 0)
+  let finalUnits = terminalContactSources(
+    [...units, ...independent],
+    layout,
+    pages,
+    document.numPages
+  )
+  if (scopedDisplays.length) {
+    const auxiliary = createAuxiliaryNativeDisplayInkReader({
+        document,
+        sourceIdentity,
+        nativeDocumentFactory,
+        signal
+      }),
+      protectedOwners = new Set<string>()
+    try {
+      for (const context of scopedDisplays) {
+        signal.throwIfAborted()
+        for (const id of await nativeScopedDisplayOwners(
+          finalUnits,
+          context.page,
+          context.content,
+          context.viewport,
+          context.pageNumber,
+          auxiliary
+        ))
+          protectedOwners.add(id)
+        signal.throwIfAborted()
+      }
+    } finally {
+      await auxiliary.dispose()
+    }
+    finalUnits = finalUnits.map((unit) =>
+      protectedOwners.has(unit.id) && !unit.sourceOnly && !unit.preserve
+        ? { ...unit, sourceOnly: true as const, preserve: 'formula' as const }
+        : unit
+    )
+  }
+  await taggedReferences.owners(finalUnits, pages)
+  const taggedOwners = taggedReferences.currentOwners(finalUnits, pages)
+  finalUnits = finalUnits.map((unit) => {
+    const role = taggedOwners.get(unit.id)
+    return role === 'reference'
+      ? { ...unit, sourceOnly: true as const, preserve: 'reference' as const }
+      : role === 'original-only-url'
+        ? { ...unit, sourceOnly: true as const }
+        : unit
+  })
   signal.throwIfAborted()
+  checkType3Navigation()
+  if (
+    !nativeReferenceRolePagesCurrent(pages, unreliableItems) ||
+    !nativeOwnedReferenceRolesCurrent(pages)
+  )
+    throw new Error('Native reference sources changed during extraction')
+  const sourceInput = { resourceRequestKey, fingerprint, pages, units: finalUnits }
+  const source = terminalSource?.create(sourceInput) ?? createPdfTranslationSource(sourceInput)
   return Object.freeze({
-    source: createPdfTranslationSource({
-      resourceRequestKey,
-      fingerprint,
-      pages,
-      units: [...units, ...independent]
-    }),
+    source,
     coverage: Object.freeze({
       pageCount: pages.length,
       textItemCount,
       includedItemCount: textItemCount - excludedItemCount,
       excludedItemCount,
       pagesWithoutText: Object.freeze(pagesWithoutText),
+      ...(pageDiagnostics.length ? { pageDiagnostics: Object.freeze(pageDiagnostics) } : {}),
       exclusions: Object.freeze(
         exclusions.map((entry) =>
           Object.freeze({

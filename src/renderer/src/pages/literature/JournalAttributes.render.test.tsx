@@ -1,18 +1,38 @@
 // @vitest-environment jsdom
+import { useLayoutEffect } from 'react'
+import { createLiteratureTestRenderer } from '../../../../../test/renderer/literature'
 import type { JournalRequest } from '@aipoch/journal-catalog/contracts'
 import type { LiteratureChangedEvent } from '@aipoch/literature-library/contracts'
 import { literatureItemInputSchema } from '@aipoch/literature-library/item'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { JournalAttributes } from './JournalAttributes'
 import {
-  setJournalSourceYear,
   useJournalDatasets,
-  useJournalSourceYears
+  useJournalSourceYears,
+  useJournalStore
 } from './journals/journal-attribute-store'
+
+const recoveryListeners = new Set<() => void>()
+const recover = (): void => recoveryListeners.forEach((listener) => listener())
+const { render } = createLiteratureTestRenderer(
+  {
+    get api() {
+      return window.api
+    },
+    onRecovered: (listener) => {
+      recoveryListeners.add(listener)
+      return () => {
+        recoveryListeners.delete(listener)
+      }
+    }
+  },
+  Capture
+)
 
 afterEach(() => {
   cleanup()
+  recoveryListeners.clear()
   window.localStorage.removeItem('open-science:journal-source-years')
 })
 const item = literatureItemInputSchema.parse({
@@ -35,77 +55,91 @@ it('does not resolve journal metadata for non-journal references', () => {
   expect(container.firstChild).toBeNull()
   expect(journals).not.toHaveBeenCalled()
 })
-it('batches visible references and refreshes all surfaces after dataset changes', async () => {
-  let changed: (event: LiteratureChangedEvent) => void = () => {}
-  let value = 'Gold'
-  const journals = vi.fn(async (request: JournalRequest) =>
-    request.action === 'resolve'
-      ? {
-          matches: request.identities.map(() => ({
-            status: 'matched' as const,
-            identity: {
-              name: 'Imaginary Review',
-              aliases: [],
-              issns: [],
-              externalIds: [{ namespace: 'jcr', value: 'fictional-417' }]
-            },
-            attributes: [
-              {
-                key: 'test:band',
-                label: 'Editorial band',
-                kind: 'singleSelect' as const,
-                value,
-                source: 'Fictional source',
-                year: 2031,
-                colors: { Gold: 'green' as const }
-              }
-            ]
-          }))
-        }
-      : { datasets: [] }
-  )
-  Object.defineProperty(window, 'api', {
-    configurable: true,
-    value: {
-      literature: {
-        journals,
-        onChanged: (listener: (event: LiteratureChangedEvent) => void) => {
-          changed = listener
-          return () => {}
+it.each(['event', 'host recovery'] as const)(
+  'batches visible references and refreshes all surfaces after %s dataset changes',
+  async (transport) => {
+    let changed: (event: LiteratureChangedEvent) => void = () => {}
+    let value = 'Gold'
+    const journals = vi.fn(async (request: JournalRequest) =>
+      request.action === 'resolve'
+        ? {
+            matches: request.identities.map(() => ({
+              status: 'matched' as const,
+              identity: {
+                name: 'Imaginary Review',
+                aliases: [],
+                issns: [],
+                externalIds: [{ namespace: 'jcr', value: 'fictional-417' }]
+              },
+              attributes: [
+                {
+                  key: 'test:band',
+                  label: 'Editorial band',
+                  kind: 'singleSelect' as const,
+                  value,
+                  source: 'Fictional source',
+                  year: 2031,
+                  colors: { Gold: 'green' as const }
+                }
+              ]
+            }))
+          }
+        : { datasets: [] }
+    )
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        literature: {
+          journals,
+          onChanged: (listener: (event: LiteratureChangedEvent) => void) => {
+            changed = listener
+            return () => {}
+          }
         }
       }
+    })
+    render(
+      <>
+        <JournalAttributes item={item} detail />
+        <JournalAttributes item={{ ...item, containerTitle: 'Imaginary Annals' }} detail />
+      </>
+    )
+    await waitFor(() => expect(screen.getAllByText('Gold')).toHaveLength(2))
+    expect(screen.getAllByText('jcr:fictional-417')).toHaveLength(2)
+    expect(journals.mock.calls.filter(([request]) => request.action === 'resolve')).toHaveLength(1)
+    expect(screen.queryByText('Current local journal data')).toBeNull()
+    expect(screen.queryByText('Fictional source')).toBeNull()
+    const sourceButtons = screen.getAllByRole('button', {
+      name: 'Editorial band · Fictional source 2031'
+    })
+    expect(sourceButtons[0].querySelector('span')?.className).toContain('truncate')
+    expect(sourceButtons[0].querySelector('svg')?.getAttribute('class')).toContain('shrink-0')
+    fireEvent.focus(sourceButtons[0])
+    expect(await screen.findByRole('tooltip')).toHaveProperty(
+      'textContent',
+      expect.stringContaining('Fictional source')
+    )
+    expect(screen.getByRole('tooltip').textContent).toContain('2031')
+    fireEvent.blur(sourceButtons[0])
+    await act(async () => changed({ revision: 1, itemIds: ['fictional-reference'] }))
+    expect(journals.mock.calls.filter(([request]) => request.action === 'resolve')).toHaveLength(1)
+    value = 'Silver'
+    if (transport === 'event') await act(async () => changed({ revision: 2 }))
+    else {
+      expect(screen.getAllByText('Gold')).toHaveLength(2)
+      await act(async () => recover())
     }
-  })
-  render(
-    <>
-      <JournalAttributes item={item} detail />
-      <JournalAttributes item={{ ...item, containerTitle: 'Imaginary Annals' }} detail />
-    </>
-  )
-  await waitFor(() => expect(screen.getAllByText('Gold')).toHaveLength(2))
-  expect(screen.getAllByText('jcr:fictional-417')).toHaveLength(2)
-  expect(journals.mock.calls.filter(([request]) => request.action === 'resolve')).toHaveLength(1)
-  expect(screen.queryByText('Current local journal data')).toBeNull()
-  expect(screen.queryByText('Fictional source')).toBeNull()
-  const sourceButtons = screen.getAllByRole('button', {
-    name: 'Editorial band · Fictional source 2031'
-  })
-  expect(sourceButtons[0].querySelector('span')?.className).toContain('truncate')
-  expect(sourceButtons[0].querySelector('svg')?.getAttribute('class')).toContain('shrink-0')
-  fireEvent.focus(sourceButtons[0])
-  expect(await screen.findByRole('tooltip')).toHaveProperty(
-    'textContent',
-    expect.stringContaining('Fictional source')
-  )
-  expect(screen.getByRole('tooltip').textContent).toContain('2031')
-  fireEvent.blur(sourceButtons[0])
-  await act(async () => changed({ revision: 1, itemIds: ['fictional-reference'] }))
-  expect(journals.mock.calls.filter(([request]) => request.action === 'resolve')).toHaveLength(1)
-  value = 'Silver'
-  await act(async () => changed({ revision: 2 }))
-  await waitFor(() => expect(screen.getAllByText('Silver')).toHaveLength(2))
-  expect(screen.queryByText('Gold')).toBeNull()
-})
+    await waitFor(() => expect(screen.getAllByText('Silver')).toHaveLength(2))
+    expect(screen.queryByText('Gold')).toBeNull()
+    expect(journals.mock.calls.filter(([request]) => request.action === 'list')).toHaveLength(2)
+    cleanup()
+    journals.mockClear()
+    await act(async () => {
+      recover()
+    })
+    expect(journals).not.toHaveBeenCalled()
+  }
+)
 it('does not display results returned for a previous identity', async () => {
   const resolves: (() => void)[] = []
   const journals = vi.fn((request: JournalRequest) =>
@@ -391,7 +425,7 @@ it('clears old values immediately and ignores in-flight values after changing so
   Object.defineProperty(window, 'api', { configurable: true, value: { literature: { journals } } })
   render(<JournalAttributes item={item} detail />)
   await waitFor(() => expect(pending).toHaveLength(1))
-  act(() => setJournalSourceYear('Fictional source', 2031))
+  act(() => testJournalStore.setJournalSourceYear('Fictional source', 2031))
   await act(async () =>
     pending[0].finish({
       matches: [
@@ -432,7 +466,7 @@ it('clears old values immediately and ignores in-flight values after changing so
     })
   )
   expect(await screen.findByText('12')).toBeTruthy()
-  act(() => setJournalSourceYear('Fictional source', null))
+  act(() => testJournalStore.setJournalSourceYear('Fictional source', null))
   expect(screen.queryByText('12')).toBeNull()
   await waitFor(() => expect(pending).toHaveLength(3))
   expect(pending[2].request.sourceYears).toEqual({ 'Fictional source': null })
@@ -444,11 +478,11 @@ it('synchronizes source choices from other windows without restoring removed ove
     return <output data-testid="source-years">{JSON.stringify(useJournalSourceYears())}</output>
   }
   render(<Choices />)
-  act(() => setJournalSourceYear('First source', 2031))
+  act(() => testJournalStore.setJournalSourceYear('First source', 2031))
   expect(screen.getByTestId('source-years').textContent).toContain('2031')
   // Another window restores the default before its storage event arrives here.
   localStorage.setItem('open-science:journal-source-years', '{}')
-  act(() => setJournalSourceYear('Second source', null))
+  act(() => testJournalStore.setJournalSourceYear('Second source', null))
   expect(JSON.parse(localStorage.getItem('open-science:journal-source-years')!)).toEqual({
     'Second source': null
   })
@@ -562,3 +596,12 @@ it('keeps only the most recently opened journal attribute popover', async () => 
   expect(screen.queryByRole('dialog')).toBeNull()
   await waitFor(() => expect(document.activeElement).toBe(triggers[2]))
 })
+
+let testJournalStore: ReturnType<typeof useJournalStore>
+function Capture({ children }: { children: React.ReactNode }): React.ReactNode {
+  const store = useJournalStore()
+  useLayoutEffect(() => {
+    testJournalStore = store
+  }, [store])
+  return children
+}

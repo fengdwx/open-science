@@ -29,16 +29,17 @@
     "build": "node tsc.cjs -p tsconfig.json",
     "typecheck": "node tsc.cjs -p tsconfig.json --noEmit && node tsc.cjs -p tsconfig.test.json",
     "test": "vitest run --config vitest.config.ts",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "test:native": "vitest run --config test/native/vitest.config.ts"
   },
   "dependencies": {
     "@aipoch/notebook-syntax": "0.1.0",
-    "zod": "^4.6.5"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@types/node": "^22.19.1",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11",
+    "vitest": "^4.1.12",
     "web-tree-sitter": "^0.26.13"
   }
 }

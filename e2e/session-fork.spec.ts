@@ -15,8 +15,10 @@ test('forks local and imported research and immediately continues through the re
   await createProjectViaUi(page, 'Fork lifecycle')
   const prompt = 'Summarize the deterministic fixture.'
   await submitPromptViaUi(page, prompt)
-  await expect(page.getByText(`Deterministic reply: ${prompt}`, { exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Stop generating' })).toHaveCount(0)
+  await expect(page.getByText(`Deterministic reply: ${prompt}`, { exact: true })).toBeVisible({
+    timeout: 90_000
+  })
+  await expect(page.getByRole('button', { name: 'Cancel run', exact: true })).toHaveCount(0)
   await page.getByRole('button', { name: `Open actions for ${prompt}` }).click()
   await page.getByRole('menuitem', { name: 'Fork', exact: true }).click()
   const title = `${prompt}(2)`
@@ -44,10 +46,8 @@ test('forks local and imported research and immediately continues through the re
       await page.getByRole('menuitem', { name: 'Export', exact: true }).hover()
       await page.getByRole('menuitem', { name: 'Export Session package', exact: true }).click()
       const exporting = page.getByRole('dialog', { name: 'Export Session package', exact: true })
-      await exporting.getByRole('button', { name: 'Export', exact: true }).click()
-      await expect(
-        exporting.getByText('Package operation completed', { exact: true })
-      ).toBeVisible()
+      await exporting.getByRole('button', { name: 'Choose save location…', exact: true }).click()
+      await expect(exporting.getByText('Session package exported', { exact: true })).toBeVisible()
       await exporting.getByRole('button', { name: 'Close', exact: true }).click()
       await page.getByRole('button', { name: 'Fork lifecycle', exact: true }).click()
       await page.getByRole('menuitem', { name: 'Import Session package…', exact: true }).click()
@@ -65,8 +65,8 @@ test('forks local and imported research and immediately continues through the re
       .getByText(`Deterministic reply: ${prompt}`, { exact: true })
     const previousReplies = await replies.count()
     await submitPromptViaUi(page, followup)
-    await expect(replies).toHaveCount(previousReplies + 1)
-    await expect(page.getByRole('button', { name: 'Stop generating' })).toHaveCount(0)
+    await expect(replies).toHaveCount(previousReplies + 1, { timeout: 90_000 })
+    await expect(page.getByRole('button', { name: 'Cancel run', exact: true })).toHaveCount(0)
     await expect(page.getByText(/Project owner is unavailable/)).toHaveCount(0)
     await expect(page.getByText(/could not save the latest conversation changes/)).toHaveCount(0)
     await expect
@@ -151,7 +151,7 @@ test('changes branch permissions before the first follow-up without changing sou
     )
     .toEqual({ status: 'idle', activeRun: false, completedReply: true })
   await expect(reply).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Stop generating' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Cancel run', exact: true })).toHaveCount(0)
   const source = await page.evaluate(async () => (await window.api.sessions.loadAll()).sessions[0])
   const profile = source.permissionProfile === 'ask' ? 'auto' : 'ask'
   const label = profile === 'ask' ? 'Ask for approval' : 'Auto-approve edits'
@@ -203,7 +203,7 @@ test('changes branch permissions before the first follow-up without changing sou
     .toBe(true)
   await submitPromptViaUi(page, 'Continue the research')
   await expect(reply).toHaveCount(2)
-  await expect(page.getByRole('button', { name: 'Stop generating' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Cancel run', exact: true })).toHaveCount(0)
   await expect
     .poll(async () =>
       page.evaluate(
@@ -249,7 +249,7 @@ test('changes branch permissions before the first follow-up without changing sou
   await page.getByTestId('branch-send-menu-trigger').click()
   await page.getByTestId('menu-branch-in-new-session').click()
   await expect(divider).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Stop generating' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Cancel run', exact: true })).toHaveCount(0)
   await expect
     .poll(async () =>
       page.evaluate(

@@ -14,6 +14,7 @@ import type {
   PersistedToolActivity
 } from '../../shared/session-persistence'
 import type { SessionPersistenceCoordinator } from '../session-persistence/coordinator'
+import { SessionPersistenceStateOwner } from '../session-persistence/state-owner'
 import { AcpDurableContinuationContextOwner } from './durable-continuation-context-owner'
 
 const message = (
@@ -77,7 +78,11 @@ const pendingChoice = (overrides: Partial<PersistedToolActivity> = {}): Persiste
 
 const createOwner = (session: PersistedChatSession): AcpDurableContinuationContextOwner =>
   new AcpDurableContinuationContextOwner({
-    loadSessionForContinuation: vi.fn(async () => structuredClone(session))
+    loadSessionForContinuation: vi.fn(async () => structuredClone(session)),
+    mutateRuntimeSession: async (_scope, mutate) => {
+      Object.assign(session, mutate(structuredClone(session)), { runtimeTranscriptOwner: 'main' })
+      return structuredClone(session)
+    }
   })
 
 const setActivities = (
@@ -91,6 +96,97 @@ const setActivities = (
 }
 
 describe('AcpDurableContinuationContextOwner', () => {
+  it.each(
+    (['accept', 'decline', 'cancel'] as const).flatMap((action) =>
+      ['success', 'question-changed', 'write-failed'].map((scenario) => ({ action, scenario }))
+    )
+  )(
+    'atomically saves a legacy $action decision with Main ownership ($scenario)',
+    async ({ action, scenario }) => {
+      let stored = createSession([message('prompt-active', 'Choose an approach.')])
+      setActivities(stored, [pendingChoice()])
+      const commits: PersistedChatSession[] = []
+      const persistence = new SessionPersistenceStateOwner({
+        repository: {
+          loadSessionWithDiagnostics: async () => ({
+            status: 'found',
+            session: structuredClone(stored)
+          }),
+          saveSession: async (candidate, expectedRevision) => {
+            expect(expectedRevision).toBe(stored.revision ?? 0)
+            if (scenario === 'write-failed') throw new Error('Decision persistence failed')
+            stored = structuredClone({ ...candidate, revision: (stored.revision ?? 0) + 1 })
+            commits.push(structuredClone(stored))
+            return structuredClone(stored)
+          }
+        },
+        fileIndex: { syncSession: async () => [] },
+        assertMutable: vi.fn(),
+        notifyFilesChanged: vi.fn(),
+        notifyRuntimeContextSessionUpdated: vi.fn(),
+        log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+      })
+      const owner = new AcpDurableContinuationContextOwner({
+        loadSessionForContinuation: async () => structuredClone(stored),
+        mutateRuntimeSession: (scope, mutate) => {
+          if (scenario === 'question-changed') {
+            // Another update wins after preparation reads the question but before its commit.
+            for (const activity of [...stored.activities!, ...stored.conversationGraph!.activities])
+              activity.elicitation!.message = 'A different question'
+          }
+          return persistence.mutateRuntimeSession(scope, mutate)
+        }
+      })
+      const input = {
+        projectId: stored.projectId,
+        sessionId: stored.id,
+        requestId: 'choice-1',
+        toolCallId: 'tool-choice-1',
+        action,
+        ...(action !== 'cancel' ? { recovery: { error: 'Awaiting continuation' } } : {}),
+        ...(action === 'accept' ? { answers: [{ fieldId: 'question_0', value: 'Expanded' }] } : {})
+      }
+      if (scenario !== 'success') {
+        await expect(owner.prepareElicitation(input)).rejects.toThrow(
+          scenario === 'question-changed' ? 'changed before' : 'Decision persistence failed'
+        )
+        expect(commits).toEqual([])
+        expect(stored.runtimeTranscriptOwner).toBeUndefined()
+        expect(stored.activities![0].elicitation!.state).toBe('pending')
+        expect(stored.activities![0].elicitation!.answers).toBeUndefined()
+        expect(stored.activities![0].elicitation!.continuationRecovery).toBeUndefined()
+        return
+      }
+      await owner.prepareElicitation(input)
+      expect(commits).toHaveLength(1)
+      expect(commits[0].runtimeTranscriptOwner).toBe('main')
+      const projection = commits[0].activities![0].elicitation!
+      expect(projection.state).toBe(
+        action === 'accept' ? 'answered' : action === 'decline' ? 'declined' : 'cancelled'
+      )
+      expect(projection.answers).toEqual(input.answers)
+      expect(projection.continuationPending).toBe(action === 'cancel' ? undefined : true)
+      expect(projection.continuationRecovery).toEqual(input.recovery)
+      expect(commits[0].conversationGraph!.activities[0].elicitation).toEqual(projection)
+      if (action === 'cancel') {
+        expect(commits[0].status).toBe('idle')
+      } else {
+        await owner.rearmElicitation({
+          ...input,
+          promptMessageId: 'prompt-active',
+          recovery: { error: 'The bound specialist is unavailable.' }
+        })
+        const restarted = normalizeSessionFile(JSON.parse(JSON.stringify(stored)))!
+        expect(restarted.activities![0].elicitation).toMatchObject({
+          state: projection.state,
+          continuationPending: true,
+          continuationRecovery: { error: 'The bound specialist is unavailable.' }
+        })
+        expect(restarted.activities![0].elicitation?.answers).toEqual(input.answers)
+      }
+    }
+  )
+
   it.each([
     { providerStopped: false, approvedPlan: false, previouslyRestored: false },
     { providerStopped: true, approvedPlan: false, previouslyRestored: false },
@@ -389,6 +485,128 @@ describe('AcpDurableContinuationContextOwner', () => {
     ).rejects.toThrow('pending Session activity')
   })
 
+  it.each(['accept', 'decline'] as const)(
+    'retains the committed %s decision after restarting an unaccepted continuation',
+    async (action) => {
+      let session = createSession([message('prompt-active', 'Choose an approach.')])
+      session.runtimeTranscriptOwner = 'main'
+      setActivities(session, [pendingChoice()])
+      const owner = new AcpDurableContinuationContextOwner({
+        loadSessionForContinuation: async () => structuredClone(session),
+        mutateRuntimeSession: async (_scope, mutate) => {
+          session = mutate(structuredClone(session))
+          return structuredClone(session)
+        }
+      })
+      const answers =
+        action === 'accept' ? [{ fieldId: 'question_0', value: 'Expanded' }] : undefined
+      await owner.prepareElicitation({
+        projectId: session.projectId,
+        sessionId: session.id,
+        requestId: 'choice-1',
+        toolCallId: 'tool-choice-1',
+        action,
+        answers
+      })
+
+      // Restart crosses the normal persisted Session decoding boundary. A failed
+      // continuation must not turn a committed decision back into an unanswered question.
+      await owner.rearmElicitation({
+        projectId: session.projectId,
+        sessionId: session.id,
+        requestId: 'choice-1',
+        toolCallId: 'tool-choice-1',
+        promptMessageId: 'prompt-active',
+        recovery: { error: 'temporary admission failure', retryable: true }
+      })
+      const restarted = normalizeSessionFile(JSON.parse(JSON.stringify(session)))!
+      expect(restarted.activities?.[0].elicitation?.continuationRecovery).toEqual({
+        error: 'temporary admission failure'
+      })
+      expect(restarted.activities?.[0].elicitation?.state).toBe(
+        action === 'accept' ? 'answered' : 'declined'
+      )
+      expect(restarted.activities?.[0].elicitation?.answers).toEqual(answers)
+      expect(restarted.activities?.[0].elicitation?.respondedAt).toBe(
+        session.activities?.[0].elicitation?.respondedAt
+      )
+      expect(restarted.conversationGraph?.activities[0].elicitation).toEqual(
+        restarted.activities?.[0].elicitation
+      )
+    }
+  )
+
+  it('keeps ambiguous legacy pending data unchanged and permits an explicit end', async () => {
+    let session = createSession([message('prompt-active', 'Choose an approach.')])
+    session.runtimeTranscriptOwner = 'main'
+    setActivities(session, [pendingChoice()])
+    for (const item of [...session.activities!, ...session.conversationGraph!.activities]) {
+      item.elicitation!.continuationPending = true
+    }
+    session = normalizeSessionFile(JSON.parse(JSON.stringify(session)))!
+    expect(session.activities?.[0].elicitation?.state).toBe('pending')
+    expect(session.activities?.[0].elicitation?.continuationRecovery).toBeUndefined()
+    const owner = new AcpDurableContinuationContextOwner({
+      loadSessionForContinuation: async () => structuredClone(session),
+      mutateRuntimeSession: async (_scope, mutate) => {
+        session = mutate(structuredClone(session))
+        return structuredClone(session)
+      }
+    })
+    await owner.prepareElicitation({
+      projectId: session.projectId,
+      sessionId: session.id,
+      requestId: 'choice-1',
+      toolCallId: 'tool-choice-1',
+      action: 'cancel'
+    })
+    expect(session.status).toBe('idle')
+    expect(session.activities?.[0].elicitation?.state).toBe('cancelled')
+    expect(session.activities?.[0].elicitation?.answers).toBeUndefined()
+  })
+
+  it.each(['accept', 'decline'] as const)(
+    'ends a failed %s continuation durably without changing the decision',
+    async (action) => {
+      let session = createSession([message('prompt-active', 'Choose an approach.')])
+      session.runtimeTranscriptOwner = 'main'
+      setActivities(session, [pendingChoice()])
+      const owner = new AcpDurableContinuationContextOwner({
+        loadSessionForContinuation: async () => structuredClone(session),
+        mutateRuntimeSession: async (_scope, mutate) => {
+          session = mutate(structuredClone(session))
+          return structuredClone(session)
+        }
+      })
+      const input = {
+        projectId: session.projectId,
+        sessionId: session.id,
+        requestId: 'choice-1',
+        toolCallId: 'tool-choice-1'
+      }
+      const answers =
+        action === 'accept' ? [{ fieldId: 'question_0', value: 'Expanded' }] : undefined
+      await owner.prepareElicitation({ ...input, action, answers })
+      await owner.rearmElicitation({
+        ...input,
+        promptMessageId: 'prompt-active',
+        recovery: { error: 'The bound specialist is unavailable.' }
+      })
+      await owner.prepareElicitation({ ...input, action: 'cancel' })
+      await owner.prepareElicitation({ ...input, action: 'cancel' })
+      // A delayed finally callback and a restart must not resurrect an ended wait.
+      await owner.rearmElicitation({ ...input, promptMessageId: 'prompt-active' })
+      const restarted = normalizeSessionFile(JSON.parse(JSON.stringify(session)))!
+      expect(restarted.status).toBe('idle')
+      expect(restarted.activities?.[0].elicitation).toMatchObject({
+        state: action === 'accept' ? 'answered' : 'declined'
+      })
+      expect(restarted.activities?.[0].elicitation?.answers).toEqual(answers)
+      expect(restarted.activities?.[0].elicitation?.continuationPending).toBeUndefined()
+      expect(restarted.activities?.[0].elicitation?.continuationRecovery).toBeUndefined()
+    }
+  )
+
   it('does not rearm a later question when an accepted continuation finishes', async () => {
     let session = createSession([message('prompt-active', 'Choose an approach.')])
     session.runtimeTranscriptOwner = 'main'
@@ -424,7 +642,7 @@ describe('AcpDurableContinuationContextOwner', () => {
   })
 
   it.each(['accept', 'decline'] as const)(
-    're-presents an unaccepted %s after failure and process restart without losing its answer',
+    'preserves an unaccepted %s after failure and rejects an unproven retry',
     async (action) => {
       let session = createSession([message('prompt-active', 'Choose an approach.')])
       session.runtimeTranscriptOwner = 'main'
@@ -449,18 +667,25 @@ describe('AcpDurableContinuationContextOwner', () => {
       const committed = structuredClone(session)
       await owner.rearmElicitation({ ...response, promptMessageId: 'prompt-active' })
       expect(session.status).toBe('waiting-for-user')
-      expect(session.activities?.[0].elicitation?.state).toBe('pending')
-      await expect(owner.prepareElicitation(response)).resolves.toBeDefined()
+      expect(session.activities?.[0].elicitation?.state).toBe(
+        action === 'accept' ? 'answered' : 'declined'
+      )
+      await expect(owner.prepareElicitation(response)).rejects.toThrow('pending Session activity')
+      await expect(
+        owner.prepareElicitation({ ...response, retryContinuation: true })
+      ).rejects.toThrow('cannot be retried safely')
 
       // No finally callback runs after process loss: the durable receipt alone restores the card.
       const restarted = normalizeSessionFile(committed)!
       expect(restarted.status).toBe('waiting-for-user')
-      expect(restarted.activities?.[0].elicitation).toMatchObject({ state: 'pending' })
+      expect(restarted.activities?.[0].elicitation).toMatchObject({
+        state: action === 'accept' ? 'answered' : 'declined'
+      })
       expect(restarted.conversationGraph?.activities[0].elicitation).toEqual(
         restarted.activities?.[0].elicitation
       )
       if (action === 'accept') {
-        expect(restarted.activities?.[0].elicitation?.draftAnswers).toEqual(response.answers)
+        expect(restarted.activities?.[0].elicitation?.answers).toEqual(response.answers)
       }
     }
   )
@@ -516,122 +741,164 @@ describe('AcpDurableContinuationContextOwner', () => {
     ).rejects.toThrow('pending Session activity')
   })
 
-  it('validates an inherited revision fork and creates Main-owned identities', async () => {
-    const prompt = message('prompt-active', 'Choose an approach.')
-    const preamble: PersistedChatMessage = {
-      id: 'agent-question-preamble',
-      role: 'agent',
-      content: 'Please choose one option.',
-      status: 'complete',
-      responseToMessageId: prompt.id,
-      eventIds: [],
-      createdAt: 2,
-      updatedAt: 2
-    }
-    let durable = createSession([prompt, preamble])
-    const answeredChoice = pendingChoice({
-      status: 'completed',
-      elicitation: {
-        ...pendingChoice().elicitation!,
-        state: 'answered',
-        answers: [{ fieldId: 'question_0', value: 'Minimal' }]
-      }
-    })
-    setActivities(durable, [answeredChoice])
-    const graph = durable.conversationGraph!
-    const frame = graph.frames[0]
-    const rootBranch = graph.branches[0]
-    graph.branches.push({
-      id: 'message-branch-intermediate',
-      agentFrameId: frame.id,
-      parentBranchId: rootBranch.id,
-      forkMessageId: preamble.id,
-      headMessageId: preamble.id,
-      createdAt: 3,
-      updatedAt: 3
-    })
-    frame.activeBranchId = 'message-branch-intermediate'
-    durable.conversationGraph = forkConversationAfterActivity(
-      graph,
-      preamble.id,
-      answeredChoice.id,
-      'message-branch-revision',
-      4
-    )
-    durable.activities = []
-    durable.status = 'idle'
-    const revisionInput = {
-      projectId: 'project-1',
-      sessionId: 'session-1',
-      requestId: 'choice-1',
-      toolCallId: 'renderer-forged-revision-tool',
-      action: 'accept' as const,
-      answers: [{ fieldId: 'question_0', value: 'Expanded' }],
-      replacePreviousAnswer: true
-    }
-    const invalidActivityOwner = structuredClone(durable)
-    invalidActivityOwner.conversationGraph!.activities.find(
-      (activity) => activity.id === 'tool-choice-1'
-    )!.messageBranchId = 'message-branch-revision'
-    await expect(
-      createOwner(invalidActivityOwner).prepareElicitation(revisionInput)
-    ).rejects.toThrow('active Session Branch')
-
-    const appendUserMessageToInteraction = async (
-      command: Parameters<SessionPersistenceCoordinator['appendUserMessageToInteraction']>[0]
-    ): Promise<PersistedChatMessage> => {
-      const staleAuthority = structuredClone(durable)
-      staleAuthority.conversationGraph!.activities.find(
-        (activity) => activity.id === 'tool-choice-1'
-      )!.elicitation!.fields[0].label = 'Changed concurrently'
-      expect(() => command.beforePersist?.(staleAuthority)).toThrow(
-        'revision authority changed before commit'
-      )
-      command.beforePersist?.(structuredClone(durable))
-      const revisedPrompt: PersistedChatMessage = {
-        id: 'prompt-revision',
-        role: 'user',
-        content: command.content,
+  it.each(['single', 'multi', 'skipped', 'decline'] as const)(
+    'validates an inherited revision fork and creates Main-owned identities (%s)',
+    async (scenario) => {
+      const multiSelect = scenario === 'multi'
+      const skipped = scenario === 'skipped' || scenario === 'decline'
+      const prompt = message('prompt-active', 'Choose an approach.')
+      const preamble: PersistedChatMessage = {
+        id: 'agent-question-preamble',
+        role: 'agent',
+        content: 'Please choose one option.',
         status: 'complete',
-        responseToMessageId: command.interactionId,
+        responseToMessageId: prompt.id,
         eventIds: [],
-        createdAt: 4,
-        updatedAt: 4
+        createdAt: 2,
+        updatedAt: 2
       }
-      durable = {
-        ...durable,
-        messages: [...durable.messages, revisedPrompt],
-        conversationGraph: synchronizeActiveConversationMessages(
-          durable.conversationGraph!,
-          [...durable.messages, revisedPrompt],
-          4
-        ),
-        updatedAt: 4
+      let durable = createSession([prompt, preamble])
+      const answeredChoice = pendingChoice({
+        status: 'completed',
+        elicitation: {
+          ...pendingChoice().elicitation!,
+          state: 'answered',
+          answers: [{ fieldId: 'question_0', value: 'Minimal' }]
+        }
+      })
+      const selected = ['A, B', 'Quote " and newline\nend']
+      if (multiSelect) {
+        answeredChoice.elicitation!.fields[0] = {
+          id: 'question_0',
+          label: 'Approach',
+          kind: 'multi-select',
+          options: selected.map((label) => ({ label, value: label }))
+        }
+        answeredChoice.elicitation!.answers = [{ fieldId: 'question_0', value: [selected[0]] }]
       }
-      return structuredClone(revisedPrompt)
+      if (skipped) {
+        answeredChoice.elicitation!.fields = [
+          {
+            id: 'question_0',
+            label: 'Approach',
+            description: 'Which approach?',
+            kind: 'single-select',
+            options: [
+              { label: 'Minimal', value: 'Minimal' },
+              { label: 'Expanded', value: 'Expanded' }
+            ]
+          },
+          { id: 'question_0_custom', label: 'Other', kind: 'text' }
+        ]
+      }
+      setActivities(durable, [answeredChoice])
+      const graph = durable.conversationGraph!
+      const frame = graph.frames[0]
+      const rootBranch = graph.branches[0]
+      graph.branches.push({
+        id: 'message-branch-intermediate',
+        agentFrameId: frame.id,
+        parentBranchId: rootBranch.id,
+        forkMessageId: preamble.id,
+        headMessageId: preamble.id,
+        createdAt: 3,
+        updatedAt: 3
+      })
+      frame.activeBranchId = 'message-branch-intermediate'
+      durable.conversationGraph = forkConversationAfterActivity(
+        graph,
+        preamble.id,
+        answeredChoice.id,
+        'message-branch-revision',
+        4
+      )
+      durable.activities = []
+      durable.status = 'idle'
+      const revisionInput = {
+        projectId: 'project-1',
+        sessionId: 'session-1',
+        requestId: 'choice-1',
+        toolCallId: 'renderer-forged-revision-tool',
+        action: scenario === 'decline' ? ('decline' as const) : ('accept' as const),
+        answers: skipped
+          ? [{ fieldId: 'question_0', status: 'skipped' as const }]
+          : [{ fieldId: 'question_0', value: multiSelect ? selected : 'Expanded' }],
+        replacePreviousAnswer: true
+      }
+      const invalidActivityOwner = structuredClone(durable)
+      invalidActivityOwner.conversationGraph!.activities.find(
+        (activity) => activity.id === 'tool-choice-1'
+      )!.messageBranchId = 'message-branch-revision'
+      await expect(
+        createOwner(invalidActivityOwner).prepareElicitation(revisionInput)
+      ).rejects.toThrow('active Session Branch')
+
+      const appendUserMessageToInteraction = async (
+        command: Parameters<SessionPersistenceCoordinator['appendUserMessageToInteraction']>[0]
+      ): Promise<PersistedChatMessage> => {
+        const staleAuthority = structuredClone(durable)
+        staleAuthority.conversationGraph!.activities.find(
+          (activity) => activity.id === 'tool-choice-1'
+        )!.elicitation!.fields[0].label = 'Changed concurrently'
+        expect(() => command.beforePersist?.(staleAuthority)).toThrow(
+          'revision authority changed before commit'
+        )
+        command.beforePersist?.(structuredClone(durable))
+        const revisedPrompt: PersistedChatMessage = {
+          id: 'prompt-revision',
+          role: 'user',
+          content: command.content,
+          status: 'complete',
+          responseToMessageId: command.interactionId,
+          eventIds: [],
+          createdAt: 4,
+          updatedAt: 4
+        }
+        durable = {
+          ...durable,
+          messages: [...durable.messages, revisedPrompt],
+          conversationGraph: synchronizeActiveConversationMessages(
+            durable.conversationGraph!,
+            [...durable.messages, revisedPrompt],
+            4
+          ),
+          updatedAt: 4
+        }
+        return structuredClone(revisedPrompt)
+      }
+      const owner = new AcpDurableContinuationContextOwner({
+        loadSessionForContinuation: vi.fn(async () => structuredClone(durable)),
+        appendUserMessageToInteraction: vi.fn(appendUserMessageToInteraction)
+      })
+
+      const prepared = await owner.prepareElicitation(revisionInput)
+
+      expect(prepared.request).toMatchObject({
+        requestId: 'choice-1',
+        sessionId: 'session-1',
+        toolCallId: expect.stringMatching(/^ask-user-question-revision-/),
+        durable: { promptMessageId: 'prompt-revision' }
+      })
+      expect(prepared.request.toolCallId).not.toBe('renderer-forged-revision-tool')
+      expect(prepared.provenanceContext).toMatchObject({
+        messageBranchId: 'message-branch-revision',
+        promptMessageId: 'prompt-revision'
+      })
+      if (skipped) {
+        expect(durable.messages.at(-1)?.content).toContain('Which approach?')
+        expect(durable.messages.at(-1)?.content).toContain('"status":"skipped"')
+      }
+      expect(durable.messages.at(-1)).toMatchObject({
+        id: 'prompt-revision',
+        responseToMessageId: 'agent-question-preamble',
+        content: expect.stringContaining(
+          skipped
+            ? 'does not imply consent or authorization'
+            : multiSelect
+              ? `Approach: ${JSON.stringify(selected)}`
+              : 'Approach: Expanded'
+        )
+      })
     }
-    const owner = new AcpDurableContinuationContextOwner({
-      loadSessionForContinuation: vi.fn(async () => structuredClone(durable)),
-      appendUserMessageToInteraction: vi.fn(appendUserMessageToInteraction)
-    })
-
-    const prepared = await owner.prepareElicitation(revisionInput)
-
-    expect(prepared.request).toMatchObject({
-      requestId: 'choice-1',
-      sessionId: 'session-1',
-      toolCallId: expect.stringMatching(/^ask-user-question-revision-/),
-      durable: { promptMessageId: 'prompt-revision' }
-    })
-    expect(prepared.request.toolCallId).not.toBe('renderer-forged-revision-tool')
-    expect(prepared.provenanceContext).toMatchObject({
-      messageBranchId: 'message-branch-revision',
-      promptMessageId: 'prompt-revision'
-    })
-    expect(durable.messages.at(-1)).toMatchObject({
-      id: 'prompt-revision',
-      responseToMessageId: 'agent-question-preamble',
-      content: expect.stringContaining('Approach: Expanded')
-    })
-  })
+  )
 })

@@ -1,3 +1,4 @@
+import { classifyFailure } from './failure/classify'
 import { describe, expect, it } from 'vitest'
 
 import { MAX_ACP_MESSAGE_IMAGES_PER_MESSAGE, type AcpRuntimeEvent } from './acp'
@@ -5,6 +6,7 @@ import type { ArtifactFile } from './artifacts'
 import {
   activateConversationBranch,
   createLinearConversationGraph,
+  forkConversationAfterActivity,
   forkEditedConversationMessage,
   resolveActiveConversationMessages
 } from './conversation-graph'
@@ -651,7 +653,7 @@ describe('runtime Session projection', () => {
         id: 'close',
         timestamp: 4,
         text: 'ACP connection closed',
-        providerError: false,
+        failure: { category: 'session', diagnostics: {} },
         interruptionCause: 'connection-lost'
       })
     ])
@@ -661,20 +663,25 @@ describe('runtime Session projection', () => {
       cause: 'connection-lost',
       promptMessageId: scope.promptMessageId
     })
-    expect(result.errorReportable).toBe(false)
+    expect(result.failure?.category).toBe('session')
     expect(result.messages.find(({ id }) => id === scope.promptMessageId)?.interrupted).toBe(true)
     expect(result.activities?.[0].status).toBe('failed')
   })
 
   it.each([
-    ['The attached image is invalid.', false],
-    ['unknown app invariant failed', true]
-  ])('classifies Main-authored %s independently of providerError', (text, reportable) => {
+    ['The attached image is invalid.', 'input'],
+    ['unknown app invariant failed', 'internal']
+  ])('carries the Main-authored classification for %s unchanged', (text, reportable) => {
     const { session, scope } = fixture()
     const result = applyRuntimeSessionEvents(session, scope, [
-      event('error', { id: 'main-error', timestamp: 2, text })
+      event('error', {
+        id: 'main-error',
+        timestamp: 2,
+        text,
+        failure: classifyFailure({ origin: 'operation', text })
+      })
     ])
-    expect(result.errorReportable).toBe(reportable)
+    expect(result.failure?.category).toBe(reportable)
   })
 
   it('attributes a post-terminal Artifact cleanup failure without altering a newer active run', () => {
@@ -816,6 +823,130 @@ describe('runtime Session projection', () => {
     expect(projected.conversationGraph!.messages.some(({ content }) => content === 'hidden')).toBe(
       true
     )
+  })
+
+  it.each([false, true])(
+    'preserves MCP startup failures across edited prompts (legacy: %s)',
+    (legacy) => {
+      const { session, scope } = fixture()
+      session.agentFrameworkId = 'codex'
+      const startup = event('tool', {
+        id: 'startup-original',
+        timestamp: 2,
+        toolCallId: 'mcp_startup.open-science-library',
+        title: 'mcp__open-science-library__startup',
+        status: 'failed'
+      })
+      const original = applyRuntimeSessionEvents(session, scope, [startup])
+      if (legacy) original.conversationGraph!.activities[0].id = startup.toolCallId!
+      const graph = forkEditedConversationMessage(
+        original.conversationGraph!,
+        scope.promptMessageId,
+        'retry-branch',
+        3
+      )
+      const branch = graph.branches.find(({ id }) => id === 'retry-branch')!
+      graph.messages.push({
+        ...prompt('retry-prompt', 3),
+        agentFrameId: scope.agentFrameId,
+        introducedOnBranchId: branch.id,
+        parentMessageId: branch.headMessageId,
+        runtimeSegmentId: scope.runtimeSegmentId,
+        revisionRootMessageId: scope.promptMessageId,
+        supersedesMessageId: scope.promptMessageId
+      })
+      branch.headMessageId = 'retry-prompt'
+      const retryScope = {
+        ...scope,
+        promptMessageId: 'retry-prompt',
+        messageBranchId: branch.id
+      }
+      const retried = { ...original, conversationGraph: graph }
+      const retryEvent = { ...startup, id: 'startup-retry', timestamp: 4 }
+      const result = applyRuntimeSessionEvents(retried, retryScope, [retryEvent])
+
+      const activities = result.conversationGraph!.activities
+      expect(activities).toHaveLength(2)
+      expect(new Set(activities.map(({ id }) => id)).size).toBe(2)
+      expect(activities.map(({ promptMessageId }) => promptMessageId)).toEqual([
+        scope.promptMessageId,
+        'retry-prompt'
+      ])
+      expect(result.activities).toHaveLength(1)
+      expect(result.activities![0].eventIds).toEqual(['startup-retry'])
+      expect(
+        applyRuntimeSessionEvents(result, retryScope, [retryEvent]).conversationGraph!.activities
+      ).toEqual(activities)
+    }
+  )
+
+  it('separates MCP startup failures on continuation branches retaining the same prompt', () => {
+    const { session, scope } = fixture()
+    const startup = event('tool', {
+      id: 'startup-original',
+      timestamp: 2,
+      toolCallId: 'mcp_startup.example',
+      status: 'failed'
+    })
+    const original = applyRuntimeSessionEvents(session, scope, [
+      startup,
+      event('tool', {
+        id: 'question',
+        timestamp: 3,
+        toolCallId: 'question-tool',
+        status: 'completed'
+      })
+    ])
+    const graph = forkConversationAfterActivity(
+      original.conversationGraph!,
+      scope.promptMessageId,
+      'question-tool',
+      'continuation-branch',
+      4
+    )
+    const retryScope = { ...scope, messageBranchId: 'continuation-branch' }
+    const retry = { ...startup, id: 'startup-retry', timestamp: 5 }
+    const result = applyRuntimeSessionEvents(
+      { ...original, conversationGraph: graph },
+      retryScope,
+      [retry]
+    )
+    const activities = result.conversationGraph!.activities
+    expect(activities).toHaveLength(3)
+    expect(new Set(activities.map(({ id }) => id)).size).toBe(3)
+    expect(activities[0].eventIds).toEqual([startup.id])
+    expect(activities[2]).toMatchObject({
+      promptMessageId: scope.promptMessageId,
+      messageBranchId: retryScope.messageBranchId,
+      eventIds: [retry.id]
+    })
+    expect(
+      applyRuntimeSessionEvents(result, retryScope, [retry]).conversationGraph!.activities
+    ).toEqual(activities)
+  })
+
+  it('replays and updates legacy MCP startup records without duplicating their evidence', () => {
+    const { session, scope } = fixture()
+    const startup = event('tool', {
+      id: 'startup',
+      timestamp: 2,
+      toolCallId: 'mcp_startup.example',
+      status: 'failed'
+    })
+    const original = applyRuntimeSessionEvents(session, scope, [startup])
+    original.conversationGraph!.activities[0].id = startup.toolCallId!
+    const restored = JSON.parse(JSON.stringify(original)) as PersistedChatSession
+    const replayed = applyRuntimeSessionEvents(restored, scope, [startup])
+    expect(replayed.conversationGraph!.activities).toEqual(original.conversationGraph!.activities)
+    const updated = applyRuntimeSessionEvents(replayed, scope, [
+      { ...startup, id: 'startup-detail', timestamp: 3, rawOutput: 'Connection refused' }
+    ])
+    expect(updated.conversationGraph!.activities).toHaveLength(1)
+    expect(updated.conversationGraph!.activities[0]).toMatchObject({
+      id: startup.toolCallId,
+      eventIds: ['startup', 'startup-detail'],
+      rawOutput: 'Connection refused'
+    })
   })
 
   it('preserves tool metadata, elicitation, and activity group membership', () => {
@@ -1124,14 +1255,14 @@ describe('Main terminal Turn Outcome attribution', () => {
           id: 'failure',
           timestamp: 4,
           text: 'Provider rejected',
-          providerError: true
+          failure: { category: 'service' as const, diagnostics: {} }
         })
       ])
       expect(failed.messages[0].turnOutcome).toEqual({
         kind: 'failed',
         settledAt: 4,
         error: 'Provider rejected',
-        errorReportable: false
+        failure: { category: 'service' as const, diagnostics: {} }
       })
     }
   )
@@ -1141,7 +1272,7 @@ describe('Main terminal Turn Outcome attribution', () => {
     (wait) => {
       const { session, scope } = fixture()
       session.error = 'Previous failure'
-      session.errorReportable = true
+      session.failure = { category: 'internal', diagnostics: {} }
       session.resumeRecovery = {
         kind: 'resume-required',
         cause: 'app-restart',
@@ -1201,7 +1332,7 @@ describe('Main terminal Turn Outcome attribution', () => {
       )
       expect(waiting.activeRun).toBeUndefined()
       expect(waiting.error).toBeUndefined()
-      expect(waiting.errorReportable).toBeUndefined()
+      expect(waiting.failure).toBeUndefined()
       expect(waiting.resumeRecovery).toBeUndefined()
     }
   )
@@ -1232,13 +1363,13 @@ describe('Main terminal Turn Outcome attribution', () => {
         timestamp: 4,
         text: 'Artifacts failed',
         artifactFailure: true,
-        errorReportable: false
+        failure: { category: 'service' as const, diagnostics: {} }
       })
     ])
     expect(publication.messages[0].turnOutcome).toMatchObject({
       kind: 'failed',
       recovery: 'retry-artifact-publication',
-      errorReportable: false
+      failure: { category: 'service' as const, diagnostics: {} }
     })
     const cleanup = applyRuntimeSessionEvents(session, scope, [
       event('error', {
@@ -1252,13 +1383,19 @@ describe('Main terminal Turn Outcome attribution', () => {
     expect(cleanup.messages[0].turnOutcome).not.toHaveProperty('recovery')
     for (const cause of ['app-restart', 'connection-lost', 'terminal-commit-failed'] as const) {
       const interrupted = applyRuntimeSessionEvents(session, scope, [
-        event('error', { id: cause, timestamp: 4, text: 'Interrupted', interruptionCause: cause })
+        event('error', {
+          id: cause,
+          timestamp: 4,
+          text: 'Interrupted',
+          interruptionCause: cause,
+          failure: classifyFailure({ origin: 'session' })
+        })
       ])
       expect(interrupted.messages[0].turnOutcome).toMatchObject({
         kind: 'interrupted',
         cause,
         recovery: 'resume',
-        errorReportable: false
+        failure: { category: 'session', diagnostics: {} }
       })
     }
   })

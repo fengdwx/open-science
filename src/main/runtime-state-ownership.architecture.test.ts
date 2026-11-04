@@ -370,7 +370,9 @@ describe('runtime state ownership architecture', () => {
     expect(source).not.toContain('applyModelTarget')
     expect(source).not.toContain('resumeSessionOperation')
     expect(source).toContain('return this.modelChanges.applyReasoningEffort(effort)')
-    expect(source).toContain('this.providerSessionResumer.resume(request)')
+    expect(source).toContain(
+      'this.providerSessionResumer.resume(request, writerTransfer, isCurrent)'
+    )
     expect(providerSessions).toContain(
       'const currentConnection = (): ClientConnection | undefined => base.connectionResources.connection'
     )
@@ -420,8 +422,9 @@ describe('runtime state ownership architecture', () => {
     expect(composition.match(/new AcpContextCompactionWorkflow\(/g)).toHaveLength(1)
     expect(composition.match(/new AcpPromptTurnWorkflow\(/g)).toHaveLength(1)
     expect(composition).toContain(
-      'return Object.freeze({ contextCompactionWorkflow, promptTurnWorkflow })'
+      'return Object.freeze({ contextCompactionWorkflow, promptTurnWorkflow, releasePromptTurns })'
     )
+    expect(runtime).toContain('releasePromptTurns: prompt.releasePromptTurns')
     expect(composition).not.toMatch(/AcpRuntime\.prototype|from ['"]electron['"]/)
   })
 

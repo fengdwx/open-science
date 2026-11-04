@@ -65,8 +65,11 @@ const RECEIPT_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f
 class ShellProcessRecoveryBlockedError extends Error {
   readonly code = 'SHELL_PROCESS_RECOVERY_BLOCKED'
 
-  constructor(runId: string) {
-    super(`SHELL_PROCESS_RECOVERY_BLOCKED: the old process tree for ${runId} was not reaped.`)
+  constructor(runId: string, options?: ErrorOptions) {
+    super(
+      `SHELL_PROCESS_RECOVERY_BLOCKED: the old process tree for ${runId} was not reaped.`,
+      options
+    )
     this.name = 'ShellProcessRecoveryBlockedError'
   }
 }
@@ -426,16 +429,45 @@ class ShellProcessOwnershipRegistry {
           '-NoProfile',
           '-NonInteractive',
           '-Command',
-          `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CommandLine`
+          // Load the in-box identity provider directly, without discovering host module trees.
+          'Import-Module "$PSHOME\\Modules\\CimCmdlets\\CimCmdlets.psd1" -ErrorAction Stop; ' +
+            `Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" -ErrorAction Stop | ` +
+            'Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress'
         ],
         { encoding: 'utf8', windowsHide: true, timeout: 5000 }
       )
-      if (result.status !== 0 || !result.stdout?.includes(record.receiptId)) {
-        if (exists(pid)) throw new ShellProcessRecoveryBlockedError(record.runId)
-      } else {
+      let identity: unknown
+      try {
+        identity = JSON.parse(result.stdout)
+      } catch {
+        // Missing or malformed identity is uncertainty, not proof that the old host exited.
+      }
+      const commandLine =
+        identity &&
+        typeof identity === 'object' &&
+        'ProcessId' in identity &&
+        identity.ProcessId === pid &&
+        'CommandLine' in identity &&
+        typeof identity.CommandLine === 'string'
+          ? identity.CommandLine.trim()
+          : undefined
+      if (result.status !== 0 || !commandLine) {
+        if (exists(pid)) {
+          const errorCode = (result.error as NodeJS.ErrnoException | undefined)?.code
+          // Command lines and stderr can contain secrets; retain only query outcome diagnostics.
+          throw new ShellProcessRecoveryBlockedError(record.runId, {
+            cause: new Error(
+              `Windows host identity query failed: status=${result.status}, code=${errorCode ?? 'none'}, receiptMatched=${Boolean(result.stdout?.includes(record.receiptId))}`
+            )
+          })
+        }
+      } else if (commandLine.includes(record.receiptId)) {
         const stopped = await terminateProcessTree(recoveryHandle({ pid, platform: 'win32' }))
         if (!stopped.reaped) throw new ShellProcessRecoveryBlockedError(record.runId)
       }
+      // A readable identity without this host's launch marker proves the recorded PID now names
+      // another process. Retire only the stale receipt, as with version-1 start-identity mismatch;
+      // never signal that unrelated process. Empty/inaccessible identities remain blocked above.
     }
     await rm(`${path}.${pid}.tmp`, { force: true })
     await unlink(path)

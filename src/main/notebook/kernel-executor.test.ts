@@ -634,7 +634,7 @@ it.each([
   { name: 'R', request: { language: 'r' as const } },
   { name: 'REPL', request: { language: 'python' as const, kind: 'repl' as const } }
 ])(
-  'requests Windows process-tree supervision for every persistent $name kernel',
+  'preserves standard admission and process-tree supervision for every persistent $name kernel',
   async ({ request: kernelRequest }) => {
     cwdDir = await mkdtemp(join(tmpdir(), 'os-kernel-windows-supervision-'))
     const request = baseRequest(cwdDir)
@@ -659,7 +659,13 @@ it.each([
     })
     const executor = new NotebookKernelExecutor({
       platform: 'win32',
-      processSandbox: { wrap }
+      processSandbox: {
+        wrap,
+        ensureRuntimeAccess: async () => ({
+          windowsProtectionRequired: false,
+          windowsRuntimeAccessRequired: false
+        })
+      }
     })
     try {
       await expect(
@@ -672,6 +678,9 @@ it.each([
         })
       ).resolves.toMatchObject({ status: 'failed', stderr: 'sandbox invocation captured' })
       expect(wrap).toHaveBeenCalledWith(expect.objectContaining({ superviseProcessTree: true }))
+      expect(wrap.mock.calls[0][0].windowsProtectionRequired).toBe(
+        kernelRequest.language === 'r' ? false : undefined
+      )
     } finally {
       await executor.shutdown()
     }
@@ -4688,6 +4697,7 @@ describe('NotebookKernelExecutor repl kind (real repl_loop.js)', () => {
       const repl = new NotebookKernelExecutor({ replLoopPath: REPL_LOOP, processSandbox: owner })
       const replRequest = {
         ...baseRequest(cwdDir),
+        notebookSessionRoot: cwdDir,
         kind: 'repl' as const,
         sessionId: 'session-b',
         projectId: 'project',
@@ -4695,6 +4705,7 @@ describe('NotebookKernelExecutor repl kind (real repl_loop.js)', () => {
       }
       const pythonRequest = {
         ...baseRequest(cwdDir),
+        notebookSessionRoot: cwdDir,
         language: 'python' as const,
         sessionId: 'session-a',
         projectId: 'project',
@@ -4814,8 +4825,12 @@ describe('NotebookKernelExecutor repl kind (real repl_loop.js)', () => {
       }
       const ledger = join(cwdDir, 'runtime', 'kernel-processes')
       try {
-        await executor.execute({ ...request, code: "console.log('warm')" })
-        const [oldReceipt] = await readdir(ledger)
+        await expect(
+          executor.execute({ ...request, code: "console.log('warm')" })
+        ).resolves.toMatchObject({ status: 'completed', stdout: expect.stringContaining('warm') })
+        const receipts = await readdir(ledger)
+        expect(receipts).toHaveLength(1)
+        const [oldReceipt] = receipts
         await expect(executor.restart()).rejects.toThrow('persistent process tree was not reaped')
         await expect(executor.execute(request)).rejects.toThrow('process tree could not be stopped')
         expect(await readdir(ledger)).toEqual([oldReceipt])
@@ -5006,13 +5021,16 @@ describe('NotebookKernelExecutor repl kind (real repl_loop.js)', () => {
       }
     })
     try {
-      await executor.execute({
-        ...baseRequest(cwdDir),
-        kind: 'repl',
-        code: 'return 1',
-        sessionId: 'session',
-        projectId: 'project'
-      })
+      await expect(
+        executor.execute({
+          ...baseRequest(cwdDir),
+          kind: 'repl',
+          code: "console.log('warm')",
+          sessionId: 'session',
+          projectId: 'project'
+        })
+      ).resolves.toMatchObject({ status: 'completed', stdout: expect.stringContaining('warm') })
+      expect(await readdir(join(cwdDir, 'runtime', 'kernel-processes'))).toHaveLength(1)
       await expect(executor.shutdown()).resolves.toEqual({ reaped: false })
       writable = true
       await expect(executor.shutdown()).resolves.toEqual({ reaped: true })
@@ -5551,6 +5569,7 @@ describe('NotebookKernelExecutor repl kind (real repl_loop.js)', () => {
       try {
         const result = await executor.execute({
           ...baseRequest(cwdDir),
+          notebookSessionRoot: cwdDir,
           inputRoot,
           code:
             `const fs = require('node:fs'); const value = fs.readFileSync(${JSON.stringify(inputPath)}, 'utf8'); ` +
@@ -5705,7 +5724,6 @@ describe('NotebookKernelExecutor repl kind (real repl_loop.js)', () => {
           expect(invocation.env.OPEN_SCIENCE_CANONICAL_NPM_PREFIX).toBeUndefined()
           expect(invocation.filesystem.readWriteRoots).toEqual([
             request.notebookSessionRoot,
-            request.cwd,
             expect.any(String)
           ])
           expect(invocation.filesystem.readWriteRoots.every((path) => path.length > 0)).toBe(true)
@@ -5914,5 +5932,112 @@ describe('NotebookKernelExecutor readiness gate', () => {
     }
   })
 })
+
+it
+  .skipIf(
+    !python3 ||
+      process.platform === 'win32' ||
+      (process.platform === 'linux' && process.env.VITEST_PORTABLE_CI === '1')
+  )
+  .each([
+    { access: 'ro' as const, alias: false },
+    { access: 'rw' as const, alias: false },
+    { access: 'ro' as const, alias: true },
+    { access: 'rw' as const, alias: true }
+  ])(
+  'keeps folder authority $access after chdir and kernel restart (alias=$alias)',
+  async ({ access, alias }) => {
+    const root = await mkdtemp(join(tmpdir(), 'os-kernel-folder-authority-'))
+    const workspace = join(root, 'workspace')
+    const granted = join(root, 'granted')
+    const ungranted = join(root, 'ungranted.txt')
+    const protectedFile = join(granted, 'protected.txt')
+    const file = join(granted, 'data.txt')
+    const request = { ...baseRequest(workspace), notebookSessionRoot: workspace }
+    for (const directory of [
+      workspace,
+      granted,
+      request.inputRoot,
+      request.dataRoot,
+      request.runtimeRoot
+    ])
+      await mkdir(directory, { recursive: true })
+    await Promise.all([file, ungranted, protectedFile].map((path) => writeFile(path, 'original')))
+    const destination = alias ? join(workspace, 'linked-folder') : granted
+    if (alias) await symlink(granted, destination, 'dir')
+    const owner = new NotebookNetworkSandboxOwner({
+      resourceRoot: resolve(
+        import.meta.dirname,
+        '../../../packages/notebook-network-sandbox/vendor'
+      ),
+      temporaryRoot: join(workspace, 'commands'),
+      getSettings: async () => DEFAULT_NOTEBOOK_NETWORK_SETTINGS,
+      getFolderRestrictionEnabled: async () => true,
+      getGrantedLocalRoots: async () => [
+        { id: 'folder', name: 'granted', path: realpathSync(granted), access }
+      ],
+      persistAlwaysAllow: async () => DEFAULT_NOTEBOOK_NETWORK_SETTINGS,
+      requestDecision: async () => 'deny'
+    })
+    const executor = new NotebookKernelExecutor({
+      processSandbox: owner,
+      pythonLoopPath: resolve(import.meta.dirname, '../../../resources/notebook/python_loop.py')
+    })
+    const run = (code: string, cwd = workspace): Promise<NotebookExecutionResult> =>
+      executor.execute({
+        ...request,
+        cwd,
+        code,
+        language: 'python',
+        resolvedInterpreter: { command: python3! },
+        protectedDirs: [protectedFile],
+        sessionId: 'folder-session',
+        projectId: 'folder-project'
+      })
+    try {
+      expect(await run(`open('workspace.txt', 'w').write('workspace')`)).toMatchObject({
+        status: 'completed'
+      })
+      const write = `open(${JSON.stringify(file)}, 'w').write('changed')`
+      expect(await run(write)).toMatchObject({ status: access === 'rw' ? 'completed' : 'failed' })
+      const moved = await run(`import os; os.chdir(${JSON.stringify(destination)})`)
+      expect(moved, moved.traceback).toMatchObject({ status: 'completed' })
+      expect(realpathSync(moved.cwdAfter!)).toBe(realpathSync(granted))
+      for (const restarted of [false, true]) {
+        if (restarted) await executor.restart()
+        expect(await run(`print(open('data.txt').read())`, moved.cwdAfter)).toMatchObject({
+          status: 'completed'
+        })
+        expect(await run(write, moved.cwdAfter)).toMatchObject({
+          status: access === 'rw' ? 'completed' : 'failed'
+        })
+        for (const denied of [ungranted, protectedFile])
+          expect(
+            await run(`print(open(${JSON.stringify(denied)}).read())`, moved.cwdAfter)
+          ).toMatchObject({ status: 'failed' })
+        expect(
+          await run(
+            `open(${JSON.stringify(join(workspace, 'workspace.txt'))}, 'w').write('still writable')`,
+            moved.cwdAfter
+          )
+        ).toMatchObject({ status: 'completed' })
+      }
+      // A reported filesystem-root cwd must never become a new grant on the next launch.
+      const atRoot = await run(`import os; os.chdir('/')`, moved.cwdAfter)
+      expect(atRoot).toMatchObject({ status: 'completed', cwdAfter: '/' })
+      await executor.restart()
+      expect(
+        await run(`print(open(${JSON.stringify(ungranted)}).read())`, atRoot.cwdAfter)
+      ).toMatchObject({ status: 'failed' })
+      expect(await readFile(file, 'utf8')).toBe(access === 'rw' ? 'changed' : 'original')
+      expect(await readFile(protectedFile, 'utf8')).toBe('original')
+    } finally {
+      await executor.shutdown()
+      await owner.dispose()
+      await rm(root, { recursive: true, force: true })
+    }
+  },
+  30_000
+)
 
 ;(await import('../../../test/runtime-metadata')).configureTestRuntimeMetadata()

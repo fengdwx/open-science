@@ -1,3 +1,7 @@
+import {
+  literatureCandidateStatesRequestSchema,
+  literatureCandidateStatesResultSchema
+} from './literature'
 import { literatureItemInputSchema as contractItemSchema } from '@aipoch/literature-library/contracts'
 import { literatureItemInputSchema as itemSchema } from '@aipoch/literature-library/item'
 import { describe, expect, it } from 'vitest'
@@ -21,8 +25,16 @@ describe('Literature identifier draft lookup contract', () => {
     const { args } = literatureApplicationCommandContracts.lookupMetadata
     expect(args.parse(['10.1007/s11914-026-00956-3'])).toEqual(['10.1007/s11914-026-00956-3'])
     expect(args.parse(['pmid:29370583'])).toEqual(['pmid:29370583'])
+    expect(args.parse(['pmcid:PMC12345'])).toEqual(['pmcid:PMC12345'])
+    expect(args.parse(['arxiv:2401.12345'])).toEqual(['arxiv:2401.12345'])
+    expect(args.parse(['arxiv:hep-th/9901001'])).toEqual(['arxiv:hep-th/9901001'])
     for (const input of [
       ['pmid:abc'],
+      ['pmcid:12345'],
+      ['pmcid:PMC0'],
+      ['pmcid:PMC12345/path'],
+      ['arxiv:invalid'],
+      ['https://arxiv.org/abs/2401.12345'],
       [],
       ['https://example.com'],
       ['10.1007/has space'],
@@ -249,4 +261,27 @@ it('scopes progress reads to a run and rejects mutation or unbounded paging fiel
 
 it('keeps the public literature item schema identical to the snapshot contract', () => {
   expect(contractItemSchema).toBe(itemSchema)
+})
+
+it('bounds exact candidate reads and rejects unknown persisted states', () => {
+  expect(literatureCandidateStatesRequestSchema.parse({ candidateIds: [' candidate '] })).toEqual({
+    candidateIds: ['candidate']
+  })
+  for (const candidateIds of [
+    [],
+    [''],
+    ['x'.repeat(257)],
+    Array.from({ length: 201 }, () => 'id')
+  ]) {
+    expect(literatureCandidateStatesRequestSchema.safeParse({ candidateIds }).success).toBe(false)
+  }
+  expect(
+    literatureCandidateStatesRequestSchema.safeParse({ candidateIds: ['a'], state: 'pending' })
+      .success
+  ).toBe(false)
+  expect(
+    literatureCandidateStatesResultSchema.safeParse({
+      candidates: [{ candidateId: 'a', state: 'imported' }]
+    }).success
+  ).toBe(false)
 })

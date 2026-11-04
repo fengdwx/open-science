@@ -17,6 +17,89 @@ const scenarios = [
   { action: 'permission-deny', restart: true }
 ] as const
 
+for (const transition of ['live', 'restart', 'crash'] as const) {
+  test(`keeps native questions answerable after ${transition}`, async ({ app }, testInfo) => {
+    test.setTimeout(180_000)
+    await app.completeOnboarding()
+    let page = await app.configureFakeAgent()
+    await createProjectViaUi(page, 'Question authority')
+    const prompt = 'Ask a restart verification question. Include four questions.'
+    await submitPromptViaUi(page, prompt)
+    await expect(page.getByRole('status', { name: 'Question 1 of 4', exact: true })).toBeVisible()
+    const identity = await page.evaluate(async () => {
+      const session = (await window.api.sessions.loadAll()).sessions[0]
+      return { projectId: session.projectId, sessionId: session.id }
+    })
+    await expect
+      .poll(async () =>
+        page.evaluate(async (id) => {
+          const session = (await window.api.sessions.loadAll()).sessions.find((s) => s.id === id)
+          return session?.activities?.some((a) => a.elicitation?.state === 'pending')
+        }, identity.sessionId)
+      )
+      .toBe(true)
+
+    if (transition === 'restart' || transition === 'crash') {
+      if (transition === 'crash') {
+        page = await app.restartAfterCrash({ force: true })
+      } else {
+        const quittingPage = page
+        const restarting = app.restart()
+        await quittingPage
+          .getByRole('button', { name: 'Quit', exact: true })
+          .waitFor({ state: 'visible', timeout: 5_000 })
+          .then(() => quittingPage.getByRole('button', { name: 'Quit', exact: true }).click())
+          .catch(() => undefined)
+        page = await restarting
+      }
+    }
+    if (transition !== 'live') {
+      await page
+        .getByRole('region', { name: 'Recent sessions', exact: true })
+        .getByRole('button', { name: /^Ask a restart verification question\./ })
+        .click()
+      await testInfo.attach('session-after-transition', {
+        body: JSON.stringify(
+          await page.evaluate(async (id) => {
+            const session = (await window.api.sessions.loadAll()).sessions.find((s) => s.id === id)
+            return {
+              projectId: session?.projectId,
+              sessionId: session?.id,
+              elicitation: session?.activities?.find((a) => a.elicitation)?.elicitation
+            }
+          }, identity.sessionId),
+          null,
+          2
+        ),
+        contentType: 'application/json'
+      })
+    }
+
+    for (let index = 1; index <= 4; index += 1) {
+      await expect(
+        page.getByRole('status', { name: `Question ${index} of 4`, exact: true })
+      ).toBeVisible()
+      await page.getByText('Dataset Alpha', { exact: true }).first().click()
+      if (index < 4) await page.getByRole('button', { name: 'Next question', exact: true }).click()
+    }
+    await page.screenshot({ path: testInfo.outputPath('fourth-question.png') })
+    await page.getByRole('button', { name: 'Finish', exact: true }).click()
+    await expect(
+      page.getByText('Restart verification: Question answer delivered.', { exact: false })
+    ).toBeVisible({ timeout: 40_000 })
+    const saved = await page.evaluate(async (id) => {
+      const session = (await window.api.sessions.loadAll()).sessions.find((s) => s.id === id)!
+      return {
+        projectId: session.projectId,
+        sessionId: session.id,
+        answerCount: session.activities?.find((a) => a.elicitation)?.elicitation?.answers?.length
+      }
+    }, identity.sessionId)
+    expect(saved).toEqual({ ...identity, answerCount: 4 })
+    await page.screenshot({ path: testInfo.outputPath('answered.png') })
+  })
+}
+
 for (const { action, restart } of scenarios) {
   test(`delivers ${action} ${restart === 'crash' ? 'after an application crash with a parked Plan' : restart ? 'after a real application restart' : 'in the live session'}`, async ({
     app
@@ -409,4 +492,55 @@ test('keeps a committed Artifact Version when cancelled and immediately followed
   ).toEqual([owner.id])
   expect(after.activeRun).toBeUndefined()
   expect(after.messages.filter((message) => message.role === 'user')).toHaveLength(2)
+})
+
+test('cancels an active provider turn on ordinary quit and resumes it after restart', async ({
+  app
+}, testInfo) => {
+  test.setTimeout(180_000)
+  await app.completeOnboarding()
+  let page = await app.configureFakeAgent()
+  await createProjectViaUi(page, 'Quit active conversation')
+  const prompt = 'Hold the turn outcome fixture.'
+  await submitPromptViaUi(page, prompt)
+  await expect(
+    page.getByText('Turn outcome cancellation checkpoint.', { exact: true })
+  ).toBeVisible()
+  const before = await page.evaluate(async () => (await window.api.sessions.loadAll()).sessions[0])
+  expect(before.status).toBe('running')
+  expect(before.activeRun).toBeDefined()
+
+  const [restart, quit] = await Promise.allSettled([
+    app.restart(),
+    page.getByRole('button', { name: 'Quit', exact: true }).click()
+  ])
+  // Settle both operations before fixture cleanup, even if the window closes before the click.
+  if (restart.status === 'rejected') throw restart.reason
+  if (quit.status === 'rejected') throw quit.reason
+  page = restart.value
+  const restored = await page.evaluate(
+    async () => (await window.api.sessions.loadAll()).sessions[0]
+  )
+  await testInfo.attach('active-turn-after-ordinary-quit', {
+    body: JSON.stringify(restored),
+    contentType: 'application/json'
+  })
+  expect(restored.id).toBe(before.id)
+  expect(restored.activeRun).toBeUndefined()
+  expect(restored.messages.find((message) => message.role === 'user')?.turnOutcome).toMatchObject({
+    kind: 'cancelled',
+    recovery: 'resume'
+  })
+  await page
+    .getByRole('region', { name: 'Recent sessions' })
+    .getByRole('button', { name: prompt })
+    .click()
+  await expect(page.getByText('Turn outcome resumed successfully.', { exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Resume session', exact: true }).click()
+  await expect(page.getByText('Turn outcome resumed successfully.', { exact: true })).toBeVisible()
+  await expect
+    .poll(() =>
+      page.evaluate(async () => (await window.api.sessions.loadAll()).sessions[0]?.status)
+    )
+    .toBe('idle')
 })

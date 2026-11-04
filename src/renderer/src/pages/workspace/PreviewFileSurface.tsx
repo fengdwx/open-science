@@ -39,7 +39,7 @@ import { Button } from '@/components/ui/button'
 import { ConfirmActionDialog } from '@/components/ui/confirm-action-dialog'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { errorDetail } from '@/lib/error-detail'
-import type { PreviewFileItem, PreviewFileViewState } from '@/stores/preview-workbench-store'
+import type { PreviewFileItem, PreviewFileViewState } from '@/stores/preview-workbench-contract'
 import { usePreviewWorkbenchStore } from '@/stores/preview-workbench-store'
 import { useNavigationStore } from '@/stores/navigation-store'
 import { useSearchMessageFocusStore } from '@/stores/search-message-focus-store'
@@ -799,6 +799,7 @@ const PreviewFileSurfaceContent = forwardRef<PreviewFileSurfaceHandle, PreviewFi
       text: string
       expectedHeadVersionId: string
       basedOnVersionId: string
+      item: PreviewFileItem
     }>()
     const [saving, setSaving] = useState(false)
     const [editError, setEditError] = useState<string>()
@@ -985,6 +986,8 @@ const PreviewFileSurfaceContent = forwardRef<PreviewFileSurfaceHandle, PreviewFi
             sessionId: managedNavigationInspect.sessionId
           })
         : resolvedPreviewItem
+    // An editor owns a draft of its confirmed baseline, even when a newer head arrives.
+    const provenanceItem = mode === 'edit' && editBaseline ? editBaseline.item : contentItem
     const { action: linkedPdfContextAction, readingContextBindingId } = usePdfContextAction(
       contentItem,
       onPdfContextError,
@@ -1034,6 +1037,25 @@ const PreviewFileSurfaceContent = forwardRef<PreviewFileSurfaceHandle, PreviewFi
     const hidePdfReadingEntry = contentItem.format === 'pdf' && (confirmedPdfPageCount ?? 0) <= 1
     const visiblePdfContextAction =
       hidePdfReadingEntry && pdfContextAction?.state === 'link' ? undefined : pdfContextAction
+    const pdfProseRegions = usePreviewWorkbenchStore((state) =>
+      readingContextBindingId
+        ? state.pdfProseRegionsByBindingId[readingContextBindingId]
+        : undefined
+    )
+    const pdfProseRegionsScope = usePreviewWorkbenchStore((state) => state.pdfProseRegionsScope)
+    const pdfProseRegionIdentityKey = JSON.stringify([
+      pdfProseRegionsScope,
+      readingContextBindingId
+    ])
+    const reportPdfProseRegions = useCallback(
+      (regions: NonNullable<PreviewInteractionPort['pdfProseRegions']>): void => {
+        if (!readingContextBindingId) return
+        if (usePreviewWorkbenchStore.getState().pdfProseRegionsScope !== pdfProseRegionsScope)
+          return
+        usePreviewWorkbenchStore.getState().setPdfProseRegions(readingContextBindingId, regions)
+      },
+      [readingContextBindingId, pdfProseRegionsScope]
+    )
     const reportPdfReadingPosition = useCallback(
       (position: { pageNumber: number; pageCount: number }): void => {
         setPdfPageCount((current) =>
@@ -1403,7 +1425,8 @@ const PreviewFileSurfaceContent = forwardRef<PreviewFileSurfaceHandle, PreviewFi
       setEditBaseline({
         text: managedInspect.text,
         expectedHeadVersionId: managedInspect.headVersionId,
-        basedOnVersionId: managedInspect.selectedVersionId
+        basedOnVersionId: managedInspect.selectedVersionId,
+        item: contentItem
       })
       setEditError(undefined)
       setConflictHead(undefined)
@@ -1424,12 +1447,16 @@ const PreviewFileSurfaceContent = forwardRef<PreviewFileSurfaceHandle, PreviewFi
       }
     }
 
+    // Restoring history is an intentional new version even without editing its text.
+    const restoringHistory = Boolean(
+      editBaseline && editBaseline.basedOnVersionId !== editBaseline.expectedHeadVersionId
+    )
     const saveEdit = async (): Promise<void> => {
       if (
         !managedIdentity ||
         !managedInspect?.canEdit ||
         !editBaseline ||
-        draft === editBaseline.text ||
+        (draft === editBaseline.text && !restoringHistory) ||
         saving
       )
         return
@@ -1455,6 +1482,7 @@ const PreviewFileSurfaceContent = forwardRef<PreviewFileSurfaceHandle, PreviewFi
             basedOnVersionId: editBaseline.basedOnVersionId,
             expectedHeadVersionId: editBaseline.expectedHeadVersionId,
             content: draft,
+            restore: restoringHistory,
             operationId: crypto.randomUUID()
           }
         }
@@ -1485,12 +1513,15 @@ const PreviewFileSurfaceContent = forwardRef<PreviewFileSurfaceHandle, PreviewFi
       setDraft('')
       if (result.value.kind === 'created' && projectId) {
         applyVersionItem(
-          createPreviewFileItemForManagedVersion({
-            item: previewItem,
-            version: result.value.version,
-            projectId,
-            sessionId: managedInspect.sessionId
-          }),
+          {
+            ...createPreviewFileItemForManagedVersion({
+              item: previewItem,
+              version: result.value.version,
+              projectId,
+              sessionId: managedInspect.sessionId
+            }),
+            selectedVersionId: undefined
+          },
           true
         )
       }
@@ -1690,10 +1721,12 @@ const PreviewFileSurfaceContent = forwardRef<PreviewFileSurfaceHandle, PreviewFi
                         type="button"
                         size="sm"
                         aria-label={t('Save changes')}
-                        disabled={!isDirty || saving || !managedInspect?.canEdit}
+                        disabled={
+                          (!isDirty && !restoringHistory) || saving || !managedInspect?.canEdit
+                        }
                         onClick={() => void saveEdit()}
                       >
-                        {t('Save')}
+                        {restoringHistory && !isDirty ? t('Restore as new version') : t('Save')}
                       </Button>
                     </div>
                   ) : managedWorkflow.showTextTools && managedControlsInspect ? (
@@ -1827,14 +1860,16 @@ const PreviewFileSurfaceContent = forwardRef<PreviewFileSurfaceHandle, PreviewFi
               <PreviewProvenanceSplit
                 mode={showProvenance ? (widePreview ? 'split' : 'provenance') : 'content'}
                 provenance={
-                  showProvenance && projectId ? (
+                  showProvenance &&
+                  projectId &&
+                  (!managedIdentity || provenanceItem.selectedVersionId) ? (
                     <aside
                       aria-label={t('Provenance')}
                       data-testid="preview-provenance-pane"
                       className="h-full min-h-0 min-w-0"
                     >
                       <ArtifactProvenancePanel
-                        item={resolvedPreviewItem}
+                        item={provenanceItem}
                         projectId={projectId}
                         onClose={() => updateFileView({ provenanceOpen: false })}
                         selectedTab={storedItem?.fileViewState?.provenanceTab}
@@ -1933,6 +1968,13 @@ const PreviewFileSurfaceContent = forwardRef<PreviewFileSurfaceHandle, PreviewFi
                           onAnnotationError={onAnnotationError}
                           onRetry={retryManagedPreview}
                           onPdfReadingPositionChange={reportPdfReadingPosition}
+                          pdfProseRegions={pdfProseRegions}
+                          pdfProseRegionIdentityKey={pdfProseRegionIdentityKey}
+                          onPdfProseRegionsChange={
+                            readingContextBindingId && !hidePdfReadingEntry
+                              ? reportPdfProseRegions
+                              : undefined
+                          }
                           onPdfTranslationChange={reportPdfTranslation}
                         />
                       ) : null
@@ -1968,6 +2010,13 @@ const PreviewFileSurfaceContent = forwardRef<PreviewFileSurfaceHandle, PreviewFi
                       onAnnotationError={onAnnotationError}
                       onRetry={retryManagedPreview}
                       onPdfReadingPositionChange={reportPdfReadingPosition}
+                      pdfProseRegions={pdfProseRegions}
+                      pdfProseRegionIdentityKey={pdfProseRegionIdentityKey}
+                      onPdfProseRegionsChange={
+                        readingContextBindingId && !hidePdfReadingEntry
+                          ? reportPdfProseRegions
+                          : undefined
+                      }
                       onPdfTranslationChange={reportPdfTranslation}
                     />
                   ) : null}

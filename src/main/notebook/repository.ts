@@ -20,6 +20,7 @@ import { createLogger } from '@aipoch/diagnostics/node'
 import {
   DurableJsonRecoveryBarrierError,
   readDurableJsonFile,
+  recoverDurableJsonDirectory,
   writeDurableJsonFile
 } from '@aipoch/durable-files'
 import { decodeVersionedJson } from '../storage/versioned-json-decoder'
@@ -234,9 +235,12 @@ const notebookRunCandidate = (value: unknown): boolean => {
       (typeof value.cancellationRequestedAt !== 'number' ||
         !Number.isFinite(value.cancellationRequestedAt))) ||
     (value.cancellationReason !== undefined && typeof value.cancellationReason !== 'string') ||
+    // Shell execution can persist signed exit codes (including -1 on Windows).
+    // Preserve those terminal facts when reopening history, including for package export.
     (value.exitCode !== undefined &&
       value.exitCode !== null &&
-      (!Number.isSafeInteger(value.exitCode) || Number(value.exitCode) < 0)) ||
+      (!Number.isSafeInteger(value.exitCode) ||
+        (Number(value.exitCode) < 0 && value.kernelKind !== 'bash'))) ||
     (value.kernelEpochId !== undefined &&
       (typeof value.kernelEpochId !== 'string' || value.kernelEpochId.length === 0)) ||
     (value.executionStarted !== undefined && typeof value.executionStarted !== 'boolean') ||
@@ -1442,6 +1446,9 @@ class NotebookRunRepository {
     const outboxRoot = join(
       getNotebookSessionRoot(this.storageRoot, projectId, sessionId, lane),
       RUN_TERMINAL_OUTBOX_DIR
+    )
+    await recoverDurableJsonDirectory(outboxRoot, (_targetPath, contents) =>
+      parseNotebookRunTerminalFact(contents)
     )
     let facts: Dirent[]
     try {

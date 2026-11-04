@@ -13,6 +13,8 @@ import type { SettingsPanelId } from './settings-navigation'
 
 const PANELS: ReadonlyArray<{ id: SettingsPanelId; labelKey: string }> = [
   { id: 'general', labelKey: 'General' },
+  { id: 'appearance', labelKey: 'Appearance' },
+  { id: 'notifications', labelKey: 'Notifications' },
   { id: 'model', labelKey: 'Model' },
   { id: 'network', labelKey: 'Network' },
   { id: 'runtimes', labelKey: 'Runtimes' }
@@ -40,10 +42,10 @@ afterEach(() => {
   delete (window as unknown as { api?: unknown }).api
 })
 
-const renderSearch = (onNavigate = vi.fn()): void => {
+const renderSearch = (onNavigate = vi.fn(), onDialogKeyDown?: () => void): void => {
   act(() => {
     root.render(
-      <div role="dialog">
+      <div role="dialog" onKeyDown={onDialogKeyDown}>
         <SettingsGlobalSearch
           panels={PANELS}
           onNavigate={(panel, onNavigated) => {
@@ -270,7 +272,7 @@ describe('SettingsGlobalSearch', () => {
       expect(input().value).toBe('language')
       expect(input().getAttribute('aria-expanded')).toBe('true')
       pressKey('Enter')
-      expect(onNavigate).toHaveBeenCalledWith('general')
+      expect(onNavigate).toHaveBeenCalledWith('appearance')
     }
   )
 
@@ -285,7 +287,8 @@ describe('SettingsGlobalSearch', () => {
   })
 
   it('closes only the results list on the first Escape, even from a mouse-hovered option', () => {
-    renderSearch()
+    const onDialogKeyDown = vi.fn()
+    renderSearch(vi.fn(), onDialogKeyDown)
     typeQuery('proxy')
     expect(document.body.querySelector('[role="listbox"]')).not.toBeNull()
 
@@ -297,18 +300,63 @@ describe('SettingsGlobalSearch', () => {
     const event = pressKey('Escape')
     expect(event.defaultPrevented).toBe(false)
     expect(document.body.querySelector('[role="listbox"]')).toBeNull()
-    expect(document.activeElement).not.toBe(input())
+    expect(document.activeElement).toBe(input())
+    expect(input().getAttribute('aria-expanded')).toBe('false')
+    expect(onDialogKeyDown).not.toHaveBeenCalled()
 
     // With the list closed, a second Escape is left for the dialog to handle.
     const second = pressKey('Escape')
     expect(second.defaultPrevented).toBe(false)
+    expect(onDialogKeyDown).toHaveBeenCalledOnce()
+  })
+
+  it('keeps results closed when focus returns after Escape until explicit input', () => {
+    renderSearch()
+    typeQuery('proxy')
+    pressKey('Escape')
+    expect(document.body.querySelector('[role="listbox"]')).toBeNull()
+
+    act(() => {
+      input().blur()
+      input().focus()
+    })
+    expect(document.body.querySelector('[role="listbox"]')).toBeNull()
+    expect(input().getAttribute('aria-expanded')).toBe('false')
+
+    pressKey('ArrowDown')
+    expect(document.body.querySelector('[role="listbox"]')).not.toBeNull()
+  })
+
+  it('reopens the results when input changes after Escape', () => {
+    renderSearch()
+    typeQuery('proxy')
+    pressKey('Escape')
+    expect(document.body.querySelector('[role="listbox"]')).toBeNull()
+
+    typeQuery('network')
+
+    expect(document.body.querySelector('[role="listbox"]')).not.toBeNull()
+    expect(document.activeElement).toBe(input())
+  })
+
+  it('reopens the results with ArrowDown after Escape', () => {
+    renderSearch()
+    typeQuery('proxy')
+    pressKey('Escape')
+    expect(document.body.querySelector('[role="listbox"]')).toBeNull()
+
+    const event = pressKey('ArrowDown')
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(document.body.querySelector('[role="listbox"]')).not.toBeNull()
+    expect(document.activeElement).toBe(input())
   })
 
   it('jumps to the anchored setting instead of the first block, ringing and focusing it', () => {
     mountPanelRoot(
-      'general',
+      'notifications',
       `<section data-slot="settings-section">Appearance</section>
-       <section data-slot="settings-section" data-settings-anchor="general.notifications">Notifications</section>`
+       <section data-slot="settings-section" data-settings-anchor="notifications.preferences">Notifications</section>`
     )
     const onNavigate = vi.fn()
     renderSearch(onNavigate)
@@ -317,9 +365,9 @@ describe('SettingsGlobalSearch', () => {
     pressKey('Enter')
 
     const target = document.body.querySelector<HTMLElement>(
-      '[data-settings-anchor="general.notifications"]'
+      '[data-settings-anchor="notifications.preferences"]'
     )!
-    expect(onNavigate).toHaveBeenCalledWith('general')
+    expect(onNavigate).toHaveBeenCalledWith('notifications')
     // The ring lands on the anchored section, not the panel's first section.
     expect(target.classList.contains('settings-search-highlight')).toBe(true)
     // Non-focusable targets get a temporary tabindex and receive focus.
@@ -347,7 +395,7 @@ describe('SettingsGlobalSearch', () => {
 
   it('waits for a missing anchor before falling back to the first content block', () => {
     vi.useFakeTimers()
-    mountPanelRoot('general', `<section data-slot="settings-section">Appearance</section>`)
+    mountPanelRoot('notifications', `<section data-slot="settings-section">Notifications</section>`)
     renderSearch()
 
     typeQuery('notifications')
@@ -367,8 +415,8 @@ describe('SettingsGlobalSearch', () => {
   it('fades and removes the ring after the dwell, restoring tabindex but keeping focus', () => {
     vi.useFakeTimers()
     mountPanelRoot(
-      'general',
-      `<section data-slot="settings-section" data-settings-anchor="general.notifications">Notifications</section>`
+      'notifications',
+      `<section data-slot="settings-section" data-settings-anchor="notifications.preferences">Notifications</section>`
     )
     renderSearch()
 
@@ -376,7 +424,7 @@ describe('SettingsGlobalSearch', () => {
     pressKey('Enter')
 
     const target = document.body.querySelector<HTMLElement>(
-      '[data-settings-anchor="general.notifications"]'
+      '[data-settings-anchor="notifications.preferences"]'
     )!
     act(() => {
       vi.advanceTimersByTime(1500)

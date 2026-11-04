@@ -27,6 +27,14 @@ struct DarwinUniqueIdentifierInfo {
   uint64_t reserved4;
 };
 
+// PROC_PIDCOALITIONINFO is a private SDK flavor. Resource coalition membership is
+// inherited across fork/exec; a failed optional read must not imply foreign ownership.
+constexpr int kProcPidCoalitionInfo = 20;
+struct DarwinCoalitionInfo {
+  uint64_t coalition_id[2];
+  uint64_t reserved[3];
+};
+
 struct DarwinProcessIdentity {
   int32_t pid;
   int32_t ppid;
@@ -34,6 +42,7 @@ struct DarwinProcessIdentity {
   int32_t sid;
   uint64_t unique_id;
   uint64_t parent_unique_id;
+  uint64_t coalition_id;
 };
 
 enum class ProcessReadStatus { kIncluded, kSafelyIgnored, kIncomplete };
@@ -115,6 +124,10 @@ ProcessReadStatus ReadDarwinProcess(int32_t pid, DarwinProcessIdentity* output) 
     return ProcessVanished(pid) ? ProcessReadStatus::kSafelyIgnored
                                 : ProcessReadStatus::kIncomplete;
   }
+  DarwinCoalitionInfo coalition{};
+  const bool coalition_read =
+      proc_pidinfo(pid, kProcPidCoalitionInfo, 0, &coalition, sizeof(coalition)) ==
+      sizeof(coalition);
   DarwinUniqueIdentifierInfo unique_after{};
   errno = 0;
   if (proc_pidinfo(pid, kProcPidUniqueIdentifierInfo, 0, &unique_after,
@@ -135,6 +148,7 @@ ProcessReadStatus ReadDarwinProcess(int32_t pid, DarwinProcessIdentity* output) 
       static_cast<int32_t>(sid),
       unique_after.unique_id,
       unique_after.parent_unique_id,
+      coalition_read ? coalition.coalition_id[0] : 0,
   };
   return output->pid == pid && output->unique_id != 0 ? ProcessReadStatus::kIncluded
                                                       : ProcessReadStatus::kIncomplete;
@@ -183,6 +197,9 @@ napi_value ProcessIdentity(napi_env env, const DarwinProcessIdentity& identity) 
   napi_set_named_property(env, value, "uniqueId", Uint64String(env, identity.unique_id));
   napi_set_named_property(
       env, value, "parentUniqueId", Uint64String(env, identity.parent_unique_id));
+  if (identity.coalition_id != 0) {
+    napi_set_named_property(env, value, "coalitionId", Uint64String(env, identity.coalition_id));
+  }
   return value;
 }
 #endif
@@ -200,6 +217,48 @@ napi_value GetDarwinProcess(napi_env env, napi_callback_info info) {
   return ReadDarwinProcess(pid, &identity) == ProcessReadStatus::kIncluded
              ? ProcessIdentity(env, identity)
              : Null(env);
+#else
+  (void)info;
+  return Null(env);
+#endif
+}
+
+// KERN_PROCARGS2 preserves argument boundaries that ps intentionally flattens.
+napi_value GetDarwinProcessArguments(napi_env env, napi_callback_info info) {
+#ifdef __APPLE__
+  size_t argc = 1;
+  napi_value argv[1];
+  int32_t pid = 0;
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc != 1 ||
+      napi_get_value_int32(env, argv[0], &pid) != napi_ok || pid <= 0) return Null(env);
+  int mib[] = {CTL_KERN, KERN_PROCARGS2, pid};
+  size_t size = 0;
+  if (sysctl(mib, 3, nullptr, &size, nullptr, 0) != 0 || size <= sizeof(int) ||
+      size > 16 * 1024 * 1024) return Null(env);
+  std::vector<char> buffer(size);
+  if (sysctl(mib, 3, buffer.data(), &size, nullptr, 0) != 0 || size <= sizeof(int))
+    return Null(env);
+  int count = 0;
+  std::memcpy(&count, buffer.data(), sizeof(count));
+  if (count <= 0 || static_cast<size_t>(count) > size - sizeof(int)) return Null(env);
+  size_t offset = sizeof(int);
+  const size_t executable_length = strnlen(buffer.data() + offset, size - offset);
+  if (executable_length == size - offset) return Null(env);
+  offset += executable_length + 1;
+  // The executable path is followed by alignment padding, then argv[0].
+  while (offset < size && buffer[offset] == '\0') offset++;
+  napi_value result;
+  napi_create_array_with_length(env, count, &result);
+  for (int i = 0; i < count; i++) {
+    if (offset >= size) return Null(env);
+    const size_t length = strnlen(buffer.data() + offset, size - offset);
+    if (length == size - offset) return Null(env);
+    napi_value argument;
+    napi_create_string_utf8(env, buffer.data() + offset, length, &argument);
+    napi_set_element(env, result, i, argument);
+    offset += length + 1;
+  }
+  return result;
 #else
   (void)info;
   return Null(env);
@@ -290,6 +349,10 @@ napi_value Init(napi_env env, napi_value exports) {
   napi_create_function(
       env, "getDarwinProcess", NAPI_AUTO_LENGTH, GetDarwinProcess, nullptr, &get_process);
   napi_set_named_property(env, exports, "getDarwinProcess", get_process);
+  napi_value get_arguments;
+  napi_create_function(env, "getDarwinProcessArguments", NAPI_AUTO_LENGTH,
+                       GetDarwinProcessArguments, nullptr, &get_arguments);
+  napi_set_named_property(env, exports, "getDarwinProcessArguments", get_arguments);
   napi_value get_environment_value;
   napi_create_function(env, "getDarwinEnvironmentValue", NAPI_AUTO_LENGTH,
                        GetDarwinEnvironmentValue, nullptr, &get_environment_value);

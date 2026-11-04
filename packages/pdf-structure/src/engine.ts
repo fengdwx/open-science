@@ -17,7 +17,7 @@ export const createEngineAt = (
   return {
     async describe() {
       const hash = createHash('sha256')
-        .update('candidate-pdf-engine-v1')
+        .update('candidate-pdf-engine-v2')
         .update(JSON.stringify(options.modelRecipe))
       const require = createRequire(pathToFileURL(join(resources, 'host.mjs')))
       hash.update(JSON.stringify(sharp.versions))
@@ -59,8 +59,11 @@ export const createEngineAt = (
         child.once('error', (error) => {
           failure = error
         })
-        child.once('close', (code) => {
-          if (code !== 0 && !failure) failure = new Error(stderr.trim() || 'PDF extraction failed.')
+        child.once('close', (code, signal) => {
+          if (code !== 0 && !failure) {
+            const message = stderr.trim() || 'PDF extraction failed.'
+            failure = new Error(`${message} (exitCode=${code}, signal=${signal})`)
+          }
           resolve()
         })
       })

@@ -42,6 +42,61 @@ export const pdfTableSourceItemsSchema = z
     'Table source items must be sorted and unique.'
   )
 const issue = z.object({ code: z.string().min(1), detail: z.string() }).strict()
+const nativeBox = z.tuple([z.number(), z.number(), z.number(), z.number()])
+const nativeRail = z
+  .object({
+    operatorIndex: z.number().int().nonnegative().safe(),
+    segment: nativeBox,
+    width: z.number().positive(),
+    clip: nativeBox
+  })
+  .strict()
+const mathBodyBoundary = z
+  .object({
+    kind: z.literal('three-rail'),
+    pageNumber,
+    scale: z.literal(1),
+    coordinateSystem: z.literal('pdfjs-upright-points'),
+    rules: z.tuple([nativeRail, nativeRail, nativeRail]),
+    raster: z
+      .object({
+        width: z.number().int().positive().max(2400),
+        height: z.number().int().positive().max(2400),
+        sha256: hash
+      })
+      .strict()
+  })
+  .strict()
+  .refine(({ rules }) => {
+    const [first, middle, last] = rules
+    return (
+      first.operatorIndex < middle.operatorIndex &&
+      middle.operatorIndex < last.operatorIndex &&
+      first.segment[1] < middle.segment[1] &&
+      middle.segment[1] < last.segment[1] &&
+      rules.every(
+        ({ segment: s, width, clip: c }) =>
+          s[0] < s[2] &&
+          s[1] === s[3] &&
+          s[0] === first.segment[0] &&
+          s[2] === first.segment[2] &&
+          c[0] < c[2] &&
+          c[1] < c[3] &&
+          s[0] >= c[0] &&
+          s[2] <= c[2] &&
+          s[1] - width / 2 >= c[1] &&
+          s[3] + width / 2 <= c[3]
+      )
+    )
+  }, 'Mathematical body rails must have exact, unique and complete native stroke support.')
+export const pdfNativeBodySchema = z
+  .object({
+    kind: z.enum(['math-table', 'algorithm']),
+    sourceItems: pdfTableSourceItemsSchema,
+    boundary: mathBodyBoundary.optional()
+  })
+  .strict()
+  .refine((body) => !body.boundary || body.kind === 'math-table')
 const region = z
   .object({
     page: pageNumber,
@@ -52,6 +107,51 @@ const region = z
   })
   .strict()
   .refine((r) => r.x + r.width <= 1 && r.y + r.height <= 1, 'Region exceeds page.')
+// Offsets address the exact original PDF.js string in UTF-16 code units.
+export const pdfTableSourceSegmentSchema = z
+  .object({
+    pageNumber,
+    index: z.number().int().nonnegative().safe(),
+    text: z.string().min(1),
+    start: z.number().int().nonnegative().safe(),
+    end: z.number().int().positive().safe(),
+    region
+  })
+  .strict()
+const pdfTableSourceSegmentsSchema = z
+  .array(pdfTableSourceSegmentSchema)
+  .min(1)
+  .max(8192)
+  .refine(
+    (segments) =>
+      segments.every((segment, index) => {
+        const { text, start, end } = segment
+        const boundary = (offset: number): boolean =>
+          !(
+            offset > 0 &&
+            offset < text.length &&
+            /[\uD800-\uDBFF]/u.test(text[offset - 1]) &&
+            /[\uDC00-\uDFFF]/u.test(text[offset])
+          )
+        const previous = segments[index - 1]
+        return (
+          start < end &&
+          end <= text.length &&
+          boundary(start) &&
+          boundary(end) &&
+          text.slice(start, end).trim().length > 0 &&
+          segment.pageNumber === segment.region.page &&
+          (!previous ||
+            segment.pageNumber > previous.pageNumber ||
+            (segment.pageNumber === previous.pageNumber &&
+              (segment.index > previous.index ||
+                (segment.index === previous.index &&
+                  segment.start >= previous.end &&
+                  segment.text === previous.text))))
+        )
+      }),
+    'Invalid or overlapping table source segments.'
+  )
 const cell = z
   .object({
     row: z.number().int().nonnegative(),
@@ -61,6 +161,7 @@ const cell = z
     text: z.string(),
     textRuns: pdfTextRunsSchema.optional(),
     sourceItems: pdfTableSourceItemsSchema.optional(),
+    sourceSegments: pdfTableSourceSegmentsSchema.optional(),
     regions: z.array(region)
   })
   .strict()
@@ -68,12 +169,34 @@ const cell = z
     (value) => !value.textRuns || value.textRuns.map((run) => run.text).join('') === value.text,
     'Formatted cell text differs from plain text.'
   )
+  .refine((value) => {
+    if (!value.sourceSegments) return true
+    if (value.sourceItems || value.sourceSegments.length !== value.regions.length) return false
+    const remaining = [...value.regions]
+    for (const { region: source } of value.sourceSegments) {
+      const matches = remaining
+        .map((r, index) => ({ r, index }))
+        .filter(
+          ({ r }) =>
+            r.page === source.page &&
+            r.x === source.x &&
+            r.y === source.y &&
+            r.width === source.width &&
+            r.height === source.height
+        )
+      if (matches.length !== 1) return false
+      remaining.splice(matches[0].index, 1)
+    }
+    return remaining.length === 0
+  }, 'Table source segments must exclusively account for every cell region.')
 const tableNotes = z.array(z.object({ text: z.string(), regions: z.array(region).min(1) }).strict())
 const table = z
   .object({
     rowCount: z.number().int().positive(),
     columnCount: z.number().int().positive(),
     cells: z.array(cell).max(MAX_TABLE_CELLS),
+    // Exact whole native owners of proved mathematical loss, not table-wide ownership.
+    unreliableMathSourceItems: pdfTableSourceItemsSchema.optional(),
     unassignedText: z.array(z.object({ text: z.string(), regions: z.array(region) }).strict()),
     issues: z.array(issue),
     notes: tableNotes.optional()
@@ -81,6 +204,32 @@ const table = z
   .strict()
   .superRefine((value, context) => {
     if (value.cells.length > MAX_TABLE_CELLS) return
+    if (value.unreliableMathSourceItems) {
+      const owners = new Map<string, Array<{ cell: z.infer<typeof cell>; index: number }>>()
+      for (const current of value.cells)
+        for (const [index, item] of (current.sourceItems ?? []).entries()) {
+          const key = `${item.pageNumber}:${item.index}`
+          owners.set(key, [...(owners.get(key) ?? []), { cell: current, index }])
+        }
+      if (
+        !value.issues.some(({ code }) => code === 'native-table-structure-ambiguous') ||
+        value.unreliableMathSourceItems.some((item) => {
+          const matches = owners.get(`${item.pageNumber}:${item.index}`)
+          if (matches?.length !== 1) return true
+          const { cell: owner, index } = matches[0]
+          return (
+            !!owner.sourceSegments ||
+            owner.sourceItems!.length !== owner.regions.length ||
+            owner.sourceItems![index].text !== item.text ||
+            owner.regions[index].page !== item.pageNumber
+          )
+        })
+      )
+        context.addIssue({
+          code: 'custom',
+          message: 'Unreliable mathematical sources require unique whole cell origins and geometry.'
+        })
+    }
     for (const [index, current] of value.cells.entries()) {
       if (
         current.row + current.rowSpan > value.rowCount ||
@@ -103,11 +252,59 @@ const table = z
         context.addIssue({ code: 'custom', message: 'Table cells overlap.' })
     }
   })
+function captionlessMathBody(value: {
+  kind: string
+  caption?: unknown
+  nativeBody?: z.infer<typeof pdfNativeBodySchema>
+  table?: z.infer<typeof table>
+  tableParts?: unknown
+  tableNotes?: unknown
+  sourceItems?: unknown
+  regions: z.infer<typeof region>[]
+  issues: z.infer<typeof issue>[]
+}): boolean {
+  const body = value.nativeBody,
+    data = value.table
+  if (
+    value.kind !== 'table' ||
+    value.caption ||
+    !body?.boundary ||
+    body.kind !== 'math-table' ||
+    !data ||
+    value.sourceItems ||
+    value.tableParts ||
+    value.tableNotes ||
+    data.notes?.length ||
+    data.unassignedText.length ||
+    body.sourceItems.length > 512 ||
+    value.regions.length !== 1 ||
+    value.regions[0].page !== body.boundary.pageNumber ||
+    !value.issues.some((i) => i.code === 'native-table-structure-ambiguous') ||
+    !data.issues.some((i) => i.code === 'native-table-structure-ambiguous') ||
+    !data.cells.some((c) => c.textRuns?.some((r) => r.position !== 'normal')) ||
+    data.cells.some((c) => c.sourceSegments || (c.text.trim() && !c.sourceItems?.length))
+  )
+    return false
+  const claims = data.cells.flatMap((c) => c.sourceItems ?? []),
+    wanted = new Map(body.sourceItems.map((i) => [i.index, i.text]))
+  return (
+    claims.length === wanted.size &&
+    new Set(claims.map((i) => i.index)).size === wanted.size &&
+    claims.every(
+      (i) => i.pageNumber === body.boundary!.pageNumber && wanted.get(i.index) === i.text
+    ) &&
+    body.sourceItems.every((i) => i.pageNumber === body.boundary!.pageNumber)
+  )
+}
+
 const element = z
   .object({
     id,
     kind: z.enum(['figure', 'table', 'algorithm']),
     regions: z.array(region).min(1),
+    // Optional, independently proved native figure labels; never inferred from a crop box.
+    sourceItems: pdfTableSourceItemsSchema.optional(),
+    nativeBody: pdfNativeBodySchema.optional(),
     caption: z
       .object({ text: z.string(), regions: z.array(region).min(1) })
       .strict()
@@ -120,9 +317,33 @@ const element = z
       .optional(),
     tableNotes: tableNotes.optional(),
     thumbnailId: id.optional(),
+    // Element-wide issues only; grouped table parts retain their own issues.
     issues: z.array(issue)
   })
   .strict()
+  .refine(
+    (value) => !value.sourceItems || value.kind === 'figure',
+    'Only figures may own element-level native text.'
+  )
+  .refine(
+    (value) =>
+      !value.nativeBody ||
+      captionlessMathBody(value) ||
+      (!!value.caption &&
+        !value.nativeBody.boundary &&
+        !value.sourceItems &&
+        !value.table &&
+        !value.tableParts &&
+        !value.tableNotes &&
+        ((value.kind === 'algorithm' &&
+          value.nativeBody.kind === 'algorithm' &&
+          value.issues.length === 0) ||
+          (value.kind === 'table' &&
+            value.nativeBody.kind === 'math-table' &&
+            value.issues.length === 1 &&
+            value.issues[0].code === 'no-source-cell-grid'))),
+    'Native bodies require a complete captioned body or an independently bounded unreliable mathematical table.'
+  )
   .refine(
     (value) => value.kind === 'table' || (!value.table && !value.tableParts && !value.tableNotes),
     'Non-table element has table data.'
@@ -296,6 +517,54 @@ export const parsePdfStructureResult = (
   }
   const processed = new Set(result.processedPages)
   const sourceTexts = new Map<string, string>()
+  const sourceRanges = new Map<string, Array<{ start: number; end: number }>>()
+  const wholeSources = new Set<string>()
+  const figureSources = new Set<string>()
+  const bodySources = new Set<string>()
+  const captionlessBodyOwners = new Map<string, (typeof result.elements)[number]>()
+  for (const element of result.elements) {
+    const boundary = element.nativeBody?.boundary
+    if (!boundary) continue
+    const thumbnail = result.thumbnails.find((t) => t.id === element.thumbnailId),
+      page = result.pages.find((p) => p.page === boundary.pageNumber),
+      region = element.regions[0]
+    if (
+      !thumbnail ||
+      !page ||
+      page.rotation !== 0 ||
+      thumbnail.sha256 !== boundary.raster.sha256 ||
+      thumbnail.width !== boundary.raster.width ||
+      thumbnail.height !== boundary.raster.height ||
+      boundary.rules.some(
+        ({ segment: s, width, clip: c }) =>
+          c[0] < 0 ||
+          c[1] < 0 ||
+          c[2] > page.width ||
+          c[3] > page.height ||
+          s[0] < region.x * page.width ||
+          s[2] > (region.x + region.width) * page.width ||
+          s[1] - width / 2 < region.y * page.height ||
+          s[3] + width / 2 > (region.y + region.height) * page.height
+      )
+    )
+      throw new Error('Bounded mathematical body does not match its native page and PNG inventory.')
+  }
+  for (const element of result.elements)
+    for (const item of [
+      ...(element.sourceItems ?? []),
+      ...(element.nativeBody?.sourceItems ?? [])
+    ]) {
+      const key = `${item.pageNumber}:${item.index}`
+      if (
+        !processed.has(item.pageNumber) ||
+        !element.regions.some((r) => r.page === item.pageNumber)
+      )
+        throw new Error('PDF figure source item does not belong to its figure page.')
+      if (figureSources.has(key)) throw new Error('PDF figure source item has multiple owners.')
+      figureSources.add(key)
+      if (element.nativeBody) bodySources.add(key)
+      if (element.nativeBody?.boundary) captionlessBodyOwners.set(key, element)
+    }
   for (const element of result.elements) {
     const tables =
       element.tableParts?.map((part) => part.table) ?? (element.table ? [element.table] : [])
@@ -307,16 +576,41 @@ export const parsePdfStructureResult = (
     if (regions.some(({ page }) => !processed.has(page)))
       throw new Error('PDF element refers to an unprocessed page.')
     for (const cell of tables.flatMap((table) => table.cells)) {
-      for (const item of cell.sourceItems ?? []) {
+      for (const item of cell.sourceSegments ?? cell.sourceItems ?? []) {
         if (
           !processed.has(item.pageNumber) ||
           !cell.regions.some((r) => r.page === item.pageNumber)
         )
           throw new Error('PDF table source item does not belong to its cell page.')
         const key = `${item.pageNumber}:${item.index}`
+        if (figureSources.has(key) && captionlessBodyOwners.get(key) !== element)
+          throw new Error(
+            bodySources.has(key)
+              ? 'PDF text belongs to both a native body and a table.'
+              : 'PDF text belongs to both a figure and a table.'
+          )
         if (sourceTexts.has(key) && sourceTexts.get(key) !== item.text)
           throw new Error('PDF table source item has conflicting original text.')
         sourceTexts.set(key, item.text)
+        if (
+          'start' in item &&
+          'end' in item &&
+          typeof item.start === 'number' &&
+          typeof item.end === 'number'
+        ) {
+          if (wholeSources.has(key))
+            throw new Error('PDF source has both whole and segment ownership.')
+          const { start, end } = item
+          const previous = sourceRanges.get(key) ?? []
+          if (previous.some((range) => start < range.end && range.start < end))
+            throw new Error('PDF table source segments have overlapping ownership.')
+          previous.push({ start, end })
+          sourceRanges.set(key, previous)
+        } else {
+          if (sourceRanges.has(key))
+            throw new Error('PDF source has both whole and segment ownership.')
+          wholeSources.add(key)
+        }
       }
     }
     const noteRegions = [

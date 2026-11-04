@@ -1,5 +1,18 @@
 import {
+  literatureSnapshotRequestSchema,
+  literatureSnapshotResultSchema
+} from './literature-snapshot'
+import {
+  literaturePublicationCheckRequestSchema,
+  literaturePublicationCheckResultSchema,
+  literatureRelatedRequestSchema,
+  literatureRelatedResultSchema,
   literatureFullTextRequestSchema,
+  literatureFullTextProgressSchema,
+  literatureSupplementRequestSchema,
+  literatureSupplementAttachmentRequestSchema,
+  literatureSupplementAttachmentResultSchema,
+  literatureSupplementResultSchema,
   literatureMetadataCompletionRequestSchema
 } from '@aipoch/literature-discovery/contracts'
 
@@ -18,6 +31,7 @@ import { defineApplicationCommandContract, validationCodec } from './application
 import { uploadedAttachmentSchema } from './uploads'
 
 import {
+  LITERATURE_INBOX_STATES,
   literatureCatalogCommandSchema,
   literatureCatalogReceiptSchema,
   literatureCatalogSearchRequestSchema,
@@ -43,6 +57,33 @@ import {
 import { literatureItemInputSchema } from '@aipoch/literature-library/item'
 
 const nonEmptyTextSchema = z.string().trim().min(1)
+
+// Read current state without changing the immutable tool receipt that supplied these IDs.
+export const literatureCandidateStatesRequestSchema = z
+  .object({ candidateIds: z.array(nonEmptyTextSchema.max(256)).min(1).max(200) })
+  .strict()
+
+export const literatureCandidateStatesResultSchema = z
+  .object({
+    candidates: z
+      .array(
+        z
+          .object({
+            candidateId: nonEmptyTextSchema,
+            state: z.enum(LITERATURE_INBOX_STATES),
+            // Omitted when the accepted reference is no longer available.
+            acceptedItemId: nonEmptyTextSchema.optional()
+          })
+          .strict()
+      )
+      .max(200)
+  })
+  .strict()
+
+export type LiteratureCandidateStatesRequest = z.infer<
+  typeof literatureCandidateStatesRequestSchema
+>
+export type LiteratureCandidateStatesResult = z.infer<typeof literatureCandidateStatesResultSchema>
 
 export const literatureAnnotationSearchViewSchema = z
   .object({
@@ -85,6 +126,30 @@ export const pdfAddToLiteratureContract = defineApplicationCommandContract(
 )
 
 const literatureApplicationCommandContracts = Object.freeze({
+  getCandidateStates: defineApplicationCommandContract(
+    validationCodec(z.tuple([literatureCandidateStatesRequestSchema])),
+    validationCodec(literatureCandidateStatesResultSchema)
+  ),
+  supplementAttachmentProgress: defineApplicationCommandContract(
+    validationCodec(z.tuple([literatureSupplementAttachmentRequestSchema])),
+    validationCodec(literatureFullTextProgressSchema.nullable())
+  ),
+  supplementAttachment: defineApplicationCommandContract(
+    validationCodec(z.tuple([literatureSupplementAttachmentRequestSchema])),
+    validationCodec(literatureSupplementAttachmentResultSchema)
+  ),
+  publicationCheck: defineApplicationCommandContract(
+    validationCodec(z.tuple([literaturePublicationCheckRequestSchema])),
+    validationCodec(literaturePublicationCheckResultSchema)
+  ),
+  related: defineApplicationCommandContract(
+    validationCodec(z.tuple([literatureRelatedRequestSchema])),
+    validationCodec(literatureRelatedResultSchema)
+  ),
+  supplements: defineApplicationCommandContract(
+    validationCodec(z.tuple([literatureSupplementRequestSchema])),
+    validationCodec(literatureSupplementResultSchema)
+  ),
   fullText: defineApplicationCommandContract(
     validationCodec(z.tuple([literatureFullTextRequestSchema])),
     validationCodec(literatureFullTextResultSchema)
@@ -121,10 +186,16 @@ const literatureApplicationCommandContracts = Object.freeze({
           .trim()
           .min(1)
           .max(2048)
-          .regex(/^(?:10\.\d{4,9}\/\S+|pmid:\d+)$/u)
+          .regex(
+            /^(?:10\.\d{4,9}\/\S+|pmid:\d+|pmcid:PMC[1-9]\d{0,8}|arxiv:(?:\d{4}\.\d{4,5}|[a-z][a-z.-]*\/\d{7}))$/u
+          )
       ])
     ),
     validationCodec(literatureItemInputSchema)
+  ),
+  studySnapshot: defineApplicationCommandContract(
+    validationCodec(z.tuple([literatureSnapshotRequestSchema])),
+    validationCodec(literatureSnapshotResultSchema)
   ),
   completeMetadata: defineApplicationCommandContract(
     validationCodec(z.tuple([literatureMetadataCompletionRequestSchema])),
@@ -161,3 +232,8 @@ export {
 }
 
 export type { LiteratureCatalogSearchPage, LiteraturePdfImportRequest }
+
+export {
+  literatureIssuedYear,
+  normalizeLiteratureIdentifierKey
+} from '@aipoch/literature-citations/contracts'

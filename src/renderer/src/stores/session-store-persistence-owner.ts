@@ -1,3 +1,4 @@
+import { hasPendingSandboxNetworkApproval } from '../../../shared/sandbox-network-approval'
 import type { ToolCallContent, ToolCallLocation, ToolKind } from '@agentclientprotocol/sdk'
 import type { StoreApi } from 'zustand'
 import type { ChatArtifact, ChatMessage, ChatSession, ToolActivity } from './session-store-contract'
@@ -140,10 +141,16 @@ export const retainSessionRecoveryDrafts = (
   session: ChatSession,
   previous: ChatSession
 ): ChatSession => {
-  if (!previous.unsavedTitle && !previous.elicitationEditDrafts) return session
+  if (
+    !previous.unsavedTitle &&
+    !previous.elicitationEditDrafts &&
+    previous.firstPromptDraft === undefined
+  )
+    return session
   const retained: ChatSession = {
     ...session,
     elicitationEditDrafts: previous.elicitationEditDrafts,
+    firstPromptDraft: previous.firstPromptDraft,
     ...(previous.unsavedTitle ? { title: previous.title, unsavedTitle: true } : {})
   }
   const authority = externallyHydratedSessionAuthorities.get(session)
@@ -281,6 +288,7 @@ export const toPersistedSession = (
     activityGroups,
     isPending,
     pendingBindingSessionId,
+    firstPromptDraft,
     wslSetup,
     delegationPolicyAuthorityPending,
     unsavedTitle,
@@ -298,6 +306,7 @@ export const toPersistedSession = (
     conversationGraphSyncBlocked,
     pendingContextReplayMessageId,
     interactionState,
+    liveInteractionState,
     activePlanProjection,
     contentLoaded,
     historyPage,
@@ -314,6 +323,7 @@ export const toPersistedSession = (
   } = session
 
   void isPending
+  void firstPromptDraft
   void pendingBindingSessionId
   void wslSetup
   void delegationPolicyAuthorityPending
@@ -332,6 +342,7 @@ export const toPersistedSession = (
   void conversationGraphSyncBlocked
   void pendingContextReplayMessageId
   void interactionState
+  void liveInteractionState
   void activePlanProjection
   void contentLoaded
   void historyPage
@@ -543,6 +554,7 @@ const withTransientSessionState = (
       sortIndex: sourceMessages.get(message.id)?.sortIndex
     })),
     isPending: source.isPending,
+    firstPromptDraft: source.firstPromptDraft,
     pendingBindingSessionId: source.pendingBindingSessionId,
     wslSetup: source.wslSetup,
     interrupted: source.interrupted ?? hydrated.interrupted,
@@ -572,6 +584,7 @@ const withTransientSessionState = (
     conversationGraphSyncBlocked: source.conversationGraphSyncBlocked,
     pendingContextReplayMessageId: source.pendingContextReplayMessageId,
     interactionState: source.interactionState,
+    liveInteractionState: source.liveInteractionState,
     // Recompute durable Attention from the fresh save receipt so a successful
     // newer turn clears the previous turn's badge. Keep only the local graph-sync
     // problem from the source projection; it is intentionally renderer-scoped.
@@ -609,7 +622,8 @@ const projectDurablePlanAuthority = (
     ? current.status
     : resolveSessionInteractionStatus(
         { ...current, runtimeContext: durable.runtimeContext },
-        interactionState
+        interactionState,
+        current.liveInteractionState?.presentationOnly !== true
       )
   return {
     ...current,
@@ -1062,14 +1076,19 @@ export const createSessionPersistenceOwner = <State extends SessionStoreData>(
       }
 
       if (mode === 'permission-authority') {
-        const permissionPending = session.runtimeContext?.permission?.state === 'pending'
+        const permissionPending =
+          (current.liveInteractionState?.presentationOnly !== true &&
+            current.liveInteractionState?.permission === true) ||
+          session.runtimeContext?.permission?.state === 'pending' ||
+          hasPendingSandboxNetworkApproval(session)
         const interactionState = {
           ...inferSessionInteractionState(current),
           permission: permissionPending
         }
         const status = resolveSessionInteractionStatus(
           { ...current, runtimeContext: session.runtimeContext },
-          interactionState
+          interactionState,
+          current.liveInteractionState?.presentationOnly !== true
         )
         const projected: ChatSession = {
           ...archive,
@@ -1106,7 +1125,11 @@ export const createSessionPersistenceOwner = <State extends SessionStoreData>(
           activePlanProjection.revision > incomingRevision
         const interactionState = {
           ...inferSessionInteractionState(current),
-          permission: session.runtimeContext?.permission?.state === 'pending',
+          permission:
+            (current.liveInteractionState?.presentationOnly !== true &&
+              current.liveInteractionState?.permission === true) ||
+            session.runtimeContext?.permission?.state === 'pending' ||
+            hasPendingSandboxNetworkApproval(session),
           plan: projectionIsNewer
             ? activePlanProjection.approval === 'pending'
             : session.runtimeContext?.plan?.approval === 'pending'
@@ -1115,7 +1138,8 @@ export const createSessionPersistenceOwner = <State extends SessionStoreData>(
           ? current.status
           : resolveSessionInteractionStatus(
               { ...current, runtimeContext: session.runtimeContext },
-              interactionState
+              interactionState,
+              current.liveInteractionState?.presentationOnly !== true
             )
         const projected: ChatSession = {
           ...archive,

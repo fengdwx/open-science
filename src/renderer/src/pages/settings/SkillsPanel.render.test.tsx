@@ -5,11 +5,15 @@ import {
 } from '../../../../shared/__fixtures__/skill-marketplace'
 // @vitest-environment jsdom
 import { act } from 'react'
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { SkillImportPreviewContent } from '../../../../shared/settings'
-import type { AgentHomeSkillView } from '@aipoch/skills/document'
+import type { AgentHomeSkillRef, AgentHomeSkillView } from '@aipoch/skills/document'
+import { AgentHomeSkillCatalog, UserSkillRepository } from '@aipoch/skills'
 import { SkillsPanel } from './SkillsPanel'
 import { SKILL_IMPORT_LIMITS } from '@aipoch/skills/document'
 import { createInitialSettingsState, useSettingsStore } from '@/stores/settings-store'
@@ -68,6 +72,9 @@ beforeEach(() => {
   })
   ;(window as unknown as { api: unknown }).api = {
     settings: {
+      listSkillSources: vi.fn().mockResolvedValue([]),
+      addSkillSource: vi.fn().mockResolvedValue([]),
+      removeSkillSource: vi.fn().mockResolvedValue([]),
       getGitHubTokenStatus: vi.fn().mockResolvedValue({ configured: false }),
       saveGitHubToken: vi.fn(),
       removeGitHubToken: vi.fn()
@@ -989,6 +996,27 @@ describe('SkillsPanel (list view)', () => {
 })
 
 describe('SkillsPanel (sub-views)', () => {
+  it('scans a saved repository through the existing import flow', async () => {
+    vi.mocked(window.api.settings.listSkillSources).mockResolvedValue([
+      { id: 'bookmark', repository: 'owner/repo', ref: 'published' }
+    ])
+    await act(async () =>
+      root.render(<SkillsPanel view={{ kind: 'import' }} onNavigate={vi.fn()} />)
+    )
+    expect(useSettingsStore.getState().scanRepoSkills).not.toHaveBeenCalled()
+    await act(async () => {
+      ;[...container.querySelectorAll('button')]
+        .find((button) => button.textContent?.includes('owner/repo'))!
+        .click()
+    })
+    expect(useSettingsStore.getState().scanRepoSkills).toHaveBeenCalledWith('owner/repo@published')
+    expect(container.querySelector('input')?.value).toBe('owner/repo@published')
+    expect(container.textContent).toContain('Foo')
+    expect(container.textContent).toContain('Saved')
+    expect(window.api.settings.addSkillSource).not.toHaveBeenCalled()
+    expect(useSettingsStore.getState().importSkill).not.toHaveBeenCalled()
+  })
+
   it('preserves imported frontmatter metadata when saving an edited skill', async () => {
     ;(window as unknown as { api: unknown }).api = {
       settings: {
@@ -1225,31 +1253,337 @@ describe('SkillsPanel (sub-views)', () => {
     )
   })
 
-  it('syncs identity edits made in visible imported frontmatter', () => {
-    act(() => {
-      root.render(<SkillsPanel view={{ kind: 'create' }} onNavigate={vi.fn()} />)
-    })
-    pasteValue(
-      'Skill body',
-      ['---', 'name: original', 'description: Before', 'author: Ada', '---', '# Body'].join('\n')
-    )
-    setValue(
-      'Skill body',
-      ['---', 'name: revised', 'description: After', 'author: Ada', '---', '# Body'].join('\n')
+  it.each(['body', 'metadata', 'remove-header'] as const)(
+    'preserves top-level identity edits when imported content changes only %s',
+    (change) => {
+      act(() => {
+        root.render(<SkillsPanel view={{ kind: 'create' }} onNavigate={vi.fn()} />)
+      })
+      const imported = [
+        '---',
+        'name: original',
+        'description: Before',
+        'author: Ada',
+        '---',
+        '# Body'
+      ].join('\n')
+      pasteValue('Skill body', imported)
+      setValue('Skill name', 'my-new-skill')
+      setValue('Skill description', 'My revised description')
+      setValue(
+        'Skill body',
+        change === 'body'
+          ? `${imported}\nAdditional instruction.`
+          : change === 'metadata'
+            ? imported.replace('author: Ada', 'author: Grace')
+            : '# Body'
+      )
+
+      expect(
+        document.body.querySelector<HTMLInputElement>('[aria-label="Skill name"]')?.value
+      ).toBe('my-new-skill')
+      expect(
+        document.body.querySelector<HTMLTextAreaElement>('[aria-label="Skill description"]')?.value
+      ).toBe('My revised description')
+      const publish = Array.from(document.body.querySelectorAll<HTMLButtonElement>('button')).find(
+        (button) => button.textContent?.trim() === 'Create skill'
+      )
+      act(() => publish?.click())
+
+      expect(useSettingsStore.getState().createSkill).toHaveBeenCalledWith({
+        name: 'my-new-skill',
+        description: 'My revised description',
+        body: change === 'body' ? '# Body\nAdditional instruction.' : '# Body',
+        ...(change === 'remove-header'
+          ? {}
+          : { metadata: { author: change === 'metadata' ? 'Grace' : 'Ada' } }),
+        references: []
+      })
+    }
+  )
+
+  it.each(['body', 'header', 'body-after-invalid', 'header-after-invalid'] as const)(
+    'keeps the edit name immutable and saves the description after %s edits',
+    async (change) => {
+      Object.assign(window.api.settings, {
+        getSkillDetail: vi.fn().mockResolvedValue({
+          id: 'personal-mine',
+          etag: 'version',
+          name: 'Mine',
+          description: 'Custom',
+          source: 'personal',
+          updatedAt: '2026-07-08T00:00:00.000Z',
+          enabled: true,
+          body: '# Body',
+          references: []
+        })
+      })
+      await act(async () => {
+        root.render(
+          <SkillsPanel view={{ kind: 'edit', id: 'personal-mine' }} onNavigate={vi.fn()} />
+        )
+      })
+      const imported = [
+        '---',
+        'name: original',
+        'description: Before',
+        'author: Ada',
+        '---',
+        '# Body'
+      ].join('\n')
+      pasteValue('Skill body', imported)
+      setValue('Skill description', 'My revised description')
+      setValue('Skill body', `${imported}\nAdditional instruction.`)
+      if (change.endsWith('-after-invalid')) {
+        setValue(
+          'Skill body',
+          `${imported.replace('author: Ada', 'author: "Ada')}\nAdditional instruction.`
+        )
+        setValue('Skill body', `${imported}\nAdditional instruction.`)
+      }
+      expect(
+        document.body.querySelector<HTMLTextAreaElement>('[aria-label="Skill description"]')?.value
+      ).toBe('My revised description')
+      if (change.startsWith('header')) {
+        setValue(
+          'Skill body',
+          imported
+            .replace('name: original', 'name: revised')
+            .replace('description: Before', 'description: After')
+        )
+      }
+      const name = document.body.querySelector<HTMLInputElement>('[aria-label="Skill name"]')!
+      expect(name.disabled).toBe(true)
+      expect(name.value).toBe('Mine')
+      expect(
+        document.body.querySelector<HTMLTextAreaElement>('[aria-label="Skill description"]')?.value
+      ).toBe(change.startsWith('header') ? 'After' : 'My revised description')
+      const save = Array.from(document.body.querySelectorAll<HTMLButtonElement>('button')).find(
+        (button) => button.textContent?.trim() === 'Save'
+      )
+      await act(async () => save?.click())
+      expect(useSettingsStore.getState().updateSkill).toHaveBeenCalledWith({
+        id: 'personal-mine',
+        etag: 'version',
+        description: change.startsWith('header') ? 'After' : 'My revised description',
+        body: change.startsWith('header') ? '# Body' : '# Body\nAdditional instruction.',
+        metadata: { author: 'Ada' },
+        references: []
+      })
+    }
+  )
+
+  it.each(['name', 'description', 'both'] as const)(
+    'syncs only changed identity fields in visible imported frontmatter: %s',
+    (change) => {
+      act(() => {
+        root.render(<SkillsPanel view={{ kind: 'create' }} onNavigate={vi.fn()} />)
+      })
+      pasteValue(
+        'Skill body',
+        ['---', 'name: original', 'description: Before', 'author: Ada', '---', '# Body'].join('\n')
+      )
+      setValue('Skill name', 'top-level-name')
+      setValue('Skill description', 'Top-level description')
+      setValue(
+        'Skill body',
+        [
+          '---',
+          `name: ${change === 'description' ? 'original' : 'revised'}`,
+          `description: ${change === 'name' ? 'Before' : 'After'}`,
+          'author: Ada',
+          '---',
+          '# Body'
+        ].join('\n')
+      )
+
+      const publish = Array.from(document.body.querySelectorAll<HTMLButtonElement>('button')).find(
+        (button) => button.textContent?.trim() === 'Create skill'
+      )
+      act(() => publish?.click())
+
+      expect(useSettingsStore.getState().createSkill).toHaveBeenCalledWith({
+        name: change === 'description' ? 'top-level-name' : 'revised',
+        description: change === 'name' ? 'Top-level description' : 'After',
+        body: '# Body',
+        metadata: { author: 'Ada' },
+        references: []
+      })
+    }
+  )
+
+  describe('imported identity parse recovery', () => {
+    const imported = [
+      '---',
+      'name: original',
+      'description: Before',
+      'author: Ada',
+      '---',
+      '# Body'
+    ].join('\n')
+    const mountCreate = (): void => {
+      act(() => root.render(<SkillsPanel view={{ kind: 'create' }} onNavigate={vi.fn()} />))
+    }
+    const overrideIdentity = (): void => {
+      setValue('Skill name', 'top-level-name')
+      setValue('Skill description', 'Top-level description')
+    }
+    const expectIdentity = (name: string, description: string): void => {
+      expect(
+        document.body.querySelector<HTMLInputElement>('[aria-label="Skill name"]')?.value
+      ).toBe(name)
+      expect(
+        document.body.querySelector<HTMLTextAreaElement>('[aria-label="Skill description"]')?.value
+      ).toBe(description)
+    }
+    const publish = (): void => {
+      const button = Array.from(document.body.querySelectorAll<HTMLButtonElement>('button')).find(
+        (button) => button.textContent?.trim() === 'Create skill'
+      )!
+      act(() => button.click())
+    }
+
+    it.each(['none', 'name', 'description', 'both'] as const)(
+      'retains the last valid baseline and syncs only %s changed during invalid YAML',
+      (change) => {
+        mountCreate()
+        pasteValue('Skill body', imported)
+        overrideIdentity()
+        let raw = imported.replace('author: Ada', 'author: "Ada')
+        setValue('Skill body', raw)
+        expectIdentity('top-level-name', 'Top-level description')
+        if (change === 'name' || change === 'both') {
+          raw = raw.replace('name: original', 'name: header-name')
+        }
+        if (change === 'description' || change === 'both') {
+          raw = raw.replace('description: Before', 'description: Header description')
+        }
+        setValue('Skill body', raw)
+        expectIdentity('top-level-name', 'Top-level description')
+        setValue('Skill body', raw.replace('author: "Ada', 'author: "Ada"'))
+        const name = change === 'name' || change === 'both' ? 'header-name' : 'top-level-name'
+        const description =
+          change === 'description' || change === 'both'
+            ? 'Header description'
+            : 'Top-level description'
+        expectIdentity(name, description)
+        publish()
+        expect(useSettingsStore.getState().createSkill).toHaveBeenCalledWith({
+          name,
+          description,
+          body: '# Body',
+          metadata: { author: 'Ada' },
+          references: []
+        })
+      }
     )
 
-    const publish = Array.from(document.body.querySelectorAll<HTMLButtonElement>('button')).find(
-      (button) => button.textContent?.trim() === 'Create skill'
+    it.each(['author: Ada', '{}', 'null'])(
+      'updates the valid missing-field baseline for %s before reintroducing identical values',
+      (header) => {
+        mountCreate()
+        pasteValue('Skill body', imported)
+        overrideIdentity()
+        setValue('Skill body', `---\n${header}\n---\n# Body`)
+        expectIdentity('top-level-name', 'Top-level description')
+        setValue('Skill body', imported)
+        expectIdentity('original', 'Before')
+        publish()
+        expect(useSettingsStore.getState().createSkill).toHaveBeenCalledWith({
+          name: 'original',
+          description: 'Before',
+          body: '# Body',
+          metadata: { author: 'Ada' },
+          references: []
+        })
+      }
     )
-    act(() => publish?.click())
 
-    expect(useSettingsStore.getState().createSkill).toHaveBeenCalledWith({
-      name: 'revised',
-      description: 'After',
-      body: '# Body',
-      metadata: { author: 'Ada' },
-      references: []
-    })
+    it.each([
+      'prefilled',
+      'filled-after-import',
+      'empty-name',
+      'empty-description',
+      'empty-both'
+    ] as const)(
+      'fills only empty fields on first valid parse after an invalid import: %s',
+      (fields) => {
+        mountCreate()
+        if (fields === 'prefilled') overrideIdentity()
+        if (fields === 'empty-name') setValue('Skill description', 'Top-level description')
+        if (fields === 'empty-description') setValue('Skill name', 'top-level-name')
+        pasteValue('Skill body', imported.replace('author: Ada', 'author: "Ada'))
+        if (fields === 'filled-after-import') overrideIdentity()
+        const name =
+          fields === 'empty-name' || fields === 'empty-both' ? 'original' : 'top-level-name'
+        const description =
+          fields === 'empty-description' || fields === 'empty-both'
+            ? 'Before'
+            : 'Top-level description'
+        setValue('Skill body', imported)
+        expectIdentity(name, description)
+        publish()
+        expect(useSettingsStore.getState().createSkill).toHaveBeenCalledWith({
+          name,
+          description,
+          body: '# Body',
+          metadata: { author: 'Ada' },
+          references: []
+        })
+      }
+    )
+
+    it.each(['valid', 'invalid'] as const)(
+      'resets the comparison baseline for an explicit %s reimport',
+      (validity) => {
+        mountCreate()
+        pasteValue('Skill body', imported)
+        overrideIdentity()
+        setValue('Skill body', imported + '\nInitial body edit.')
+        const replacement =
+          validity === 'valid'
+            ? imported.replace('name: original', 'name: replacement')
+            : imported
+                .replace('name: original', 'name: replacement')
+                .replace('author: Ada', 'author: "Ada')
+        pasteValue('Skill body', replacement)
+        expectIdentity('top-level-name', 'Top-level description')
+        setValue('Skill body', replacement.replace('author: "Ada', 'author: "Ada"') + '\nExtra.')
+        const name = 'top-level-name'
+        const description = 'Top-level description'
+        expectIdentity(name, description)
+        publish()
+        expect(useSettingsStore.getState().createSkill).toHaveBeenCalledWith({
+          name,
+          description,
+          body: '# Body\nExtra.',
+          metadata: { author: 'Ada' },
+          references: []
+        })
+      }
+    )
+
+    it.each(['literal', 'import'] as const)(
+      'retains existing %s semantics after removing an imported header',
+      (mode) => {
+        mountCreate()
+        pasteValue('Skill body', imported)
+        overrideIdentity()
+        setValue('Skill body', '# Plain body')
+        if (mode === 'literal') setValue('Skill body', imported)
+        else pasteValue('Skill body', imported)
+        setValue('Skill body', imported + '\nExtra.')
+        expectIdentity('top-level-name', 'Top-level description')
+        publish()
+        expect(useSettingsStore.getState().createSkill).toHaveBeenCalledWith({
+          name: 'top-level-name',
+          description: 'Top-level description',
+          body: mode === 'literal' ? imported + '\nExtra.' : '# Body\nExtra.',
+          ...(mode === 'import' ? { metadata: { author: 'Ada' } } : {}),
+          references: []
+        })
+      }
+    )
   })
 
   it('uses one Content mode Tab stop and switches mode with ArrowRight', async () => {
@@ -2154,6 +2488,189 @@ describe('SkillsPanel (sub-views)', () => {
     expect(document.body.textContent).not.toContain('~/.claude/skills')
     expect(document.body.textContent).not.toContain('~/.codex/skills')
   })
+
+  it.each([256, 257])(
+    'imports all %i preselected installed skills through the bounded catalog',
+    async (count) => {
+      const directory = await mkdtemp(join(tmpdir(), 'installed-skill-selection-'))
+      try {
+        const home = join(directory, 'agents', 'skills')
+        await Promise.all(
+          Array.from({ length: count }, async (_, index) => {
+            const slug = `skill-${index}`
+            const path = join(home, slug)
+            await mkdir(path, { recursive: true })
+            await writeFile(
+              join(path, 'SKILL.md'),
+              `---\nname: ${slug}\ndescription: Installed skill ${index}\n---\n# ${slug}\n`
+            )
+          })
+        )
+        const repository = new UserSkillRepository(join(directory, 'data'))
+        const catalog = new AgentHomeSkillCatalog(repository)
+        const sources = [{ source: 'agents' as const, dir: home }]
+        let completed = 0
+        let scans = 0
+        let importError: unknown
+        const importSkills = vi.fn(async (refs: AgentHomeSkillRef[]) => {
+          try {
+            const results = await catalog.importAgentHomeSkills(sources, refs)
+            completed += results.length
+            return { results, skills: [] }
+          } catch (error) {
+            importError = error
+            throw error
+          }
+        })
+        // Only replace the transport; discovery, request validation and disk writes are real.
+        useSettingsStore.setState({
+          listAgentHomeSkills: async () => {
+            const skills = await catalog.list(sources)
+            scans += 1
+            return skills
+          },
+          importAgentHomeSkills: importSkills
+        })
+        await act(async () => {
+          root.render(<SkillsPanel view={{ kind: 'import-agent-home' }} onNavigate={vi.fn()} />)
+        })
+        await vi.waitFor(
+          () => expect(document.body.textContent).toContain(`Import selected (${count})`),
+          { timeout: 10_000 }
+        )
+        await act(async () => {
+          const button = Array.from(
+            document.body.querySelectorAll<HTMLButtonElement>('button')
+          ).find((candidate) => candidate.textContent === `Import selected (${count})`)
+          expect(button).toBeDefined()
+          button!.click()
+          await vi.waitFor(
+            () =>
+              expect(importError !== undefined || (completed === count && scans === 2)).toBe(true),
+            { timeout: 20_000 }
+          )
+        })
+
+        expect(importError, String(importError)).toBeUndefined()
+        expect(await repository.list()).toHaveLength(count)
+        expect(document.body.textContent).toContain(`Imported ${count} skills.`)
+      } finally {
+        await rm(directory, { recursive: true, force: true })
+      }
+    },
+    30_000
+  )
+
+  it.each(['item failure', 'request failure'] as const)(
+    'preserves confirmed installed-skill outcomes after a later %s',
+    async (failure) => {
+      const skills: AgentHomeSkillView[] = Array.from({ length: 513 }, (_, index) => ({
+        source: 'agents',
+        slug: `skill-${index}`,
+        name: `Skill ${index}`,
+        description: '',
+        alreadyImported: false
+      }))
+      const listAgentHomeSkills = vi.fn().mockResolvedValueOnce(skills).mockResolvedValue([])
+      const importAgentHomeSkills = vi.fn(async (refs: AgentHomeSkillRef[]) => {
+        if (failure === 'request failure' && refs[0].slug === 'skill-256') {
+          throw new Error('Connection lost')
+        }
+        return {
+          results: refs.map((ref) =>
+            ref.slug === 'skill-256'
+              ? { ...ref, error: 'Invalid skill document' }
+              : { ...ref, status: 'imported' as const, id: `imported-${ref.slug}` }
+          ),
+          skills: []
+        }
+      })
+      useSettingsStore.setState({ listAgentHomeSkills, importAgentHomeSkills })
+      await act(async () => {
+        root.render(<SkillsPanel view={{ kind: 'import-agent-home' }} onNavigate={vi.fn()} />)
+      })
+      await act(async () => {
+        const button = Array.from(document.body.querySelectorAll<HTMLButtonElement>('button')).find(
+          (candidate) => candidate.textContent === 'Import selected (513)'
+        )
+        expect(button).toBeDefined()
+        button!.click()
+      })
+
+      expect(listAgentHomeSkills).toHaveBeenCalledTimes(2)
+      if (failure === 'item failure') {
+        expect(importAgentHomeSkills.mock.calls.map(([refs]) => refs.length)).toEqual([256, 256, 1])
+        expect(document.body.textContent).toContain(
+          'Imported 512; 1 failed. Invalid skill document'
+        )
+      } else {
+        expect(importAgentHomeSkills.mock.calls.map(([refs]) => refs.length)).toEqual([256, 256])
+        expect(document.body.textContent).toContain('Imported 256 skills. Connection lost')
+      }
+    }
+  )
+
+  it.each(['switch framework', 'switch away and back', 'leave import view'] as const)(
+    'stops submitting installed-skill batches when users %s',
+    async (navigation) => {
+      const skills: AgentHomeSkillView[] = Array.from({ length: 257 }, (_, index) => ({
+        source: 'agents',
+        slug: `skill-${index}`,
+        name: `Skill ${index}`,
+        description: '',
+        alreadyImported: false
+      }))
+      let finishBatch: () => void = () => undefined
+      const pending = new Promise<void>((resolve) => {
+        finishBatch = resolve
+      })
+      const importAgentHomeSkills = vi.fn(async (refs: AgentHomeSkillRef[]) => {
+        await pending
+        return {
+          results: refs.map((ref) => ({
+            ...ref,
+            status: 'imported' as const,
+            id: `imported-${ref.slug}`
+          })),
+          skills: []
+        }
+      })
+      const listAgentHomeSkills = vi.fn().mockResolvedValueOnce(skills).mockResolvedValue([])
+      useSettingsStore.setState({
+        agentFrameworkId: 'claude-code',
+        listAgentHomeSkills,
+        importAgentHomeSkills
+      })
+      await act(async () => {
+        root.render(<SkillsPanel view={{ kind: 'import-agent-home' }} onNavigate={vi.fn()} />)
+      })
+      await act(async () => {
+        const button = Array.from(document.body.querySelectorAll<HTMLButtonElement>('button')).find(
+          (candidate) => candidate.textContent === 'Import selected (257)'
+        )
+        expect(button).toBeDefined()
+        button!.click()
+      })
+      expect(importAgentHomeSkills).toHaveBeenCalledTimes(1)
+      expect(importAgentHomeSkills.mock.calls[0][0]).toHaveLength(256)
+      expect(document.body.querySelector<HTMLButtonElement>('button')?.disabled).toBe(true)
+      await act(async () => {
+        if (navigation === 'leave import view') root.render(<div />)
+        else useSettingsStore.setState({ agentFrameworkId: 'codex' })
+      })
+      if (navigation === 'switch away and back') {
+        await act(async () => useSettingsStore.setState({ agentFrameworkId: 'claude-code' }))
+      }
+      const scansBeforeCompletion = listAgentHomeSkills.mock.calls.length
+      await act(async () => {
+        finishBatch()
+        await pending
+      })
+      expect(importAgentHomeSkills).toHaveBeenCalledTimes(1)
+      expect(listAgentHomeSkills).toHaveBeenCalledTimes(scansBeforeCompletion)
+      expect(document.body.textContent).not.toContain('Imported 256 skills.')
+    }
+  )
 
   it('invalidates installed-skill rows while a framework-switch rescan is pending', async () => {
     let finishCodexScan: (skills: []) => void = () => undefined

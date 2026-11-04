@@ -65,8 +65,8 @@ import {
   toPersistedSession,
   useSessionStore
 } from '../../stores/session-store'
+import type { ChatSession } from '../../stores/session-store-contract'
 import type {
-  ChatSession,
   SessionHydrationSelection,
   StreamingMessageContentByMessageId
 } from '../../stores/session-store'
@@ -102,15 +102,60 @@ type SessionPersistenceApi = {
 type SessionReadApi = Pick<SessionPersistenceApi, 'loadAll'> &
   Partial<Pick<SessionPersistenceApi, 'loadOne'>>
 
+const SESSION_CONTENT_CACHE_LIMIT = 4
+const sessionContentCache = new Map<string, { revision: number; session: PersistedChatSession }>()
+
+const sessionContentCacheKey = (request: LoadSessionRequest): string =>
+  `${request.projectId}\0${request.sessionId}`
+
+const cacheSessionContent = (session: PersistedChatSession): void => {
+  if (typeof session.revision !== 'number') return
+  const key = sessionContentCacheKey({ projectId: session.projectId, sessionId: session.id })
+  sessionContentCache.delete(key)
+  sessionContentCache.set(key, { revision: session.revision, session })
+  while (sessionContentCache.size > SESSION_CONTENT_CACHE_LIMIT) {
+    const oldest = sessionContentCache.keys().next().value
+    if (oldest === undefined) break
+    sessionContentCache.delete(oldest)
+  }
+}
+
+const resetSessionContentCacheForTests = (): void => {
+  sessionContentCache.clear()
+}
+
 const loadPersistedSession = async (
   request: LoadSessionRequest,
-  api: SessionReadApi = window.api.sessions
+  api: SessionReadApi = window.api.sessions,
+  options: { bypassCache?: boolean } = {}
 ): Promise<PersistedChatSession | undefined> => {
-  if (typeof api.loadOne === 'function') return api.loadOne(request)
+  const storeSummary = useSessionStore
+    .getState()
+    .sessions.find(
+      (session) => session.id === request.sessionId && session.projectId === request.projectId
+    )
+  if (!options.bypassCache) {
+    const cached = sessionContentCache.get(sessionContentCacheKey(request))
+    if (
+      cached &&
+      storeSummary &&
+      typeof storeSummary.revision === 'number' &&
+      storeSummary.revision === cached.revision
+    ) {
+      return cached.session
+    }
+  }
+  if (typeof api.loadOne === 'function') {
+    const result = await api.loadOne(request)
+    if (result) cacheSessionContent(result)
+    return result
+  }
   const result = await api.loadAll()
-  return result.sessions.find(
-    (session) => session.id === request.sessionId && session.projectId === request.projectId
+  const session = result.sessions.find(
+    (candidate) => candidate.id === request.sessionId && candidate.projectId === request.projectId
   )
+  if (session) cacheSessionContent(session)
+  return session
 }
 
 // A metadata receipt acknowledges only the requested display fields. It never proves that a
@@ -171,8 +216,12 @@ const hydratePersistedSessionIfPresent = (
     )
 }
 
-const deleteSession = (request: DeleteSessionRequest): Promise<SessionDeletionResult> =>
-  window.api.sessions.deleteSession(request)
+const deleteSession = (request: DeleteSessionRequest): Promise<SessionDeletionResult> => {
+  sessionContentCache.delete(
+    sessionContentCacheKey({ projectId: request.projectId, sessionId: request.sessionId })
+  )
+  return window.api.sessions.deleteSession(request)
+}
 
 const MAX_HISTORY_BODY_BYTES = 64 * 1024 * 1024
 
@@ -1267,7 +1316,11 @@ const createOrderedSessionPersistence = (
           await Promise.allSettled([...deferredSaves])
           if (queue === draining && deferredSaves.size === 0) break
         }
-        const failure = failedWritesByTarget.values().next()
+        const failure = target
+          ? failedWritesByTarget.has(target)
+            ? { done: false, value: failedWritesByTarget.get(target) }
+            : { done: true }
+          : failedWritesByTarget.values().next()
         if (!failure.done) throw failure.value
         const deferredTarget = target
           ? deferredConversationCommandTargets.has(target)
@@ -1324,7 +1377,8 @@ const saveSessionInOrder = async (
                 projectId: submitted.projectId,
                 sessionId: submitted.id
               },
-              api
+              api,
+              { bypassCache: true }
             ),
           retry
         )
@@ -1391,7 +1445,11 @@ const flushSessionPersistence = async (target?: string): Promise<void> => {
     await retryDeferredSessionPersistence(target)
     await liveSessionPersistence.flush(target)
   }
-  if (unresolvedSessionRevisionConflictTargets.size > 0) {
+  if (
+    target
+      ? unresolvedSessionRevisionConflictTargets.has(target)
+      : unresolvedSessionRevisionConflictTargets.size > 0
+  ) {
     throw new SessionPersistenceFlushConflictError()
   }
 }
@@ -1502,7 +1560,11 @@ const retryPendingArtifactFinalization = async (
     }
     // Main owns Artifact publication and outcome repair. The command result is only file metadata;
     // refresh its committed Session instead of reconstructing a competing renderer settlement.
-    const authority = await loadPersistedSession({ projectId: session.projectId, sessionId })
+    const authority = await loadPersistedSession(
+      { projectId: session.projectId, sessionId },
+      undefined,
+      { bypassCache: true }
+    )
     if (!authority) throw new Error('Session not found.')
     useSessionStore.getState().applyDurableSessionProjection({
       source: session,
@@ -1775,7 +1837,9 @@ const loadPersistedSessions = async (
               summary.id,
               await loadPersistedSession(
                 { projectId: summary.projectId, sessionId: summary.id },
-                api
+                api,
+                // Recovery must not validate cached content against the previous store revision.
+                { bypassCache: true }
               )
             ] as const
         )
@@ -1912,7 +1976,8 @@ const createStoreSaver = (
             projectId: submitted.projectId,
             sessionId: submitted.id
           },
-          api
+          api,
+          { bypassCache: true }
         ),
       (rebased) => (options ? save(rebased, options) : save(rebased))
     )
@@ -2050,7 +2115,8 @@ const createStoreSaver = (
                     projectId: session.projectId,
                     sessionId: session.id
                   },
-                  api
+                  api,
+                  { bypassCache: true }
                 )
                 if (!authority) throw new Error('Session JSON is missing for metadata persistence.')
                 const fields = new Set(coalescedOptions?.conflictRebaseFields ?? [])
@@ -2095,7 +2161,6 @@ const createStoreSaver = (
       // A reader flush must not write a received snapshot back to the authority. Real user edits
       // differ from the acknowledged snapshot and still follow normal conflict checking.
       if (
-        isForced &&
         !isRuntimeWriter() &&
         jsonValuesEqual(
           toPersistedSession(session, nextStreamingMessages),
@@ -2579,10 +2644,14 @@ const useSessionPersistence = (): SessionPersistenceState => {
             Boolean(event.sessionId && event.terminalScope)
         )
         .map(async (event) => {
-          const authority = await loadPersistedSession({
-            projectId: event.terminalScope!.projectId,
-            sessionId: event.sessionId!
-          })
+          const authority = await loadPersistedSession(
+            {
+              projectId: event.terminalScope!.projectId,
+              sessionId: event.sessionId!
+            },
+            undefined,
+            { bypassCache: true }
+          )
           return { event, authority }
         })
     )
@@ -2593,14 +2662,19 @@ const useSessionPersistence = (): SessionPersistenceState => {
       if (
         !source ||
         source.projectId !== scope.projectId ||
-        source.activeRun?.promptMessageId !== event.promptMessageId ||
-        source.activeRun?.startedAt !== scope.startedAt
+        (source.activeRun
+          ? source.activeRun.promptMessageId !== event.promptMessageId ||
+            source.activeRun.startedAt !== scope.startedAt
+          : !authority || source.resumeRecovery?.promptMessageId !== event.promptMessageId)
       )
         continue
+      // A local interruption may already have released activeRun. Its matching recovery target
+      // still needs Main's storage-failure overlay, or the obsolete Resume notice remains visible.
       // Ordinary sends have no renderer-only Resume segment alias. Match Main's admission
       // instead, and never let an old failed execution release a newer attempt on this prompt.
       const admission = (
-        source.runtimeSessionAdmissions ?? authority?.runtimeSessionAdmissions
+        source.runtimeSessionAdmissions ??
+        (source.activeRun ? authority?.runtimeSessionAdmissions : undefined)
       )?.findLast((candidate) => candidate.promptMessageId === event.promptMessageId)
       if (
         admission
@@ -2608,7 +2682,7 @@ const useSessionPersistence = (): SessionPersistenceState => {
             admission.agentFrameId !== scope.agentFrameId ||
             admission.messageBranchId !== scope.messageBranchId ||
             admission.runtimeSegmentId !== scope.runtimeSegmentId
-          : event.terminalCommitFailure !== 'missing-record'
+          : !source.activeRun || event.terminalCommitFailure !== 'missing-record'
       )
         continue
       if (!authority) {
@@ -2726,7 +2800,6 @@ const useSessionPersistence = (): SessionPersistenceState => {
     setWriteErrorRetryable(true)
     sizeLimitTargets.current.clear()
     setPersistenceBlockedSessionIds([])
-    retryManifestWritePending.current = false
     setLoadAttempt((attempt) => attempt + 1)
   }, [isHydrated])
   const retryWrites = useCallback(() => {
@@ -2800,7 +2873,10 @@ const useSessionPersistence = (): SessionPersistenceState => {
     let unsubscribe: (() => void) | undefined
     let activeSaver: StoreSaver | undefined
     saverRef.current = undefined
+    const manifestWriteFailed = failedWriteTargets.current.has('manifest')
     failedWriteTargets.current.clear()
+    if (manifestWriteFailed || retryManifestWritePending.current)
+      failedWriteTargets.current.add('manifest')
     failedConflictRebaseFields.current.clear()
     sizeLimitTargets.current.clear()
 
@@ -2822,6 +2898,8 @@ const useSessionPersistence = (): SessionPersistenceState => {
         unresolvedSessionRevisionConflictTargets.clear()
         revisionConflictTargets.current.clear()
         setIsHydrated(true)
+        setLoadError(undefined)
+        setLoadWarning(undefined)
         const loadWarnings = result.diagnostics?.warnings ?? []
         const sessionWarningCount = loadWarnings.filter(
           (warning) => warning.kind !== 'manifest-corrupt' && warning.kind !== 'manifest-unreadable'
@@ -2835,12 +2913,15 @@ const useSessionPersistence = (): SessionPersistenceState => {
         )
 
         if (result.diagnostics?.isComplete === false) {
+          setIsReady(false)
           setLoadError(
             result.diagnostics.failure === 'startup-reconciliation-failed'
               ? 'Saved conversations loaded, but storage recovery could not finish. Retry before creating or saving conversations.'
               : 'Some saved conversations could not be read. Retry before creating or saving conversations.'
           )
           setIsLoading(false)
+          // Transport recovered; the existing storage notice and write gates own this failure.
+          if (recovering) completeDesktopSessionRecovery(recovery.epoch, true)
           return
         }
 
@@ -3143,9 +3224,14 @@ const useSessionPersistence = (): SessionPersistenceState => {
 
       retrySelection.current = undefined
       setIsLoading(false)
-      if (retryManifestWritePending.current) return
-      setIsReady(true)
+      // A successful authoritative read releases this transport epoch. A manifest write still
+      // owns its storage gate and explicit retry even though the backend connection recovered.
       if (recovering) completeDesktopSessionRecovery(recovery.epoch, true)
+      if (retryManifestWritePending.current) {
+        presentOutstandingWriteFailures()
+        return
+      }
+      setIsReady(true)
     }
 
     void startPersistence()
@@ -3160,7 +3246,7 @@ const useSessionPersistence = (): SessionPersistenceState => {
   return {
     isHydrated,
     isLoading,
-    isReady,
+    isReady: isReady && recovery.phase === 'connected',
     hasCompleteSessionCatalog,
     catalogRecovery,
     canDeleteSessionsAndProjects,
@@ -3188,6 +3274,7 @@ export {
   loadPersistedSession,
   loadPersistedSessions,
   retryPendingArtifactFinalization,
+  resetSessionContentCacheForTests,
   resetSessionPersistenceWriteFailuresForTests,
   deriveSessionCatalogRecovery,
   deleteSession,

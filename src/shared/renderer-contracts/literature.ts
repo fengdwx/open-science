@@ -1,3 +1,16 @@
+import type { CollectorRequest, CollectorResult } from '../literature-collector'
+import type { LiteratureSnapshotRequest, LiteratureSnapshotResult } from '../literature-snapshot'
+import type {
+  LiteraturePublicationCheckRequest,
+  LiteraturePublicationCheckResult,
+  LiteratureRelatedRequest,
+  LiteratureRelatedResult,
+  LiteratureSupplementRequest,
+  LiteratureSupplementAttachmentRequest,
+  LiteratureFullTextProgress,
+  LiteratureSupplementAttachmentResult,
+  LiteratureSupplementResult
+} from '@aipoch/literature-discovery/contracts'
 import type {
   PdfTranslationBeginResult,
   PdfTranslationEdition,
@@ -51,7 +64,12 @@ import type {
   LiteratureSourceRecordView
 } from '@aipoch/literature-library/contracts'
 import type { LiteratureItemInput } from '@aipoch/literature-library/item'
-import type { LiteratureCatalogSearchPage, LiteraturePdfImportRequest } from '../literature'
+import type {
+  LiteratureCatalogSearchPage,
+  LiteraturePdfImportRequest,
+  LiteratureCandidateStatesRequest,
+  LiteratureCandidateStatesResult
+} from '../literature'
 
 import {
   callable,
@@ -64,6 +82,22 @@ import {
 } from './definition'
 
 export const contracts = {
+  'literature.collect': callable<(request: CollectorRequest) => Promise<CollectorResult>>()(
+    'literature',
+    ['literature:collect', WEB, undefined, undefined, RUNTIME_VALIDATED]
+  ),
+  'literature.studySnapshot': callable<
+    (request: LiteratureSnapshotRequest) => Promise<LiteratureSnapshotResult>
+  >()('literature', ['literature:study-snapshot', WEB, undefined, undefined, RUNTIME_VALIDATED]),
+  'literature.getCandidateStates': callable<
+    (request: LiteratureCandidateStatesRequest) => Promise<LiteratureCandidateStatesResult>
+  >()('literature', [
+    'literature:get-candidate-states',
+    WEB,
+    undefined,
+    undefined,
+    RUNTIME_VALIDATED
+  ]),
   'literature.journals': callable<(request: JournalRequest) => Promise<JournalResult>>()(
     'literature',
     ['literature:journals', WEB, undefined, undefined, RUNTIME_VALIDATED]
@@ -137,6 +171,35 @@ export const contracts = {
     'literature',
     ['literature:get', WEB, undefined, undefined, RUNTIME_VALIDATED]
   ),
+  'literature.supplementAttachmentProgress': callable<
+    (request: LiteratureSupplementAttachmentRequest) => Promise<LiteratureFullTextProgress | null>
+  >()('literature', [
+    'literature:supplement-attachment-progress',
+    WEB,
+    undefined,
+    undefined,
+    RUNTIME_VALIDATED
+  ]),
+  'literature.supplementAttachment': callable<
+    (
+      request: LiteratureSupplementAttachmentRequest
+    ) => Promise<LiteratureSupplementAttachmentResult>
+  >()('literature', [
+    'literature:supplement-attachment',
+    WEB,
+    undefined,
+    undefined,
+    RUNTIME_VALIDATED
+  ]),
+  'literature.publicationCheck': callable<
+    (request: LiteraturePublicationCheckRequest) => Promise<LiteraturePublicationCheckResult>
+  >()('literature', ['literature:publication-check', WEB, undefined, undefined, RUNTIME_VALIDATED]),
+  'literature.related': callable<
+    (request: LiteratureRelatedRequest) => Promise<LiteratureRelatedResult>
+  >()('literature', ['literature:related', WEB, undefined, undefined, RUNTIME_VALIDATED]),
+  'literature.supplements': callable<
+    (request: LiteratureSupplementRequest) => Promise<LiteratureSupplementResult>
+  >()('literature', ['literature:supplements', WEB, undefined, undefined, RUNTIME_VALIDATED]),
   'literature.fullText': callable<
     (request: LiteratureFullTextRequest) => Promise<LiteratureFullTextResult>
   >()('literature', ['literature:full-text', WEB, undefined, undefined, RUNTIME_VALIDATED]),

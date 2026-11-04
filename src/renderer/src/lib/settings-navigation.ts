@@ -17,7 +17,8 @@ export type ComputeView =
       authenticationRequestId?: number
     }
 
-export type CredentialsServiceId = 'github' | 'literature' | 'openalex' | 'unpaywall'
+export type CredentialsServiceId =
+  'github' | 'literature' | 'openalex' | 'unpaywall' | 'semantic-scholar'
 
 export type CredentialsView =
   | { kind: 'list' }
@@ -26,7 +27,7 @@ export type CredentialsView =
   | { kind: 'credential'; id: string }
 
 export type ConnectorsView =
-  | { kind: 'list' }
+  | { kind: 'list'; recoveryConnectorId?: string }
   | { kind: 'detail'; id: string }
   | {
       kind: 'add'
@@ -65,7 +66,7 @@ export type TagsView =
 
 export type ModelView =
   | ClassificationView
-  | { kind: 'list' }
+  | { kind: 'list'; recoveryProviderId?: string; recoveryModel?: string }
   | { kind: 'local-models' }
   | { kind: 'create' }
   | { kind: 'edit'; providerId: string }
@@ -108,6 +109,8 @@ export type SettingsPanelId =
   | 'archived'
   | 'usage'
   | 'general'
+  | 'appearance'
+  | 'notifications'
   | 'storage'
   | 'network'
   | 'runtimes'
@@ -142,8 +145,7 @@ export type SettingsRoute = {
 }[SettingsPanelId]
 
 export const INITIAL_SETTINGS_ROUTE: SettingsRoute = {
-  panel: 'model',
-  view: { kind: 'list' }
+  panel: 'general'
 }
 
 export const settingsPanelRoute = (panel: SettingsPanelId): SettingsRoute => {

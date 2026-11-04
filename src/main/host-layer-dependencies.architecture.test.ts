@@ -1,14 +1,21 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
+import ts from 'typescript'
 // @ts-expect-error The repository's JavaScript evidence reader has no declaration file.
-import { createConsumerDependencyReader } from '../../scripts/ci/consumer-retirement.mjs'
+import { createDependencyReader } from '../../scripts/ci/module-graph/index.mjs'
+// @ts-expect-error The repository's JavaScript boundary checker has no declaration file.
+import { boundaryViolations, dependencyLayer } from '../../scripts/ci/module-graph/policy.mjs'
 import { loadModuleImpactManifest } from '../../scripts/ci/load-module-impact.mjs'
 
 type Graph = Map<string, Set<string>>
 const projectRoot = resolve(import.meta.dirname, '../..')
+const lowerLayerBoundaries = new Map([
+  ['notebook_execution_model', 'notebook_application'],
+  ['settings_repository', 'settings_operations'],
+  ['host_runtime_ports', 'main_cli_install']
+])
 
 function cycles(graph: Graph): string[] {
   const visited = new Set<string>()
@@ -31,39 +38,12 @@ function cycles(graph: Graph): string[] {
   return [...found].sort()
 }
 
-// The evidence reader deliberately over-approximates imports. Inline type-only
-// bindings cannot create runtime edges, but must remain in the type graph.
-function withoutInlineTypeDeclarations(path: string, text: string): string {
-  const ast = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true)
-  const erased: Array<[number, number]> = []
-  for (const node of ast.statements) {
-    if (ts.isImportDeclaration(node)) {
-      const clause = node.importClause
-      if (
-        clause &&
-        !clause.isTypeOnly &&
-        !clause.name &&
-        clause.namedBindings &&
-        ts.isNamedImports(clause.namedBindings) &&
-        clause.namedBindings.elements.length > 0 &&
-        clause.namedBindings.elements.every((element) => element.isTypeOnly)
-      )
-        erased.push([node.getStart(ast), node.end])
-    } else if (
-      ts.isExportDeclaration(node) &&
-      !node.isTypeOnly &&
-      node.exportClause &&
-      ts.isNamedExports(node.exportClause) &&
-      node.exportClause.elements.length > 0 &&
-      node.exportClause.elements.every((element) => element.isTypeOnly)
-    )
-      erased.push([node.getStart(ast), node.end])
-  }
-  for (const [start, end] of erased.reverse()) text = text.slice(0, start) + text.slice(end)
-  return text
-}
-
-function hostGraphs(): { structural: Graph; runtimeModules: Graph; consumerModules: Graph } {
+function hostGraphs(overrides: Record<string, string> = {}): {
+  structural: Graph
+  runtimeModules: Graph
+  consumerModules: Graph
+  violations: string[]
+} {
   const files = new Set<string>(
     execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], {
       cwd: projectRoot,
@@ -74,6 +54,7 @@ function hostGraphs(): { structural: Graph; runtimeModules: Graph; consumerModul
   )
   const contents = new Map<string, string>()
   const read = (path: string): string | undefined => {
+    if (Object.hasOwn(overrides, path)) return overrides[path]
     if (!files.has(path)) return undefined
     if (!contents.has(path)) contents.set(path, readFileSync(resolve(projectRoot, path), 'utf8'))
     return contents.get(path)
@@ -95,23 +76,15 @@ function hostGraphs(): { structural: Graph; runtimeModules: Graph; consumerModul
     )
   )
   const runtimeEdges = Object.entries(JSON.parse(read('scripts/ci/module-runtime-consumers.json')!))
-  const structuralReader = createConsumerDependencyReader({ files, read }, runtimeEdges)
-  const runtimeReader = createConsumerDependencyReader(
-    {
-      files,
-      read: (path: string) => {
-        const text = read(path)
-        return text !== undefined && production.has(path)
-          ? withoutInlineTypeDeclarations(path, text)
-          : text
-      }
-    },
-    runtimeEdges,
-    { runtimeOnly: true }
-  )
+  const structuralReader = createDependencyReader({ files, read }, runtimeEdges)
+  const runtimeReader = createDependencyReader({ files, read }, runtimeEdges, {
+    runtimeOnly: true
+  })
   const structural: Graph = new Map()
+  const boundaryEdges: Graph = new Map()
   const runtimeModules: Graph = new Map()
   for (const path of production) {
+    boundaryEdges.set(path, structuralReader.dependencies(path).paths)
     structural.set(
       path,
       new Set(
@@ -133,10 +106,120 @@ function hostGraphs(): { structural: Graph; runtimeModules: Graph; consumerModul
       new Set<string>(module.consumerModules)
     ])
   )
-  return { structural, runtimeModules, consumerModules }
+  return {
+    structural,
+    runtimeModules,
+    consumerModules,
+    violations: [
+      ...boundaryViolations(boundaryEdges, manifest.modules),
+      ...[...boundaryEdges].flatMap(([source, targets]) => {
+        const upperOwner = lowerLayerBoundaries.get(owners.get(source) ?? '')
+        return upperOwner
+          ? [...targets]
+              .filter((target) => owners.get(target) === upperOwner)
+              .map(
+                (target) => `${source} -> ${target}: lower layer imports application implementation`
+              )
+          : []
+      }),
+      ...[...production]
+        .filter((path) => dependencyLayer(path) === 'foundation')
+        .flatMap((path) => {
+          const inspect = createDependencyReader({ files, read }, runtimeEdges, {
+            staticOnly: true
+          })
+          return inspect(path, new Set()).complete
+            ? []
+            : [`${path}: pure foundation has opaque dependencies`]
+        })
+    ]
+  }
 }
 
 describe('host dependency layers', () => {
+  it('keeps the shared runtime network port independent of Electron adapter types', () => {
+    const path = 'src/main/runtime-network.ts'
+    const source = ts.createSourceFile(
+      path,
+      readFileSync(resolve(projectRoot, path), 'utf8'),
+      ts.ScriptTarget.Latest,
+      true
+    )
+    const external: string[] = []
+    const visit = (node: ts.Node): void => {
+      if (
+        (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+        node.moduleSpecifier &&
+        ts.isStringLiteral(node.moduleSpecifier)
+      )
+        external.push(node.moduleSpecifier.text)
+      if (
+        ts.isImportTypeNode(node) &&
+        ts.isLiteralTypeNode(node.argument) &&
+        ts.isStringLiteral(node.argument.literal)
+      )
+        external.push(node.argument.literal.text)
+      ts.forEachChild(node, visit)
+    }
+    visit(source)
+    expect(external.filter((name) => name === 'electron' || name.startsWith('electron/'))).toEqual(
+      []
+    )
+  })
+
+  it('checks resolved package and preload targets outside the host cycle graph', () => {
+    const graphs = hostGraphs({
+      'src/shared/in-flight-promise.ts': "import '@aipoch/diagnostics'",
+      'src/shared/bootstrap.ts': "import '../preload/index'",
+      'src/main/notebook/session-aggregate.ts':
+        "import type { TransientViewImage } from './host-view-image-service'",
+      'src/main/settings/repository.ts':
+        "import type { LocalShellRuntimeMutation } from './local-shell-runtime-mutation'",
+      'src/main/desktop-interaction.ts':
+        "export type Environment = import('./cli-install/launcher').CliLauncherEnv"
+    })
+    expect(graphs.violations).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('src/shared/in-flight-promise.ts -> packages/diagnostics/'),
+        expect.stringContaining('src/shared/bootstrap.ts -> src/preload/index.ts'),
+        expect.stringContaining(
+          'src/main/notebook/session-aggregate.ts -> src/main/notebook/host-view-image-service.ts'
+        ),
+        expect.stringContaining(
+          'src/main/settings/repository.ts -> src/main/settings/local-shell-runtime-mutation.ts'
+        ),
+        expect.stringContaining(
+          'src/main/desktop-interaction.ts -> src/main/cli-install/launcher.ts'
+        )
+      ])
+    )
+  }, 180_000)
+
+  it('rejects implementation imports from extracted contracts and pure projections', () => {
+    const manifest = loadModuleImpactManifest(resolve(projectRoot, 'scripts/ci/module-impact.json'))
+    const edges: Graph = new Map([
+      [
+        'src/main/artifacts/pending-file-contract.ts',
+        new Set(['src/main/artifacts/pending-file-transaction.ts'])
+      ],
+      ['src/main/resource-budget-policy.ts', new Set(['src/main/resource-budget.ts'])],
+      ['src/main/tags/resource-contract.ts', new Set(['src/main/tags/repository.ts'])],
+      [
+        'src/renderer/src/pages/workspace/side-chat-contract.ts',
+        new Set(['src/renderer/src/pages/workspace/use-side-chat-controller.ts'])
+      ],
+      [
+        'src/renderer/src/stores/session-actionability.ts',
+        new Set(['src/renderer/src/stores/session-store.ts'])
+      ]
+    ])
+    const violations: string[] = boundaryViolations(edges, manifest.modules)
+    for (const [source, targets] of edges) {
+      for (const target of targets)
+        expect(violations).toContainEqual(expect.stringContaining(`${source} -> ${target}`))
+    }
+  })
+
   it('detects indirect cycles as well as reciprocal imports', () => {
     expect(
       cycles(
@@ -158,16 +241,13 @@ describe('host dependency layers', () => {
     ).toEqual([])
   })
 
-  it('erases only declarations whose named bindings are all type-only', () => {
-    const source = `import { type A } from './a';\nexport { type B } from './b';\nimport D, { type C } from './c';\nimport { type E, value } from './e';\nimport './effect';`
-    expect(withoutInlineTypeDeclarations('sample.ts', source)).toBe(
-      `\n\nimport D, { type C } from './c';\nimport { type E, value } from './e';\nimport './effect';`
-    )
-  })
-
   // Whole-repository parsing needs headroom under coverage on shared CI runners.
   it('keeps type contracts, runtime module dependencies and test routing acyclic', () => {
     const graphs = hostGraphs()
+    expect(
+      graphs.violations,
+      'foundation, contract, composition and public-interface boundaries'
+    ).toEqual([])
     expect(
       cycles(graphs.structural),
       'production imports including types and registered dynamic edges'

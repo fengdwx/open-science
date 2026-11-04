@@ -5,8 +5,23 @@ import { sessionReplayMigration } from './migrations/0047-session-replay'
 import { literatureSmartCollectionsMigration } from './migrations/0044-literature-smart-collections'
 import { literatureSmartPauseRunMigration } from './migrations/0045-literature-smart-pause-run'
 import { literatureTranslationMigration } from './migrations/0050-literature-translation'
-import { sessionHistoryMigration } from './migrations/0051-session-history'
+import { sessionHistoryMigration } from './migrations/0055-session-history'
+import { legacySessionHistoryMigration } from './migrations/legacy-session-history'
+import { literatureReadingStatusMigration } from './migrations/0051-literature-reading-status'
+import {
+  literaturePersonalNoteSearchMigration,
+  backfillLiteraturePersonalNoteSearch
+} from './migrations/0052-literature-personal-note-search'
+import {
+  slurmJobReliabilityMigration,
+  SLURM_JOB_RELIABILITY_ALLOWED_SUFFIX_CHECKS,
+  SLURM_JOB_RELIABILITY_ADDED_COLUMNS
+} from './migrations/0054-slurm-job-reliability'
 import { classificationUsageMigration } from './migrations/0042-classification-usage'
+import {
+  literatureDoiIdentityMigration,
+  backfillLiteratureDoiIdentity
+} from './migrations/0053-literature-doi-identity'
 import { literatureCollectionRevisionMigration } from './migrations/0040-literature-collection-revision'
 import { bookmarksMigration } from './migrations/0041-bookmarks'
 import { pdfAnnotationsMigration } from './migrations/0043-pdf-annotations'
@@ -251,10 +266,21 @@ const checksumMigrationPayload = (
   return hash.digest('hex')
 }
 
+const LITERATURE_DOI_IDENTITY_CHECKSUM = checksumMigrationPayload(
+  literatureDoiIdentityMigration.id,
+  literatureDoiIdentityMigration.statements,
+  literatureDoiIdentityMigration.verifiers
+)
 const LITERATURE_SEARCH_TEXT_CHECKSUM = checksumMigrationPayload(
   literatureSearchTextMigration.id,
   literatureSearchTextMigration.statements,
   literatureSearchTextMigration.verifiers
+)
+const LITERATURE_PERSONAL_NOTE_SEARCH_CHECKSUM = checksumMigrationPayload(
+  literaturePersonalNoteSearchMigration.id,
+  literaturePersonalNoteSearchMigration.statements,
+  literaturePersonalNoteSearchMigration.verifiers,
+  literaturePersonalNoteSearchMigration.operations
 )
 const BASELINE_CHECKSUM = checksumMigrationPayload(
   BASELINE_ID,
@@ -939,6 +965,41 @@ const MIGRATION_MANIFEST = [
     backupRetention: 'retain'
   },
   {
+    ...literatureReadingStatusMigration,
+    checksum: checksumMigrationPayload(
+      literatureReadingStatusMigration.id,
+      literatureReadingStatusMigration.statements,
+      literatureReadingStatusMigration.verifiers,
+      literatureReadingStatusMigration.operations
+    ),
+    backupOnApply: 'required',
+    backupRetention: 'retain'
+  },
+  {
+    ...literaturePersonalNoteSearchMigration,
+    checksum: LITERATURE_PERSONAL_NOTE_SEARCH_CHECKSUM,
+    backupOnApply: 'required',
+    backupRetention: 'retain'
+  },
+  {
+    ...literatureDoiIdentityMigration,
+    checksum: LITERATURE_DOI_IDENTITY_CHECKSUM,
+    backupOnApply: 'required',
+    backupRetention: 'retain'
+  },
+  {
+    ...slurmJobReliabilityMigration,
+    checksum: checksumMigrationPayload(
+      slurmJobReliabilityMigration.id,
+      slurmJobReliabilityMigration.statements,
+      slurmJobReliabilityMigration.verifiers,
+      slurmJobReliabilityMigration.operations
+    ),
+    foreignKeysDuringApply: 'disabled',
+    backupOnApply: 'required',
+    backupRetention: 'retain'
+  },
+  {
     ...sessionHistoryMigration,
     checksum: checksumMigrationPayload(
       sessionHistoryMigration.id,
@@ -1352,6 +1413,9 @@ const verifyCurrentApplicationSchema = async (client: PrismaClient): Promise<voi
   await verifyCurrentRuntimeSchema(client, currentApplicationSchemaExtensions)
   await runMigrationVerifiers(client, literatureTranslationMigration.verifiers)
   await runMigrationVerifiers(client, sessionHistoryMigration.verifiers)
+  await runMigrationVerifiers(client, literatureReadingStatusMigration.verifiers)
+  await runMigrationVerifiers(client, literaturePersonalNoteSearchMigration.verifiers)
+  await runMigrationVerifiers(client, slurmJobReliabilityMigration.verifiers)
   // The generated schema enforces the latest checks; frozen auxiliary verifiers also accept
   // the exact stronger expressions from the immutable suffix.
   await runMigrationVerifiers(
@@ -1374,7 +1438,10 @@ const verifyCurrentApplicationSchema = async (client: PrismaClient): Promise<voi
   await runMigrationVerifiers(
     client,
     computeJobOperationMigration.verifiers,
-    NUMERIC_AND_NULL_ALLOWED_SUFFIX_CHECKS
+    mergeAllowedSuffixChecks(
+      NUMERIC_AND_NULL_ALLOWED_SUFFIX_CHECKS,
+      SLURM_JOB_RELIABILITY_ALLOWED_SUFFIX_CHECKS
+    )
   )
   await runMigrationVerifiers(client, computeJobFileEvidenceMigration.verifiers)
   // The generated contract verifies the owner-scoped source indexes introduced by the suffix.
@@ -1386,7 +1453,11 @@ const verifyCurrentApplicationSchema = async (client: PrismaClient): Promise<voi
   )
   await runMigrationVerifiers(client, literatureInboxIntegrityMigration.verifiers)
   await runMigrationVerifiers(client, computeJobRemoteCleanupMigration.verifiers)
-  await runMigrationVerifiers(client, backgroundResultDeliveryMigration.verifiers)
+  await runMigrationVerifiers(
+    client,
+    backgroundResultDeliveryMigration.verifiers,
+    SLURM_JOB_RELIABILITY_ALLOWED_SUFFIX_CHECKS
+  )
   await runMigrationVerifiers(client, literaturePdfProvenanceMigration.verifiers)
   await runMigrationVerifiers(client, contentVerificationObservationMigration.verifiers)
   await runMigrationVerifiers(client, literatureMetadataCommitReceiptMigration.verifiers)
@@ -1765,7 +1836,10 @@ const classifyDatabaseFailure = (
   if (validationFailure) {
     return new DatabaseMigrationError(
       'database_validation_failed',
-      'The existing database does not satisfy the required schema contract.',
+      error instanceof DatabaseValidationError &&
+        error.data.kind === 'literature-doi-identity-alias-conflict'
+        ? error.message
+        : 'The existing database does not satisfy the required schema contract.',
       false,
       migrationId,
       { cause: error }
@@ -1909,11 +1983,27 @@ const applyManifestMigration = async (
   } = {}
 ): Promise<void> => {
   const preserveCurrentSchema = await hasCurrentManagedFileVersionFoundation(client)
+  const hasSlurmColumns = async (table: string): Promise<boolean> => {
+    const columns = await migrationSqlExecutor.query<Array<{ name: string }>>(
+      client,
+      `PRAGMA table_info("${table}")`
+    )
+    return columns.some(({ name }) => SLURM_JOB_RELIABILITY_ADDED_COLUMNS[table]?.includes(name))
+  }
+  // These two frozen rebuilds need adaptation only when an earlier current-schema adoption has
+  // already introduced Slurm diagnostics. Otherwise retain their original replay boundaries.
+  const preservesSlurmColumns =
+    preserveCurrentSchema &&
+    (migration.id === computeJobRemoteCleanupMigration.id
+      ? (await hasSlurmColumns('ComputeJob')) || (await hasSlurmColumns('ComputeJobOperation'))
+      : migration.id === computeJobHarvestRetryMigration.id &&
+        (await hasSlurmColumns('ComputeJob')))
   const canAdaptCurrentSchema =
     preserveCurrentSchema &&
     migration.id !== managedFileVersionFoundationMigration.id &&
     (migration.id < managedFileVersionFoundationMigration.id ||
-      migration.id === numericAndNullConstraintsMigration.id) &&
+      migration.id === numericAndNullConstraintsMigration.id ||
+      preservesSlurmColumns) &&
     MIGRATION_MANIFEST.some(
       (candidate) => candidate.id === migration.id && candidate.checksum === migration.checksum
     )
@@ -1928,7 +2018,10 @@ const applyManifestMigration = async (
     migration.id < numericAndNullConstraintsMigration.id
       ? NUMERIC_AND_NULL_ALLOWED_SUFFIX_CHECKS
       : {},
-    migration.id < classificationUsageMigration.id ? CLASSIFICATION_ALLOWED_SUFFIX_CHECKS : {}
+    migration.id < classificationUsageMigration.id ? CLASSIFICATION_ALLOWED_SUFFIX_CHECKS : {},
+    migration.id < slurmJobReliabilityMigration.id
+      ? SLURM_JOB_RELIABILITY_ALLOWED_SUFFIX_CHECKS
+      : {}
   )
   const verifyMigrationTarget = async (targetClient: PrismaClient): Promise<void> => {
     if (
@@ -2059,6 +2152,18 @@ const applyManifestMigration = async (
           migration.checksum === LITERATURE_SEARCH_TEXT_CHECKSUM
         ) {
           await backfillLiteratureSearchText(transaction)
+        }
+        if (
+          migration.id === literaturePersonalNoteSearchMigration.id &&
+          migration.checksum === LITERATURE_PERSONAL_NOTE_SEARCH_CHECKSUM
+        ) {
+          await backfillLiteraturePersonalNoteSearch(transaction)
+        }
+        if (
+          migration.id === literatureDoiIdentityMigration.id &&
+          migration.checksum === LITERATURE_DOI_IDENTITY_CHECKSUM
+        ) {
+          await backfillLiteratureDoiIdentity(transaction)
         }
         if (options.repairVisionEvidenceReference && !contractAlreadySatisfied) {
           // The upstream history created VisionEvidence before this immutable migration. Rebuild it
@@ -2230,6 +2335,45 @@ const migrateApplicationDatabaseWithManifest = async (
   }
 
   const applied: string[] = []
+  // The personal fork shipped history as 0051 before upstream assigned that number. Only
+  // bridge its exact, complete released ledger. Keep the derived tables and authoritative
+  // Session files intact; the new 0055 migration adopts them after the upstream suffix.
+  const legacyHistory = ledger.find(({ id }) => id === legacySessionHistoryMigration.id)
+  if (legacyHistory && manifest.some(({ id }) => id === sessionHistoryMigration.id)) {
+    const prefix = ledger.slice(0, -1)
+    const expectedPrefix = MIGRATION_MANIFEST.filter(
+      ({ id }) => id <= '0050_literature_translation'
+    )
+    const legacyChecksum = checksumMigrationPayload(
+      legacySessionHistoryMigration.id,
+      legacySessionHistoryMigration.statements,
+      legacySessionHistoryMigration.verifiers,
+      legacySessionHistoryMigration.operations
+    )
+    if (
+      ledger.at(-1) !== legacyHistory ||
+      prefix.length !== expectedPrefix.length ||
+      legacyHistory.checksum !== legacyChecksum
+    ) {
+      throw new DatabaseMigrationError(
+        'database_history_invalid',
+        'The fork database migration history does not match its released history migration.',
+        false,
+        legacySessionHistoryMigration.id
+      )
+    }
+    validateLedger(prefix, expectedPrefix)
+    // Also validate against the requested manifest before any mutation or backup retirement.
+    validateLedger(prefix, manifest)
+    const next = manifest[prefix.length]!
+    await runMigrationVerifiers(client, legacySessionHistoryMigration.verifiers)
+    await ensureBackupBeforeMigration(next)
+    await client.$executeRaw`
+      DELETE FROM "_open_science_migrations"
+      WHERE "id" = ${legacyHistory.id} AND "checksum" = ${legacyChecksum}
+    `
+    ledger = await readLedger(client)
+  }
   const appliedCount = validateLedger(ledger, manifest)
   if (appliedCount === manifest.length) {
     return complete({ adoptedLegacy: false, applied, from, to: latest.id })
@@ -2318,6 +2462,9 @@ const migrateApplicationDatabaseWithManifest = async (
     adoptsComputeJobOperation ? COMPUTE_JOB_OPERATION_ALLOWED_SUFFIX_CHECKS : {},
     manifest.some((entry) => entry.id === classificationUsageMigration.id)
       ? CLASSIFICATION_ALLOWED_SUFFIX_CHECKS
+      : {},
+    manifest.some((entry) => entry.id === slurmJobReliabilityMigration.id)
+      ? SLURM_JOB_RELIABILITY_ALLOWED_SUFFIX_CHECKS
       : {}
   )
 

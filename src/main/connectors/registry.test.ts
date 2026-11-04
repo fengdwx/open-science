@@ -9,6 +9,58 @@ import {
 import { renderSkillDoc } from './skill-doc'
 
 describe('builtin registry host integration', () => {
+  it('validates the eQTL query contracts and publishes their descriptions', () => {
+    const list = getDescriptor('human-genetics', 'eqtl_list_datasets')!
+    const associations = getDescriptor('human-genetics', 'eqtl_associations')!
+    expect(() =>
+      validateToolArguments(associations, {
+        dataset_id: 'QTD000021',
+        genome_build: 'GRCh38',
+        gene_id: 'ENSG00000130203'
+      })
+    ).toThrow()
+    expect(() =>
+      validateToolArguments(list, { study_label: 'BLUEPRINT', quant_method: 'ge' })
+    ).not.toThrow()
+    expect(() => validateToolArguments(associations, associations.exampleArgs!)).not.toThrow()
+    expect(() =>
+      validateToolArguments(associations, {
+        ...associations.exampleArgs,
+        max_records: 1001
+      })
+    ).toThrow()
+    for (const genome_build of [undefined, 'GRCh37', 'GRCh39']) {
+      expect(() =>
+        validateToolArguments(associations, { ...associations.exampleArgs, genome_build })
+      ).toThrow()
+    }
+    expect(renderSkillDoc('human-genetics')).toContain(associations.description)
+  })
+
+  it('routes scientific APIs through native descriptors and keeps analysis outside the connector surface', () => {
+    for (const id of ['research-datasets', 'europepmc', 'chea3', 'biodbnet', 'ctd']) {
+      expect(ALL_CONNECTOR_IDS).toContain(id)
+      expect(CONNECTOR_CATALOG.find((entry) => entry.id === id)?.defaultEnabled).toBe(false)
+      const tools = getConnectorTools(id)
+      expect(tools.length).toBeGreaterThan(0)
+      expect(
+        tools.some((tool) => ['import_data', 'query_local', 'get_job'].includes(tool.id))
+      ).toBe(false)
+      const doc = renderSkillDoc(id)
+      expect(doc).toContain('Official file URLs are discovery metadata')
+    }
+    for (const [connector, method] of [
+      ['genes', 'query_hgnc_field'],
+      ['genes', 'list_hgnc_files'],
+      ['cellosaurus', 'get_cell_line_rdf'],
+      ['drug-regulatory', 'list_faers_bulk_files']
+    ]) {
+      const tool = getDescriptor(connector, method)!
+      expect(tool).toBeDefined()
+      expect(() => validateToolArguments(tool, tool.exampleArgs!)).not.toThrow()
+    }
+  })
+
   it('retains application recovery guidance around package schema errors', () => {
     const tool = getDescriptor('chembl', 'get_assay')!
     expect(() => validateToolArguments(tool, {})).toThrow(
@@ -54,4 +106,48 @@ it('adds the preview capability only in the application registry', async () => {
   expect(doc).toContain('preview_molecule')
   expect(CONNECTOR_CATALOG.find((entry) => entry.id === 'molecule')?.group).toBe('featured')
   expect(CONNECTOR_CATALOG.find((entry) => entry.id === 'pubmed')?.group).toBe('directory')
+})
+
+describe('PDC clinical tool host integration', () => {
+  it('exposes the package tool through the host registry and generated Skill', () => {
+    const descriptor = getDescriptor('pdc', 'pdc_list_clinical')!
+    expect(getConnectorTools('pdc')).toContain(descriptor)
+    expect(descriptor.credentialKeys).toEqual([])
+    expect(() => validateToolArguments(descriptor, descriptor.exampleArgs!)).not.toThrow()
+    expect(() => validateToolArguments(descriptor, {})).toThrow('invalid_arguments')
+    const doc = renderSkillDoc('pdc')
+    expect(doc).toContain('### pdc_list_clinical')
+    expect(doc).toContain(JSON.stringify(descriptor.exampleArgs))
+    expect(doc).toContain('completeness: "unknown"')
+  })
+})
+
+it('exposes posted ClinicalTrials.gov results through the registry and generated Skill', () => {
+  const descriptor = getDescriptor('clinical-trials', 'get_trial_results')!
+  expect(descriptor).toBeDefined()
+  expect(getConnectorTools('clinical-trials')).toContain(descriptor)
+  expect(descriptor.credentialKeys).toEqual([])
+  expect(() => validateToolArguments(descriptor, descriptor.exampleArgs!)).not.toThrow()
+  expect(() => validateToolArguments(descriptor, {})).toThrow('invalid_arguments')
+  const doc = renderSkillDoc('clinical-trials')
+  expect(doc).toContain('### get_trial_results')
+  expect(doc).toContain('results_section')
+  expect(doc).toContain('unitOfMeasure')
+  expect(doc).toContain('Missing data does not mean zero events or no treatment effect')
+})
+
+describe('LIPID MAPS host integration', () => {
+  it('exposes exact lipid lookup through Chemistry and its generated Skill', () => {
+    const descriptor = getDescriptor('chemistry', 'lipidmaps_get_compound')!
+    expect(getConnectorTools('chemistry')).toContain(descriptor)
+    expect(() => validateToolArguments(descriptor, descriptor.exampleArgs!)).not.toThrow()
+    expect(() =>
+      validateToolArguments(descriptor, { id_type: 'lm_id', identifier: 'LMFA' })
+    ).toThrow('invalid_arguments')
+    expect(ALL_CONNECTOR_IDS).not.toContain('lipidmaps')
+    const doc = renderSkillDoc('chemistry')
+    expect(doc).toContain('### lipidmaps_get_compound')
+    expect(doc).toContain('CC BY 4.0')
+    expect(doc).toContain('records_truncated')
+  })
 })

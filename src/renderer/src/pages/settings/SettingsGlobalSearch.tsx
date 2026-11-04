@@ -147,8 +147,8 @@ const SETTINGS_SEARCH_INDEX: ReadonlyArray<SettingsSearchEntry> = [
   { id: 'usage.list', panel: 'usage', labelKey: 'Usage', keywords: 'tokens cost analytics' },
   { id: 'archived.list', panel: 'archived', labelKey: 'Archived', keywords: 'project restore' },
   {
-    id: 'general.appearance',
-    panel: 'general',
+    id: 'appearance.preferences',
+    panel: 'appearance',
     labelKey: 'Appearance',
     keywords: 'theme dark light',
     searchLabels: ['Theme', 'Dark', 'Light', 'System']
@@ -167,8 +167,8 @@ const SETTINGS_SEARCH_INDEX: ReadonlyArray<SettingsSearchEntry> = [
     keywords: 'help docs documentation guide manual tutorial support troubleshooting faq',
     searchLabels: ['Read setup guides and troubleshooting.']
   },
-  { id: 'general.language', panel: 'general', labelKey: 'Language', keywords: 'locale' },
-  { id: 'general.notifications', panel: 'general', labelKey: 'Notifications' },
+  { id: 'appearance.language', panel: 'appearance', labelKey: 'Language', keywords: 'locale' },
+  { id: 'notifications.preferences', panel: 'notifications', labelKey: 'Notifications' },
   { id: 'general.diagnostics', panel: 'general', labelKey: 'Diagnostics', keywords: 'log file' },
   {
     id: 'general.cli',
@@ -269,6 +269,7 @@ const SettingsGlobalSearch = ({
   const [query, setQuery] = useState('')
   const [isOpen, setIsOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
+  const suppressFocusOpenRef = useRef(false)
   const containerRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const listId = useId()
@@ -361,22 +362,31 @@ const SettingsGlobalSearch = ({
         if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return
         if (event.key !== 'Escape' || !isOpen) return
         event.stopPropagation()
+        suppressFocusOpenRef.current = true
         setIsOpen(false)
-        containerRef.current?.querySelector('input')?.blur()
       }}
     >
       <SettingsSearchInput
         value={query}
         shortcutScope="global"
         onChange={(event) => {
+          suppressFocusOpenRef.current = false
           setQuery(event.target.value)
           setIsOpen(true)
           setActiveIndex(0)
         }}
-        onFocus={() => setIsOpen(true)}
+        onFocus={() => {
+          if (!suppressFocusOpenRef.current) setIsOpen(true)
+        }}
         onKeyDown={(event) => {
           if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return
           if (event.key === 'Escape') return
+          if (event.key === 'ArrowDown' && !isOpen && results.length > 0) {
+            event.preventDefault()
+            suppressFocusOpenRef.current = false
+            setIsOpen(true)
+            return
+          }
           if (!isOpen || results.length === 0) return
           if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
             event.preventDefault()

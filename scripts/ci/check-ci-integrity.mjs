@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { load } from 'js-yaml'
 
 import { parseNameStatus } from './classify-pr-changes.mjs'
+import { checkDerivedConsumerRevisions } from './module-graph/index.mjs'
 import { moduleOwnershipFromRevisions } from './check-module-ownership.mjs'
 
 function actionReferences(document, workflow) {
@@ -413,6 +414,10 @@ ${violations}
 
 ${(result.retiredConsumers ?? []).map((entry) => `- <code>${escapeHtml(entry)}</code>`).join('\n') || '- None'}
 
+### Dependency-model consumer retirements (opaque cones may remain)
+
+${(result.dependencyBasedRetirements ?? []).map((entry) => `- <code>${escapeHtml(entry)}</code>`).join('\n') || '- None'}
+
 ### Verified excluded package test retirements
 
 ${(result.retiredPackageTests ?? []).map((entry) => `- <code>${escapeHtml(entry)}</code>`).join('\n') || '- None'}
@@ -433,11 +438,21 @@ export function runCiIntegrityCli(arguments_ = process.argv.slice(2), environmen
   const result = checkCiIntegrityChanges(ciIntegrityFilesFromRevisions(base, head))
   const ownership = moduleOwnershipFromRevisions(base, head)
   result.violations.push(...ownership.violations)
+  try {
+    checkDerivedConsumerRevisions(base, head)
+  } catch (error) {
+    result.violations.push({
+      path: 'scripts/ci/module-derived-consumers.json',
+      rule: 'derived-consumer-evidence',
+      message: error.message
+    })
+  }
   result.legacyGaps = ownership.legacyGaps
   result.retiredConsumers = ownership.retiredConsumers
+  result.dependencyBasedRetirements = ownership.dependencyBasedRetirements
   result.retiredPackageTests = ownership.retiredPackageTests
   result.boundedOwnerSplits = ownership.boundedOwnerSplits
-  result.ok = result.ok && ownership.ok
+  result.ok = result.ok && ownership.ok && result.violations.length === 0
 
   if (environment.GITHUB_STEP_SUMMARY) {
     appendFileSync(environment.GITHUB_STEP_SUMMARY, formatCiIntegritySummary(result))

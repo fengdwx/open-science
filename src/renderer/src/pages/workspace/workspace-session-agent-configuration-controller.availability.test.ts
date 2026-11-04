@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
   providers: [] as ProviderView[],
   setAgentConfiguration: vi.fn(),
   ensureContent: vi.fn(),
-  endpoints: ['anthropic']
+  endpoints: ['messages']
 }))
 vi.mock('@/lib/session-persistence/session-history', () => ({
   ensureSessionContentLoaded: mocks.ensureContent
@@ -40,7 +40,7 @@ const provider = (id: string): ProviderView => ({
   type: 'custom',
   model: 'model',
   models: ['model'],
-  apiEndpoints: ['anthropic'],
+  apiEndpoints: ['messages'],
   supportsImageInput: false,
   hasKey: true,
   needsKey: false
@@ -90,7 +90,7 @@ describe('saved Session model availability', () => {
                 lastValidationFailure: {
                   at: 1,
                   category: 'network',
-                  target: { model: 'model', endpoint: 'anthropic' }
+                  target: { model: 'model', endpoint: 'messages' }
                 }
               },
               provider('fallback')

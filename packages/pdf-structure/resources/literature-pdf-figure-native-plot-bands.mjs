@@ -142,7 +142,8 @@ export function nativeCaptionedPlotBand(
   const keyed =
     unequal ??
     translated?.frames ??
-    nativeTitledTwoRowClosedGrid(page, caption, ownCaps, tables, allFrames, nativeTokens, font)
+    nativeTitledTwoRowClosedGrid(page, caption, ownCaps, tables, allFrames, nativeTokens, font) ??
+    nativeCaptionKeyedPlotRows(page, caption, allFrames, nativeTokens, font)
   const frames = keyed ?? allFrames.filter((r) => caption.rect[1] - r[3] < font * 6)
   // Grow only through aligned, equally sized closed faces. A caption, table
   // or full-size prose row breaks the corridor even when the next plot aligns.
@@ -179,6 +180,28 @@ export function nativeCaptionedPlotBand(
     frames.push(...next)
   }
   if (frames.length < 2 || frames.length > 24) return
+  // Separate captions uniquely anchored below separate closed faces establish
+  // independent figures. Completing one of them must not absorb its neighbor.
+  const captionFrame = (candidate) => {
+    const matches = frames.filter(
+      (frame) =>
+        candidate.rect[1] >= frame[3] &&
+        candidate.rect[1] - frame[3] < font * 6 &&
+        Math.min(candidate.rect[2], frame[2]) - Math.max(candidate.rect[0], frame[0]) >=
+          Math.min(candidate.rect[2] - candidate.rect[0], frame[2] - frame[0]) * 0.5
+    )
+    return matches.length === 1 ? matches[0] : undefined
+  }
+  const ownFrame = captionFrame(caption)
+  if (
+    ownFrame &&
+    ownCaps.some((candidate) => {
+      if (candidate === caption) return false
+      const otherFrame = captionFrame(candidate)
+      return otherFrame && otherFrame !== ownFrame
+    })
+  )
+    return
   const b = union(frames)
   const horizontal = frames.every(
       (r) =>
@@ -210,11 +233,33 @@ export function nativeCaptionedPlotBand(
             )
           })
     )
+  const intervalGrid =
+    !keyed &&
+    !horizontal &&
+    !vertical &&
+    !grid &&
+    nativeTitledIntervalColumns(page, rows, closedFrames, nativeTokens, font)
   if (
-    (!keyed && !horizontal && !vertical && !grid) ||
+    (!keyed && !horizontal && !vertical && !grid && !intervalGrid) ||
     ownCaps.some((c) => c !== caption && intersection(c.rect, b) > 0)
   )
     return
+  // Two explicitly described curve panels have independent closed native
+  // frames as well as the ordinary tick/ink proof. They need not contain a
+  // third curve merely to distinguish their shared plate from surrounding text.
+  const describedCurvePair =
+    vertical &&
+    frames.length === 2 &&
+    /\btop:\s+\S[\s\S]*\bbottom:\s+\S/i.test(caption.lines.join(' ')) &&
+    Math.abs(frames[0][3] - frames[0][1] - frames[1][3] + frames[1][1]) < 0.01 &&
+    Math.max(frames[0][1], frames[1][1]) - Math.min(frames[0][3], frames[1][3]) > 0 &&
+    Math.max(frames[0][1], frames[1][1]) - Math.min(frames[0][3], frames[1][3]) < font * 2 &&
+    frames.every(
+      (r) =>
+        r[0] >= caption.rect[0] &&
+        r[2] <= caption.rect[2] &&
+        closedFrames.filter((f) => f.every((v, n) => Math.abs(v - r[n]) < 0.01)).length === 1
+    )
   if (
     frames.some((r) => {
       const ticks = page.lines.filter(
@@ -241,7 +286,7 @@ export function nativeCaptionedPlotBand(
             x[2] - x[0] > font * 3 &&
             x[3] - x[1] > font * 0.3
         )
-      return ticks.length < (unequal ? 1 : 4) || inside.length < 3
+      return ticks.length < (unequal ? 1 : 4) || inside.length < (describedCurvePair ? 2 : 3)
     })
   )
     return
@@ -276,6 +321,7 @@ export function nativeCaptionedPlotBand(
     ...(translated?.legend ? [translated.legend] : [])
   ])
   if (
+    (intervalGrid && ownCaps.some((c) => c !== caption && intersection(c.rect, rect) > 0)) ||
     tables.some((t) => intersection(t, rect) > 0) ||
     page.lines.some(
       (l) =>
@@ -298,7 +344,176 @@ export function nativeCaptionedPlotBand(
         font
       )
     : undefined
-  return { caption, rect: measured ?? rect, graphicsCount: frames.length }
+  return {
+    caption,
+    rect: measured ?? rect,
+    graphicsCount: frames.length,
+    ...(describedCurvePair ? { reason: 'native-described-curve-pair' } : {})
+  }
+}
+
+// Caption references and a complete ordered native key inventory bind rows of
+// different panel widths. Each face still passes the tick, paint, prose and
+// competing-owner checks above; proximity alone does not establish a plate.
+function nativeCaptionKeyedPlotRows(page, caption, frames, tokens, font) {
+  if (page.invalidGraphicsBounds !== 0) return
+  const referenced = new Set()
+  for (const match of caption.lines.join(' ').matchAll(/\(([a-z])\s*[-–]\s*([a-z])\)/g)) {
+    const first = match[1].charCodeAt(0),
+      last = match[2].charCodeAt(0)
+    if (last <= first) return
+    for (let n = first; n <= last; n++) referenced.add(n)
+  }
+  if (referenced.size < 3 || referenced.size > 24) return
+  const keys = tokens.filter(
+    (t) =>
+      /^\([a-z]\)$/.test(t.text?.trim() ?? '') &&
+      Array.isArray(t.rect) &&
+      t.rect[1] < caption.rect[1]
+  )
+  if (keys.length !== referenced.size) return
+  const ordered = []
+  for (let n = 0; n < keys.length; n++) {
+    const code = 97 + n
+    if (!referenced.has(code)) return
+    const matches = keys.filter((t) => t.text.trim() === `(${String.fromCharCode(code)})`)
+    if (matches.length !== 1) return
+    const key = matches[0],
+      r = key.rect,
+      source = key.sourceItem
+    if (
+      !key.horizontal ||
+      r.length !== 4 ||
+      !r.every(Number.isFinite) ||
+      r[2] <= r[0] ||
+      r[3] <= r[1] ||
+      r[2] - r[0] > font * 3 ||
+      r[3] - r[1] > font * 1.5 ||
+      r[3] >= caption.rect[1] ||
+      !source ||
+      source.pageNumber !== page.pageNumber ||
+      !Number.isSafeInteger(source.index) ||
+      source.index < 0 ||
+      source.text !== key.text ||
+      tokens.filter(
+        (t) =>
+          t.sourceItem?.pageNumber === source.pageNumber && t.sourceItem?.index === source.index
+      ).length !== 1
+    )
+      return
+    const faces = frames.filter(
+      (f) =>
+        f[2] - f[0] >= font * 6 &&
+        f[3] - f[1] >= font * 6 &&
+        r[1] >= f[3] &&
+        r[3] - f[3] <= font * 4 &&
+        Math.abs((r[0] + r[2] - f[0] - f[2]) / 2) <= font &&
+        r[0] >= f[0] &&
+        r[2] <= f[2]
+    )
+    if (faces.length !== 1 || ordered.includes(faces[0])) return
+    ordered.push(faces[0])
+  }
+  const rows = []
+  for (const frame of ordered) {
+    const row = rows.at(-1)
+    if (row && Math.abs(row[0][1] - frame[1]) < font * 0.15) {
+      if (Math.abs(row[0][3] - frame[3]) >= font * 0.15 || frame[0] <= row.at(-1)[2]) return
+      row.push(frame)
+    } else {
+      if (row && frame[1] <= row[0][3]) return
+      rows.push([frame])
+    }
+  }
+  if (
+    rows.length < 2 ||
+    rows.some((row) => row.length < 2) ||
+    rows.some(
+      (row) =>
+        Math.abs(row[0][0] - rows[0][0][0]) > font * 0.5 ||
+        Math.abs(row.at(-1)[2] - rows[0].at(-1)[2]) > font * 0.5
+    ) ||
+    rows.slice(1).some((row, n) => row[0][1] - rows[n][0][3] > font * 16)
+  )
+    return
+  return ordered
+}
+
+// Complete shared title rows and disjoint column intervals independently prove
+// trimmed panel widths. Legacy equal-width, tick and paint checks stay intact.
+function nativeTitledIntervalColumns(page, rows, frames, tokens, font) {
+  const contains = (a, b, epsilon = 1e-7) =>
+    b.every((v, i) => (i < 2 ? v >= a[i] - epsilon : v <= a[i] + epsilon))
+  if (page.invalidGraphicsBounds !== 0 || rows.length < 2 || rows.length > 6) return false
+  const sorted = rows.map((row) => row.slice().sort((a, b) => a[0] - b[0]))
+  const width = sorted[0].length
+  if (width < 2 || width > 6 || sorted.some((row) => row.length !== width)) return false
+  const faces = sorted.flat(),
+    columns = sorted[0].map((_, i) => sorted.map((row) => row[i]))
+  if (
+    faces.some(
+      (f) =>
+        f[2] - f[0] < font * 6 ||
+        f[3] - f[1] < font * 6 ||
+        frames.filter((r) => r.every((v, i) => Math.abs(v - f[i]) <= 0.01)).length !== 1
+    )
+  )
+    return false
+  if (
+    sorted.some((row, j) =>
+      row.some(
+        (r, i) =>
+          Math.abs(r[1] - row[0][1]) > 1e-7 ||
+          Math.abs(r[3] - row[0][3]) > 1e-7 ||
+          (j && (r[1] <= sorted[j - 1][i][3] || r[1] - sorted[j - 1][i][3] > font * 8))
+      )
+    )
+  )
+    return false
+  if (
+    columns.some(
+      (column, i) =>
+        Math.max(...column.map((r) => r[0])) >= Math.min(...column.map((r) => r[2])) ||
+        (i && Math.min(...column.map((r) => r[0])) <= Math.max(...columns[i - 1].map((r) => r[2])))
+    )
+  )
+    return false
+  const b = union(faces)
+  if (
+    frames.some(
+      (r) => intersection(r, b) > 0 && faces.filter((f) => contains(f, r, 0.01)).length !== 1
+    )
+  )
+    return false
+  const titles = []
+  for (let j = 0; j < sorted.length; j++) {
+    const rowTitles = []
+    for (let i = 0; i < width; i++) {
+      const f = sorted[j][i],
+        column = columns[i]
+      const matches = page.lines.filter(
+        (l) =>
+          l.fontSize > 0 &&
+          l.fontSize <= font &&
+          l.text.length < 60 &&
+          /\p{L}/u.test(l.text) &&
+          (!titles.length || Math.abs(l.fontSize - titles[0].fontSize) < 1e-7) &&
+          Math.abs(l.height - l.fontSize) < 1e-7 &&
+          l.y + l.height <= f[1] &&
+          f[1] - l.y - l.height <= font * 2 &&
+          l.x >= Math.max(...column.map((r) => r[0])) &&
+          l.x + l.width <= Math.min(...column.map((r) => r[2]))
+      )
+      if (matches.length !== 1 || !completeNativePlotLine(matches[0], tokens)) return false
+      rowTitles.push(matches[0])
+    }
+    if (rowTitles.some((l) => Math.abs(l.y - rowTitles[0].y) > 1e-7)) return false
+    titles.push(...rowTitles)
+  }
+  return (
+    new Set(titles.map((l) => l.text)).size === faces.length &&
+    titles.every((l) => Math.abs(l.fontSize - titles[0].fontSize) < 1e-7)
+  )
 }
 
 function completeNativePlotLine(line, tokens) {
@@ -1396,6 +1611,7 @@ export function nativeFigureRunningHead(page, captions, tokens = [], rules = [],
     ? tokens
         .filter((t) => t.horizontal && t.rect?.every(Number.isFinite) && area(t.rect) > 0)
         .map((t) => ({
+          token: t,
           text: t.text,
           x: t.rect[0],
           y: t.rect[1],
@@ -1575,7 +1791,12 @@ export function nativeFigureRunningHead(page, captions, tokens = [], rules = [],
           .map((t) => t.text.replace(/\s/g, ''))
           .join('')
   )
-  return { lines: printed.length ? printed : lines, bar, decorations }
+  return {
+    lines: printed.length ? printed : lines,
+    tokens: lines.map((line) => line.token).filter(Boolean),
+    bar,
+    decorations
+  }
 }
 
 // A captioned pair of closed, populated plots can use complete keyed titles
@@ -1843,7 +2064,7 @@ export function nativeAlignedNodeFigure(page, caption, captions, tables, rules, 
   return { caption, rect, graphicsCount: nodes.length + edges.length }
 }
 
-export function nativeTopParagraphTail(line, bounds, lines) {
+export function nativeTopParagraphTail(line, bounds, lines, captions = []) {
   if (line.y + line.height > bounds[1] || line.fontSize <= 0 || line.text.length < 3) return false
   const owned = [line]
   let current = line
@@ -1864,7 +2085,21 @@ export function nativeTopParagraphTail(line, bounds, lines) {
     current = peers[0]
     owned.push(current)
   }
+  // A figure can interrupt a sentence: require two full-width baselines above
+  // it and independently matching paragraph typography continuing below it.
   return (
+    (owned.length >= 2 &&
+      owned.every((l) => l.text.length >= 60 && l.width >= (bounds[2] - bounds[0]) * 0.85) &&
+      lines.some(
+        (l) =>
+          l.y > bounds[3] &&
+          !captions.some((c) => intersection(c.rect, lineRect(l)) > 0) &&
+          l.y - bounds[3] < line.fontSize * 7 &&
+          l.text.length >= 60 &&
+          Math.abs(l.fontSize - line.fontSize) < 0.1 &&
+          Math.abs(l.x - line.x) < line.fontSize &&
+          Math.abs(l.width - line.width) < line.fontSize * 2
+      )) ||
     (owned.length >= 3 &&
       owned.filter((l) => l.text.length >= 60).length >= 2 &&
       current.y < bounds[1] - 24) ||
@@ -2589,9 +2824,15 @@ function supportsCompactFacetedOperatorContext(
 // refuses invisible/white paint; no legacy plot selector uses this mode.
 export function completeNativeNodeGlyphProgram(page, tokens, frames, context) {
   return (
-    supportsCompactFacetedOperatorContext(page, tokens, frames, context, false, true) &&
+    completeNativeNodeGlyphState(page, tokens, frames, context) &&
     nativeCompletePlotGlyphBoxes(tokens, context.operators, context.viewport)
   )
+}
+
+// The scoped algorithm caller binds whole claimed advances and every foreign
+// used glyph independently; the legacy node program still requires both gates.
+export function completeNativeNodeGlyphState(page, tokens, frames, context) {
+  return supportsCompactFacetedOperatorContext(page, tokens, frames, context, false, true)
 }
 
 // The scoped closed-array path binds each original whole font to the native
@@ -2975,4 +3216,126 @@ function nativeTwoRowThreeClosedPlots(
   )
     return
   return { caption, rect, graphicsCount: outer.length }
+}
+
+// A complete strip can include panels whose right spine is intentionally absent.
+// A later closed-face selector may own only the closed siblings. Preserve the
+// already accepted crop only when independent rule grids and whole native titles
+// prove the omitted panel; this never supplies new crop edges or glyph ink.
+export function nativePlotStripHasOmittedAxes(
+  page,
+  figure,
+  closed,
+  captions,
+  tables,
+  rules,
+  tokens
+) {
+  const valid = (r) =>
+    Array.isArray(r) && r.length === 4 && r.every(Number.isFinite) && r[2] > r[0] && r[3] > r[1]
+  const inside = (outer, r) => r.every((v, n) => (n < 2 ? v >= outer[n] : v <= outer[n]))
+  if (
+    figure?.reason !== 'native-vector-chart-strip' ||
+    !valid(figure.rect) ||
+    !valid(closed?.rect) ||
+    page.invalidGraphicsBounds !== 0 ||
+    ![captions, tables, rules, tokens].every(Array.isArray)
+  )
+    return false
+  const caption = figure.caption,
+    cap = page.lines.filter((l) => intersection(lineRect(l), caption.rect) > 0)
+  const em = Math.max(...cap.map((l) => l.fontSize))
+  if (
+    !(em > 0) ||
+    !Number.isFinite(em) ||
+    figure.rect[3] >= caption.rect[1] ||
+    tables.some((t) => !valid(t) || intersection(t, figure.rect) > 0) ||
+    captions.some(
+      (c) => c !== caption && c.page === page.pageNumber && intersection(c.rect, figure.rect) > 0
+    ) ||
+    // Both selectors must concern the same band. Preserve the original crop,
+    // rather than borrowing even a narrow unproved strip from the new one.
+    closed.rect[0] < figure.rect[0] ||
+    closed.rect[2] > figure.rect[2] ||
+    closed.rect[3] > figure.rect[3] ||
+    rules.some((r) => !Array.isArray(r) || r.length !== 4 || !r.every(Number.isFinite))
+  )
+    return false
+  const grids = []
+  for (const r of rules) {
+    if (r[1] !== r[3] || r[2] - r[0] < em * 4 || !inside(figure.rect, r)) continue
+    let grid = grids.find((g) => Math.abs(g.left - r[0]) < 1e-6 && Math.abs(g.right - r[2]) < 1e-6)
+    if (!grid) {
+      grid = { left: r[0], right: r[2], ys: [] }
+      grids.push(grid)
+    }
+    if (!grid.ys.some((y) => Math.abs(y - r[1]) < 1e-6)) grid.ys.push(r[1])
+  }
+  const faces = []
+  for (const grid of grids) {
+    grid.ys.sort((a, b) => a - b)
+    const top = grid.ys[0],
+      bottom = grid.ys.at(-1),
+      face = [grid.left, top, grid.right, bottom]
+    if (
+      grid.ys.length < 3 ||
+      bottom - top < em * 4 ||
+      !rules.some(
+        (r) =>
+          Math.abs(r[0] - grid.left) < 1e-6 &&
+          Math.abs(r[2] - grid.left) < 1e-6 &&
+          Math.abs(r[1] - top) < 1e-6 &&
+          Math.abs(r[3] - bottom) < 1e-6
+      )
+    )
+      continue
+    const titles = tokens.filter(
+      (t) =>
+        t.horizontal === true &&
+        /^[\p{L}][\p{L}\p{N} -]{1,39}$/u.test(t.text ?? '') &&
+        valid(t.rect) &&
+        inside(figure.rect, t.rect) &&
+        t.height >= em * 0.5 &&
+        t.height <= em &&
+        Number.isFinite(t.baseline) &&
+        Math.abs(t.rect[3] - t.baseline) < 1e-6 &&
+        t.rect[3] <= top &&
+        top - t.rect[3] <= em * 2 &&
+        t.rect[0] >= grid.left &&
+        t.rect[2] <= grid.right &&
+        Math.abs((t.rect[0] + t.rect[2] - grid.left - grid.right) / 2) <= em * 2 &&
+        t.sourceItem?.pageNumber === page.pageNumber &&
+        Number.isSafeInteger(t.sourceItem.index) &&
+        t.sourceItem.index >= 0 &&
+        t.sourceItem.text === t.text &&
+        tokens.filter((other) => other.sourceItem?.index === t.sourceItem.index).length === 1
+    )
+    if (titles.length) faces.push({ rect: face, titles })
+  }
+  faces.sort((a, b) => a.rect[0] - b.rect[0])
+  if (
+    faces.length < 3 ||
+    faces.length > 8 ||
+    faces.some(
+      (f, n) =>
+        Math.abs(f.rect[1] - faces[0].rect[1]) > em * 0.1 ||
+        Math.abs(f.rect[3] - faces[0].rect[3]) > em * 0.1 ||
+        Math.abs(f.rect[2] - f.rect[0] - faces[0].rect[2] + faces[0].rect[0]) > em * 0.1 ||
+        (n > 0 && f.rect[0] <= faces[n - 1].rect[2])
+    )
+  )
+    return false
+  const sameTitleRow = (a, b) =>
+    Math.abs(a.baseline - b.baseline) < em * 0.01 && Math.abs(a.height - b.height) < em * 0.01
+  const rows = []
+  for (const title of faces.flatMap((f) => f.titles)) {
+    if (rows.some((other) => sameTitleRow(title, other))) continue
+    if (faces.every((f) => f.titles.filter((other) => sameTitleRow(title, other)).length === 1))
+      rows.push(title)
+  }
+  if (rows.length !== 1) return false
+  return (
+    faces.some((f) => intersection(f.rect, closed.rect) === 0) &&
+    faces.filter((f) => inside(closed.rect, f.rect)).length >= 2
+  )
 }

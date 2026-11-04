@@ -8,6 +8,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as React from 'react'
 
 import { useSettingsStore } from '@/stores/settings-store'
+import { useDesktopRuntimeRecoveryStore } from '@/stores/desktop-runtime-recovery-store'
+import { useComputeStore } from '@/stores/compute-store'
+import { createInitialSkillImportState, useSkillImportStore } from '@/stores/skill-import-store'
 import { useNavigationStore } from '@/stores/navigation-store'
 import { createInitialMemoryState, useMemoryStore } from '@/stores/memory-store'
 import {
@@ -194,7 +197,11 @@ describe('WorkspacePage send gate while compacting', () => {
   let root: Root
 
   beforeEach(() => {
+    useDesktopRuntimeRecoveryStore.setState({ phase: 'connected', epoch: 0, closing: false }, true)
     setDefaultWorkspaceAgentSettings()
+    useComputeStore.setState({ pendingApprovals: [] })
+    useSettingsStore.setState({ pendingApprovals: [], pendingCredentialRequests: [] })
+    useSkillImportStore.setState(createInitialSkillImportState())
     usePreviewWorkbenchStore.setState(createInitialPreviewWorkbenchState())
     useProjectStore.setState({ projects: [] })
     markWorkspaceReviewHistoryLoaded({ projectId: 'proj-1', sessionId: 'sess-a' })
@@ -207,7 +214,12 @@ describe('WorkspacePage send gate while compacting', () => {
     })
     vi.clearAllMocks()
     runtime.actionError = null
-    useWorkspaceOperationErrors.setState({ errors: {} })
+    useWorkspaceOperationErrors.setState({
+      errors: {},
+      providerValidations: {},
+      providerTargets: {},
+      diagnostics: {}
+    })
     runtime.promptInFlightSessionIds = []
     runtime.sendPreparationInFlightSessionIds = []
     runtime.nativeContextCompactionSessionIds = ['sess-a']
@@ -252,6 +264,7 @@ describe('WorkspacePage send gate while compacting', () => {
       root.unmount()
     })
     vi.useRealTimers()
+    useDesktopRuntimeRecoveryStore.setState({ phase: 'connected', epoch: 0, closing: false }, true)
     container.remove()
   })
 
@@ -296,6 +309,31 @@ describe('WorkspacePage send gate while compacting', () => {
     expect(conversationProps.sessionTools.menuBindings?.['toggle-pin']?.disabled).toBe(true)
     expect(conversationProps.sessionTools.menuBindings?.edit?.disabled).toBe(true)
     togglePinned.mockRestore()
+  })
+
+  it('keeps a previously ready local draft editable during service recovery without enabling persistence writes', async () => {
+    root = createRoot(container)
+    const present = async (ready: boolean): Promise<void> => {
+      await act(async () =>
+        root.render(
+          <WorkspacePage
+            isSessionPersistenceHydrated={true}
+            isSessionPersistenceReady={ready}
+            canDeleteConversations={false}
+          />
+        )
+      )
+    }
+    await act(async () => useDesktopRuntimeRecoveryStore.setState({ phase: 'disconnected' }))
+    await present(false)
+    expect(conversationProps.view.canEditLocalDraft).toBe(false)
+    await act(async () => useDesktopRuntimeRecoveryStore.setState({ phase: 'connected' }))
+    await present(true)
+    expect(conversationProps.view.canEditLocalDraft).toBe(true)
+    await act(async () => useDesktopRuntimeRecoveryStore.setState({ phase: 'reconnecting' }))
+    await present(false)
+    expect(conversationProps.view.canEditLocalDraft).toBe(true)
+    expect(conversationProps.view.canEditDraft).toBe(false)
   })
 
   it.each(['codex-shared', 'codex-isolated'] as const)(
@@ -349,6 +387,113 @@ describe('WorkspacePage send gate while compacting', () => {
 
     await act(async () => useSessionStore.setState({ selectedSessionId: undefined }))
     expect(conversationProps.view.actionError).toBe('Runtime action failed elsewhere')
+  })
+
+  it.each([-100_000, 100_000])(
+    'unblocks both sessions after login despite renderer clock offset %i and preserves manual sending',
+    async (clockOffset) => {
+      runtime.nativeContextCompactionSessionIds = []
+      const sessions = [createSession(), createSession({ id: 'sess-b' })]
+      useSessionStore.setState({ sessions })
+      markWorkspaceReviewHistoryLoaded(
+        ...sessions.map(({ id, projectId }) => ({ sessionId: id, projectId }))
+      )
+      const now = vi.spyOn(Date, 'now').mockReturnValue(20 + clockOffset)
+      reportWorkspaceOperationError('sess-a', 'Authentication required')
+      reportWorkspaceOperationError('sess-b', 'Authentication required')
+      await renderPage()
+      await act(async () => conversationProps.composer.actions.changeDoc(textDoc('Draft A')))
+      expect(conversationProps.view.authenticationRecovery?.required).toBe(true)
+      await act(async () => useSessionStore.setState({ selectedSessionId: 'sess-b' }))
+      await act(async () => conversationProps.composer.actions.changeDoc(textDoc('Draft B')))
+      expect(conversationProps.view.authenticationRecovery?.required).toBe(true)
+      expect(conversationProps.conversation.availability.submit).toBe(false)
+      await act(async () => useSessionStore.setState({ selectedSessionId: 'sess-a' }))
+      await act(async () => {
+        conversationProps.view.authenticationRecovery?.openSettings()
+        useSettingsStore.setState({
+          providers: useSettingsStore.getState().providers.map((provider) => ({
+            ...provider,
+            lastValidatedAt: 30
+          }))
+        })
+      })
+      expect(conversationProps.view.authenticationRecovery?.required).toBe(false)
+      expect(conversationProps.composer.view.doc).toEqual(textDoc('Draft A'))
+      await act(async () => useSessionStore.setState({ selectedSessionId: 'sess-b' }))
+      expect(conversationProps.view.authenticationRecovery?.required).toBe(false)
+      expect(conversationProps.conversation.availability.submit).toBe(true)
+      expect(conversationProps.composer.view.doc).toEqual(textDoc('Draft B'))
+      expect(runtime.sendMessage).not.toHaveBeenCalled()
+      runtime.sendMessage.mockResolvedValueOnce({ sessionId: 'sess-b', messageId: 'message-b' })
+      await act(async () => {
+        conversationProps.conversation.actions.submit.draft({ forcedSkillIds: [] })
+      })
+      expect(runtime.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ text: 'Draft B' }))
+      await act(async () => conversationProps.composer.actions.changeDoc(textDoc('Next message')))
+      now.mockReturnValue(40 + clockOffset)
+      await act(async () => reportWorkspaceOperationError('sess-b', 'Authentication required'))
+      expect(conversationProps.view.authenticationRecovery?.required).toBe(true)
+      expect(conversationProps.conversation.availability.submit).toBe(false)
+      now.mockRestore()
+    }
+  )
+
+  it('routes both sessions to the captured failed account and restores their drafts after its validation', async () => {
+    runtime.nativeContextCompactionSessionIds = []
+    const selected = useSettingsStore.getState().providers[0]
+    const failed = {
+      ...selected,
+      id: 'explicit-target',
+      name: 'Requested account',
+      models: ['requested-model'],
+      lastValidatedAt: 10
+    }
+    useSettingsStore.setState({ providers: [selected, failed] })
+    const sessions = [createSession(), createSession({ id: 'sess-b' })]
+    useSessionStore.setState({ sessions })
+    markWorkspaceReviewHistoryLoaded(
+      ...sessions.map(({ id, projectId }) => ({ sessionId: id, projectId }))
+    )
+    for (const session of sessions)
+      reportWorkspaceOperationError(session.id, 'Authentication required', {
+        providerTarget: { providerId: failed.id, model: 'requested-model' }
+      })
+    await renderPage()
+    await act(async () => conversationProps.composer.actions.changeDoc(textDoc('Draft A')))
+    expect(conversationProps.view.authenticationRecovery?.provider?.id).toBe(failed.id)
+    expect(conversationProps.conversation.availability.submit).toBe(false)
+    await act(async () => conversationProps.view.authenticationRecovery?.openSettings())
+    expect(useSettingsStore.getState().pendingSettingsIntent?.route).toMatchObject({
+      panel: 'model',
+      view: { recoveryProviderId: failed.id }
+    })
+    await act(async () => useSessionStore.setState({ selectedSessionId: 'sess-b' }))
+    await act(async () => conversationProps.composer.actions.changeDoc(textDoc('Draft B')))
+    expect(conversationProps.view.authenticationRecovery?.provider?.id).toBe(failed.id)
+    await act(async () =>
+      useSettingsStore.setState({ providers: [{ ...selected, lastValidatedAt: 30 }, failed] })
+    )
+    expect(conversationProps.view.authenticationRecovery?.required).toBe(true)
+    await act(async () =>
+      useSettingsStore.setState({
+        providers: [
+          selected,
+          {
+            ...failed,
+            lastValidatedAt: 30,
+            lastValidatedTarget: { model: 'requested-model' }
+          }
+        ]
+      })
+    )
+    expect(conversationProps.view.authenticationRecovery?.required).toBe(false)
+    expect(conversationProps.conversation.availability.submit).toBe(true)
+    expect(conversationProps.composer.view.doc).toEqual(textDoc('Draft B'))
+    await act(async () => useSessionStore.setState({ selectedSessionId: 'sess-a' }))
+    expect(conversationProps.view.authenticationRecovery?.required).toBe(false)
+    expect(conversationProps.composer.view.doc).toEqual(textDoc('Draft A'))
+    expect(runtime.sendMessage).not.toHaveBeenCalled()
   })
 
   it('saves the selected branch before stopping its Subagents', async () => {
@@ -660,6 +805,57 @@ describe('WorkspacePage send gate while compacting', () => {
     expect(conversationProps.conversation.availability.submit).toBe(false)
     expect(conversationProps.conversation.availability.revise).toBe(false)
     expect(conversationProps.agentControls.canChange).toBe(false)
+  })
+
+  it('blocks overlapping actions while a remote approval is pending and unlocks after settlement', async () => {
+    useComputeStore.getState().enqueueApproval({
+      id: 'remote-approval',
+      session_id: 'sess-a',
+      provider_id: 'ssh:cluster',
+      provider_name: 'Cluster',
+      shape: 'direct_ssh',
+      intent: 'Run remote analysis',
+      operation: 'call_command',
+      command_preview: 'python analysis.py',
+      command_full: 'python analysis.py'
+    })
+    await renderPage()
+    await act(async () => {
+      conversationProps.composer.actions.changeDoc(textDoc('start another request'))
+    })
+
+    expect(conversationProps.conversation.availability.submit).toBe(false)
+    expect(conversationProps.conversation.availability.revise).toBe(false)
+    expect(conversationProps.agentControls.canChange).toBe(false)
+
+    await act(async () => useComputeStore.getState().dismissApproval('remote-approval'))
+    expect(conversationProps.conversation.availability.submit).toBe(true)
+    expect(conversationProps.conversation.availability.revise).toBe(true)
+    expect(conversationProps.agentControls.canChange).toBe(true)
+  })
+
+  it('releases the Composer lane after a credential request closes despite failed cancellation', async () => {
+    useSettingsStore.setState({
+      pendingCredentialRequests: [
+        {
+          id: 'closed-credential',
+          credentialId: 'openalex',
+          connector: 'literature',
+          method: 'openalex_search_works',
+          sessionId: 'sess-a',
+          closed: true,
+          responseFailed: true
+        }
+      ]
+    })
+    await renderPage()
+    await act(async () => {
+      conversationProps.composer.actions.changeDoc(textDoc('continue after closing'))
+    })
+
+    expect(conversationProps.permissions.credentialRequests).toEqual([])
+    expect(conversationProps.conversation.availability.submit).toBe(true)
+    expect(conversationProps.agentControls.canChange).toBe(true)
   })
 
   it('unlocks a waiting Session after main confirms there is no active Plan', async () => {
@@ -1370,7 +1566,12 @@ describe('WorkspacePage send gate while compacting', () => {
     expect(conversationProps.view.actionError).toBe('Permission response failed')
 
     await act(async () => {
-      useWorkspaceOperationErrors.setState({ errors: {} })
+      useWorkspaceOperationErrors.setState({
+        errors: {},
+        providerValidations: {},
+        providerTargets: {},
+        diagnostics: {}
+      })
       useSessionStore.getState().failRun('sess-a', 'Continuation failed')
       useSessionStore.getState().setPermissionPending('sess-a')
     })

@@ -93,6 +93,7 @@ export type {
   SetSessionPinnedRequest,
   SessionMetadataReceipt,
   DeleteSessionRequest,
+  DeleteSessionRecoveryFileRequest,
   SessionDeletionResult,
   UpdateSessionArchiveRequest,
   SaveSessionManifestRequest
@@ -103,6 +104,8 @@ export {
   linkSessionPdfContextRequestSchema,
   unlinkSessionPdfContextRequestSchema,
   deleteSessionRequestSchema,
+  deleteSessionRecoveryFileRequestSchema,
+  SESSION_RECOVERY_COMPUTE_JOBS_ERROR,
   editSessionDetailsRequestSchema,
   renameSessionRequestSchema,
   setSessionPinnedRequestSchema,
@@ -140,11 +143,13 @@ export {
   isComputeJobCompletionAttribution,
   isAgentResultDeliveryAttribution,
   sanitizeMessageAttribution,
+  sanitizeMessage,
   sanitizeMessagePresentation,
   isComputeJobCompletionPresentation
 } from './session-persistence/message-codec'
 export { sanitizeToolActivity, sanitizeActivityGroup } from './session-persistence/tool-activity'
 export {
+  sanitizeArtifact,
   sanitizeMessageParts,
   sanitizeSessionReferences,
   sanitizeMessageImages,

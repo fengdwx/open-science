@@ -1,5 +1,11 @@
+import {
+  trackLifecycleSettlement,
+  hasPendingLifecycleSettlement,
+  waitForLifecycleSettlement
+} from '../lifecycle-settlement'
 import type { ActiveSession } from '@agentclientprotocol/sdk'
 import { randomUUID } from 'node:crypto'
+import { createLogger, diagnosticErrorFields } from '@aipoch/diagnostics/node'
 
 import type {
   AcpCancelPromptRequest,
@@ -25,7 +31,7 @@ import type {
 } from '../../shared/acp'
 import { MAX_ACP_RUNTIME_EVENTS } from '../../shared/acp'
 import type { AgentUserChoiceRequest, AgentUserChoiceResult } from '../../shared/elicitation'
-import type { ResolvedReasoningEffort } from '../../shared/reasoning-effort'
+import type { ResolvedReasoningEffort } from '@aipoch/providers'
 import type { MessageAttribution } from '../../shared/session-persistence'
 import type { AgentFrameworkId } from '../../shared/settings'
 import type { AgentModelChangeTarget } from '../agent-framework'
@@ -39,11 +45,18 @@ import type { RootDelegatedWorkControl } from '../delegation/production-composit
 import type { ShutdownStepOutcome } from '../lifecycle-shutdown'
 import { ConversationPermissionGrantStore, type AppPermissionRequest } from './permission-broker'
 import { AcpRuntime } from './runtime'
+import {
+  retainSessionCreationCleanup,
+  waitForSessionCreationCleanup
+} from './session-creation-cleanup'
 import type { AcpRuntimeActivity, AcpRuntimeActivityOptions } from './runtime-activity'
 import type { AcpRuntimeCallbacks } from './runtime-contract'
 import { projectPermissionRequest } from './runtime-publication-owner'
 
+const log = createLogger('acp')
+
 const QUIT_PREPARATION_TIMEOUT_MS = 4_000
+const SETTLEMENT_GRACE_MS = 3_000
 
 const isOwnershipScopedControlEvent = (event: AcpRuntimeEvent): boolean =>
   event.kind === 'compaction' ||
@@ -130,6 +143,9 @@ type PendingResumeReconciliation = {
 }
 
 type RootAdmissionLease = {
+  cancellation: RootAdmissionCancellation
+  settled: Promise<void>
+  resumeOperation?: Promise<unknown>
   release: () => void
 }
 
@@ -150,10 +166,19 @@ type PromptAdmissionGuard = <Result>(
 // retire their runtime so every later turn resumes through the newly selected framework.
 class AcpRuntimeCoordinator {
   private readonly runtimes = new Set<AcpRuntime>()
+  // A failed incoming resume must retry the same provider history even after its writer detached.
+  private readonly sessionWriterTransfers = new Map<
+    string,
+    NonNullable<Parameters<AcpRuntime['resumeSession']>[1]>
+  >()
   private readonly retiredRuntimes = new Set<AcpRuntime>()
   private readonly sessionRuntimes = new Map<string, AcpRuntime>()
+  private readonly fullAccessSubscriptions = new Map<string, Set<() => void>>()
   private readonly sessionConnectionStatuses = new Map<string, AcpStateSnapshot['status']>()
   private readonly permissionRuntimes = new Map<string, AcpRuntime>()
+  // A cold decision is committed before runtime restoration. This single-use claim survives a
+  // runtime-generation handoff, but never a process restart or an explicit end-wait response.
+  private readonly preparedElicitationContinuations = new Map<string, string>()
   private readonly reviewerRuntimes = new WeakMap<ActiveSession, AcpRuntime>()
   private readonly runtimeIds = new WeakMap<AcpRuntime, string>()
   private readonly runtimeTargetKeys = new WeakMap<AcpRuntime, string>()
@@ -189,12 +214,22 @@ class AcpRuntimeCoordinator {
     request: AcpResumeSessionRequest,
     response: AcpCreateSessionResponse
   ) => Promise<void>
+  private quitPreparationEpoch = 0
   private promptAdmissionClosedForQuit = false
+  private updateAdmissionHolds = 0
   private providerShutdownStartedForQuit = false
   private readonly pendingSessionCreations = new Set<{ runtime: AcpRuntime; projectId?: string }>()
+  private readonly sessionResumeOperations = new Map<
+    string,
+    {
+      operation: Promise<AcpCreateSessionResponse>
+      invalidated: boolean
+      admittedRoot?: RootAdmissionLease
+    }
+  >()
   private readonly pendingSessionAdoptions = new Map<
     string,
-    { runtime: AcpRuntime; projectId?: string }
+    { runtime: AcpRuntime; projectId?: string; cleanup?: () => Promise<void> }
   >()
   private readonly pendingResumeReconciliations = new Map<string, PendingResumeReconciliation>()
   private readonly pendingSessionDrains = new Map<string, PendingSessionDrain>()
@@ -461,6 +496,7 @@ class AcpRuntimeCoordinator {
     this.supersedeInitializationRequests()
     this.cancelRootAdmissions()
     const runtimes = Array.from(this.runtimes)
+    const admissions = runtimes.map((runtime) => this.runtimeAdmissions.get(runtime))
     const [delegatedResult, ...results] = await Promise.allSettled([
       this.delegatedWork?.stopAll() ?? Promise.resolve(),
       ...runtimes.map((runtime) => runtime.disconnect(emitClosedStatus))
@@ -468,21 +504,23 @@ class AcpRuntimeCoordinator {
     const failure =
       results.find((result): result is PromiseRejectedResult => result.status === 'rejected') ??
       (delegatedResult.status === 'rejected' ? delegatedResult : undefined)
+    // A fulfilled disconnect may still own an unreaped process. Retain it for retry, reconciling
+    // detached sessions without discarding cleanup ownership or admissions acquired during teardown.
+    results.forEach((result, index) => {
+      const runtime = runtimes[index]
+      if (this.runtimeAdmissions.get(runtime) !== admissions[index]) return
+      if (result.status === 'fulfilled' && runtime.cleanupConfirmed)
+        this.releaseRuntimeOwnership(runtime)
+      else this.releaseMissingRuntimeSessions(runtime, runtime.getSnapshot())
+    })
     if (failure) {
-      // A multi-runtime teardown can partially succeed. Release only the runtimes that are definitely
-      // gone; failed runtimes retain their session and permission-routing ownership for retry.
-      // A rejection can still happen after a runtime cleared some/all sessions, so reconcile those
-      // actual disappearances too without releasing the failed runtime itself.
-      results.forEach((result, index) => {
-        const runtime = runtimes[index]
-        if (result.status === 'fulfilled') this.releaseRuntimeOwnership(runtime)
-        else this.releaseMissingRuntimeSessions(runtime, runtime.getSnapshot())
-      })
       this.emitState()
       throw failure.reason
     }
-    this.clearRuntimeOwnership()
-    this.onDisconnected?.()
+    if (this.runtimes.size === 0) {
+      this.clearRuntimeOwnership()
+      this.onDisconnected?.()
+    } else this.emitState()
     return this.getState()
   }
 
@@ -497,6 +535,7 @@ class AcpRuntimeCoordinator {
   }
 
   async shutdownForQuit(): Promise<{ reaped: boolean }> {
+    this.quitPreparationEpoch += 1
     this.providerShutdownStartedForQuit = true
     this.invalidateAllSessionTurns()
     this.supersedeInitializationRequests()
@@ -512,6 +551,7 @@ class AcpRuntimeCoordinator {
   async prepareForQuit(
     timeoutMs = QUIT_PREPARATION_TIMEOUT_MS
   ): Promise<Extract<ShutdownStepOutcome, 'completed' | 'timeout' | 'failed'>> {
+    this.quitPreparationEpoch += 1
     this.promptAdmissionClosedForQuit = true
     const activePromptSessionIds = new Set(
       this.getActivePromptSessions().map(({ sessionId }) => sessionId)
@@ -519,10 +559,10 @@ class AcpRuntimeCoordinator {
     const quitBlockingSessionIds = new Set(
       this.getQuitBlockingPromptSessions().map(({ sessionId }) => sessionId)
     )
-    const durablePermissionWaitSessionIds = new Set(
+    const durableWaitSessionIds = new Set(
       [...activePromptSessionIds].filter((sessionId) => !quitBlockingSessionIds.has(sessionId))
     )
-    for (const sessionId of durablePermissionWaitSessionIds) {
+    for (const sessionId of durableWaitSessionIds) {
       this.durableQuitDetachedSessionIds.add(sessionId)
     }
     const sessionIds = Array.from(
@@ -531,15 +571,18 @@ class AcpRuntimeCoordinator {
         ...this.pendingPromptStarts.keys(),
         ...this.getSnapshot().promptInFlightSessionIds
       ])
-    ).filter((sessionId) => !durablePermissionWaitSessionIds.has(sessionId))
+    ).filter((sessionId) => !durableWaitSessionIds.has(sessionId))
     if (sessionIds.length === 0 && !this.delegatedWork) return 'completed'
 
     const cancelAndDrain = async (): Promise<void> => {
-      const delegatedStop = this.delegatedWork?.stopAll() ?? Promise.resolve()
-      await Promise.allSettled(
-        sessionIds.map((sessionId) => this.cancelPrompt({ sessionId }).then(() => undefined))
-      )
-      await delegatedStop
+      // Observe both branches immediately: delegated stop may reject while a root cancellation
+      // is still waiting for its terminal response. Keep that rejection as the final outcome.
+      await Promise.all([
+        this.delegatedWork?.stopAll() ?? Promise.resolve(),
+        Promise.allSettled(
+          sessionIds.map((sessionId) => this.cancelPrompt({ sessionId }).then(() => undefined))
+        )
+      ])
       await Promise.all(
         sessionIds.map((sessionId) => this.waitForSessionInteractionRelease(sessionId))
       )
@@ -554,7 +597,10 @@ class AcpRuntimeCoordinator {
         resolve(outcome)
       }
       const timer = setTimeout(() => finish('timeout'), Math.max(0, timeoutMs))
-      void cancelAndDrain().then(
+      void trackLifecycleSettlement(cancelAndDrain(), {
+        owner: 'quit-preparation',
+        abandonAfterMs: Math.max(0, timeoutMs) + SETTLEMENT_GRACE_MS
+      }).then(
         () => finish('completed'),
         () => finish('failed')
       )
@@ -565,8 +611,25 @@ class AcpRuntimeCoordinator {
   // only the admission state owned by prepareForQuit; completed prompt cancellation remains completed.
   abortQuitPreparation(): void {
     if (this.providerShutdownStartedForQuit) return
-    this.promptAdmissionClosedForQuit = false
-    this.durableQuitDetachedSessionIds.clear()
+    const epoch = this.quitPreparationEpoch
+    const reopen = (): void => {
+      if (epoch !== this.quitPreparationEpoch || this.providerShutdownStartedForQuit) return
+      this.promptAdmissionClosedForQuit = false
+      this.durableQuitDetachedSessionIds.clear()
+    }
+    // Bounded: a cancellation that never settles is abandoned, so a refused quit always reopens.
+    if (hasPendingLifecycleSettlement()) void waitForLifecycleSettlement().then(reopen)
+    else reopen()
+  }
+
+  holdUpdateAdmission(): () => void {
+    this.updateAdmissionHolds++
+    let held = true
+    return () => {
+      if (!held) return
+      held = false
+      this.updateAdmissionHolds--
+    }
   }
 
   async shutdownForUpdateGate(): Promise<{ reaped: boolean }> {
@@ -580,8 +643,11 @@ class AcpRuntimeCoordinator {
   }
 
   async createSession(request: AcpCreateSessionRequest = {}): Promise<AcpCreateSessionResponse> {
+    this.assertPromptAdmissionOpen()
     await this.waitForInitialization()
+    this.assertPromptAdmissionOpen()
     const runtime = await this.runtimeForTarget(request.agentTarget, undefined, request.cwd)
+    this.assertPromptAdmissionOpen()
     const pending = { runtime, projectId: request.projectId }
     this.pendingSessionCreations.add(pending)
     let response: AcpCreateSessionResponse
@@ -589,7 +655,18 @@ class AcpRuntimeCoordinator {
       response = await runtime.createSession(request)
     } catch (error) {
       this.pendingSessionCreations.delete(pending)
-      await this.retireUnusedTargetedRuntime(runtime)
+      const capabilityCleanup = waitForSessionCreationCleanup(error)
+      const cleanup = (
+        capabilityCleanup
+          ? capabilityCleanup.then(() => this.retireUnusedTargetedRuntime(runtime))
+          : this.retireUnusedTargetedRuntime(runtime)
+      ).catch((cleanupError) => {
+        log.warn(
+          'Agent runtime cleanup after creation failure failed',
+          diagnosticErrorFields(cleanupError)
+        )
+      })
+      retainSessionCreationCleanup(error, cleanup)
       throw error
     } finally {
       this.pendingSessionCreations.delete(pending)
@@ -600,8 +677,102 @@ class AcpRuntimeCoordinator {
   }
 
   async resumeSession(request: AcpResumeSessionRequest): Promise<AcpCreateSessionResponse> {
+    return this.resumeSessionOnRuntime(request)
+  }
+
+  private async resumeSessionOnRuntime(
+    request: AcpResumeSessionRequest,
+    pinnedRuntime?: AcpRuntime
+  ): Promise<AcpCreateSessionResponse> {
+    const previous = this.sessionResumeOperations.get(request.sessionId)
+    if (pinnedRuntime && previous) {
+      // The admitted activity may need its own lazy resume before the outer handoff can drain it.
+      if (
+        previous.admittedRoot === this.activeRootAdmissions.get(request.sessionId) &&
+        previous.admittedRoot
+      ) {
+        return this.performSessionResume(request, pinnedRuntime)
+      }
+      throw new Error('ACP session must finish resuming before sending a prompt')
+    }
+    const generation = this.initializationGeneration
+    const activeRoot = this.activeRootAdmissions.get(request.sessionId)
+    const admittedRoot =
+      previous?.admittedRoot ??
+      (!pinnedRuntime && (!activeRoot?.cancellation.cancelled || activeRoot.resumeOperation)
+        ? activeRoot
+        : undefined)
+    const perform = async (): Promise<AcpCreateSessionResponse> => {
+      if (admittedRoot) {
+        await admittedRoot.settled
+        if (generation !== this.initializationGeneration || queue.invalidated) {
+          throw new Error('ACP session resume was superseded.')
+        }
+      }
+      return this.performSessionResume(request, pinnedRuntime)
+    }
+    const operation = previous
+      ? previous.operation
+          .catch(() => undefined)
+          .then(() => {
+            if (previous.invalidated || generation !== this.initializationGeneration) {
+              throw new Error('ACP session resume was superseded.')
+            }
+            return perform()
+          })
+      : perform()
+    const queue = previous ?? { operation, invalidated: false, admittedRoot }
+    queue.admittedRoot = admittedRoot
+    queue.operation = operation
+    this.sessionResumeOperations.set(request.sessionId, queue)
+    try {
+      return await operation
+    } finally {
+      if (this.sessionResumeOperations.get(request.sessionId)?.operation === operation) {
+        this.sessionResumeOperations.delete(request.sessionId)
+      }
+    }
+  }
+
+  private async performSessionResume(
+    request: AcpResumeSessionRequest,
+    pinnedRuntime?: AcpRuntime,
+    admissionCurrent?: () => boolean
+  ): Promise<AcpCreateSessionResponse> {
+    const resumeGeneration = this.initializationGeneration
     await this.waitForInitialization()
+    if (admissionCurrent && !admissionCurrent()) {
+      throw new Error('Continuation resume admission is no longer active.')
+    }
+    // A pinned activity must not reacquire the prior writer while another runtime adopts it.
+    if (pinnedRuntime && this.pendingSessionAdoptions.has(request.sessionId)) {
+      throw new Error('ACP session must finish resuming before sending a prompt')
+    }
+    const retainedProviderId = this.sessionWriterTransfers.get(request.sessionId)?.providerSessionId
+    if (retainedProviderId) {
+      request = { ...request, providerSessionId: retainedProviderId }
+    }
+    await this.pendingSessionAdoptions.get(request.sessionId)?.cleanup?.()
     const owner = this.findRuntimeForSession(request.sessionId)
+    // Consume a timed-out close on its owning runtime even when retrying the same model.
+    // Publish the receipt here before resume can fail or state updates can remove the old owner.
+    if (owner?.hasPendingSessionWriterRelease(request.sessionId)) {
+      const generation = this.initializationGeneration
+      const providerSessionId = await owner.releaseSessionForTransfer(request.sessionId)
+      if (
+        generation !== this.initializationGeneration ||
+        this.sessionResumeOperations.get(request.sessionId)?.invalidated
+      ) {
+        throw new Error('ACP session resume was superseded.')
+      }
+      if (providerSessionId) {
+        this.sessionWriterTransfers.set(request.sessionId, {
+          providerSessionId,
+          writerReleased: true
+        })
+        request = { ...request, providerSessionId }
+      }
+    }
     const pendingReconciliation = this.pendingResumeReconciliations.get(request.sessionId)
     if (
       pendingReconciliation &&
@@ -621,6 +792,7 @@ class AcpRuntimeCoordinator {
     const ownerTarget = owner && this.runtimeTargets.get(owner)
     const reuseCodexSession = Boolean(
       owner &&
+      (!pinnedRuntime || pinnedRuntime === owner) &&
       !this.retiredRuntimes.has(owner) &&
       target?.frameworkId === 'codex' &&
       ownerTarget?.frameworkId === 'codex' &&
@@ -646,11 +818,13 @@ class AcpRuntimeCoordinator {
         )
       }
     }
-    const targetedRuntime = reuseCodexSession
-      ? owner
-      : target
-        ? await this.runtimeForTarget(target, request.sessionId, request.cwd)
-        : undefined
+    const targetedRuntime =
+      pinnedRuntime ??
+      (reuseCodexSession
+        ? owner
+        : target
+          ? await this.runtimeForTarget(target, request.sessionId, request.cwd)
+          : undefined)
     const runtime =
       targetedRuntime ??
       (owner && !this.retiredRuntimes.has(owner)
@@ -662,12 +836,14 @@ class AcpRuntimeCoordinator {
     // Keep the prior owner authoritative until adoption finishes. The renderer does not create the
     // incoming optimistic run until this promise resolves, so terminal events emitted while the old
     // generation drains can still settle its own Runtime Segment without touching the next one.
-    const pendingAdoption = transfersOwnership
-      ? {
-          runtime,
-          projectId: request.projectId ?? owner?.liveSessionProjectId(request.sessionId)
-        }
-      : undefined
+    const pendingAdoption:
+      { runtime: AcpRuntime; projectId?: string; cleanup?: () => Promise<void> } | undefined =
+      transfersOwnership
+        ? {
+            runtime,
+            projectId: request.projectId ?? owner?.liveSessionProjectId(request.sessionId)
+          }
+        : undefined
     // A duplicate resume for the same app Session replaces the map entry. Keep the record identity
     // so an older failure cannot clear or retire the runtime needed by the newer adoption.
     if (pendingAdoption) {
@@ -676,13 +852,42 @@ class AcpRuntimeCoordinator {
 
     let response: AcpCreateSessionResponse
     try {
-      response = await runtime.resumeSession(request)
-    } catch (error) {
       if (
         transfersOwnership &&
-        this.pendingSessionAdoptions.get(request.sessionId) === pendingAdoption
+        owner &&
+        owner.isSessionUsingFramework(request.sessionId, 'codex') &&
+        (target?.frameworkId ?? runtime.captureBackend().framework?.id) === 'codex'
       ) {
+        // Adoption fences new starts; drain already-admitted prompts before detaching their writer.
+        await this.waitForSessionInteractionRelease(request.sessionId)
+        await this.waitForSessionDrain(owner, request.sessionId)
+        if (this.pendingSessionAdoptions.get(request.sessionId) !== pendingAdoption) {
+          throw new Error('ACP session adoption was superseded before writer release')
+        }
+        const providerSessionId = await owner.releaseSessionForTransfer(request.sessionId)
+        if (providerSessionId) {
+          this.sessionWriterTransfers.set(request.sessionId, {
+            providerSessionId,
+            writerReleased: true
+          })
+          request = { ...request, providerSessionId }
+        }
+        if (this.pendingSessionAdoptions.get(request.sessionId) !== pendingAdoption) {
+          throw new Error('ACP session adoption was superseded before provider resume')
+        }
+      }
+      const writerTransfer = this.sessionWriterTransfers.get(request.sessionId)
+      response = writerTransfer
+        ? await runtime.resumeSession(
+            { ...request, providerSessionId: writerTransfer.providerSessionId },
+            writerTransfer
+          )
+        : await runtime.resumeSession(request)
+    } catch (error) {
+      if (this.pendingSessionAdoptions.get(request.sessionId) === pendingAdoption) {
         this.pendingSessionAdoptions.delete(request.sessionId)
+        // A consumed close can detach the writer even when the retry reuses the same runtime.
+        if (owner) this.handleRuntimeState(owner, owner.getSnapshot())
       }
       await this.retireUnusedTargetedRuntime(runtime)
       throw error
@@ -696,12 +901,31 @@ class AcpRuntimeCoordinator {
     }
 
     if (
-      transfersOwnership &&
-      (this.pendingSessionAdoptions.get(request.sessionId) !== pendingAdoption ||
-        !this.runtimes.has(runtime) ||
-        this.retiredRuntimes.has(runtime))
+      resumeGeneration !== this.initializationGeneration ||
+      (admissionCurrent && !admissionCurrent()) ||
+      (transfersOwnership &&
+        (this.pendingSessionAdoptions.get(request.sessionId) !== pendingAdoption ||
+          !this.runtimes.has(runtime) ||
+          (this.retiredRuntimes.has(runtime) && !pinnedRuntime)))
     ) {
-      if (this.pendingSessionAdoptions.get(request.sessionId) === pendingAdoption) {
+      if (
+        pendingAdoption &&
+        admissionCurrent &&
+        !admissionCurrent() &&
+        this.pendingSessionAdoptions.get(request.sessionId) === pendingAdoption
+      ) {
+        const release = runtime.captureSessionResumeCleanup(response)
+        pendingAdoption.cleanup = async () => {
+          await release()
+          if (this.pendingSessionAdoptions.get(request.sessionId) === pendingAdoption) {
+            this.pendingSessionAdoptions.delete(request.sessionId)
+          }
+          if (!runtime.getSnapshot().sessionIds.includes(response.sessionId)) {
+            await this.retireUnusedTargetedRuntime(runtime)
+          }
+        }
+        await pendingAdoption.cleanup()
+      } else if (this.pendingSessionAdoptions.get(request.sessionId) === pendingAdoption) {
         this.pendingSessionAdoptions.delete(request.sessionId)
       }
       throw new Error('ACP session adoption was superseded before ownership could commit')
@@ -718,9 +942,10 @@ class AcpRuntimeCoordinator {
       response.sessionId !== request.sessionId &&
       this.sessionRuntimes.get(request.sessionId) === owner
     ) {
-      this.sessionRuntimes.delete(request.sessionId)
+      this.setSessionRuntime(request.sessionId, undefined)
       this.sessionConnectionStatuses.delete(request.sessionId)
     }
+    this.sessionWriterTransfers.delete(request.sessionId)
     this.bindSessionRuntime(response.sessionId, runtime)
     // The incoming runtime's attached snapshot is deliberately ignored while adoption is pending.
     // Commit its current connection status together with ownership so a stale status from the
@@ -758,6 +983,7 @@ class AcpRuntimeCoordinator {
     this.runtimeActivityCounts.set(runtime, (this.runtimeActivityCounts.get(runtime) ?? 0) + 1)
     try {
       const response = await runtime.resetSessionContext(request)
+      this.sessionWriterTransfers.delete(request.sessionId)
       this.bindSessionRuntime(response.sessionId, runtime)
       this.lastRuntime = runtime
       return response
@@ -785,6 +1011,39 @@ class AcpRuntimeCoordinator {
     switchReadBack: ApprovedSwitchReadBack
   }): Promise<AcpPromptRequest> {
     return this.runtimeForSession(input.sessionId).createClaudeCodeContinuationRequest(input)
+  }
+
+  captureHandoffProcess(sessionId: string):
+    | {
+        hold: () => () => void
+        restoreSession: (specialistId: string | undefined) => Promise<void>
+      }
+    | undefined {
+    const captured = this.capturePromptForHandoff(sessionId)
+    const runtime = this.activePromptRequests.get(sessionId)?.runtime
+    if (!captured || !runtime) return undefined
+    return {
+      restoreSession: async (specialistId) => {
+        try {
+          await captured.restoreSession(specialistId)
+        } finally {
+          runtime.requestIdleRelease()
+        }
+      },
+      hold: () => {
+        let release!: () => void
+        void runtime.withPromptAdmission(
+          () =>
+            new Promise<void>((resolve) => {
+              release = resolve
+            })
+        )
+        return () => {
+          runtime.requestIdleRelease()
+          release()
+        }
+      }
+    }
   }
 
   captureApprovedHandoffFailure(sessionId: string): (() => Promise<void>) | undefined {
@@ -1048,7 +1307,7 @@ class AcpRuntimeCoordinator {
     runtimeReviewOwner: 'task' | 'renderer' = 'renderer',
     startAdmission?: PromptAcceptance
   ): ReturnType<AcpRuntime['sendPrompt']> {
-    if (this.promptAdmissionClosedForQuit) return this.rejectPromptForQuit()
+    if (this.admissionClosedReason()) return this.rejectPromptForQuit()
     const dispatch = (): ReturnType<AcpRuntime['sendPrompt']> =>
       this.linearizeRootAdmission(request.sessionId, (cancellation) =>
         this.dispatchPrompt(
@@ -1113,6 +1372,7 @@ class AcpRuntimeCoordinator {
     operation: (cancellation: RootAdmissionCancellation) => Promise<Result>
   ): Promise<Result> {
     const previous = this.rootAdmissionTails.get(sessionId)
+    let released = false
     let rejectCancellation!: (error: unknown) => void
     const cancellationPromise = new Promise<never>((_, reject) => {
       rejectCancellation = reject
@@ -1122,7 +1382,7 @@ class AcpRuntimeCoordinator {
       promise: cancellationPromise,
       reject: rejectCancellation,
       throwIfCancelled: () => {
-        if (cancellation.cancelled) {
+        if (cancellation.cancelled || released) {
           throw new DelegateMessagePreAcceptanceError(
             'ACP prompt was superseded before provider dispatch during Session teardown'
           )
@@ -1136,10 +1396,15 @@ class AcpRuntimeCoordinator {
     const gate = new Promise<void>((resolve) => {
       resolveGate = resolve
     })
-    let released = false
     const lease: RootAdmissionLease = {
+      cancellation,
+      settled: gate,
       release: () => {
         if (released) return
+        if (lease.resumeOperation) {
+          void lease.resumeOperation.then(lease.release, lease.release)
+          return
+        }
         released = true
         if (this.activeRootAdmissions.get(sessionId) === lease) {
           this.activeRootAdmissions.delete(sessionId)
@@ -1220,7 +1485,9 @@ class AcpRuntimeCoordinator {
 
   startContinuationWhenDispatchAdmitted(
     request: AcpPromptRequest,
-    validate: () => Promise<void>,
+    validate: (
+      resumeSession: (request: AcpResumeSessionRequest) => Promise<AcpCreateSessionResponse>
+    ) => Promise<void>,
     delegatedMessageId?: string,
     onAdmissionQueued?: () => void,
     admitDispatch?: (operation: () => Promise<void>) => Promise<void>
@@ -1240,7 +1507,9 @@ class AcpRuntimeCoordinator {
 
   private startContinuationWhenWithDispatchAdmission(
     request: AcpPromptRequest,
-    validate: () => Promise<void>,
+    validate: (
+      resumeSession: (request: AcpResumeSessionRequest) => Promise<AcpCreateSessionResponse>
+    ) => Promise<void>,
     dispatchAdmitted: boolean,
     delegatedMessageId?: string,
     onAdmissionQueued?: () => void,
@@ -1271,14 +1540,55 @@ class AcpRuntimeCoordinator {
     }
 
     const dispatch = async (cancellation: RootAdmissionCancellation): Promise<void> => {
+      let validating = true
+      let resumeOperation: Promise<AcpCreateSessionResponse> | undefined
+      const generation = this.initializationGeneration
       try {
-        await Promise.race([validate(), cancellation.promise])
+        await Promise.race([
+          validate(async (resumeRequest) => {
+            cancellation.throwIfCancelled()
+            if (
+              !validating ||
+              resumeRequest.sessionId !== request.sessionId ||
+              generation !== this.initializationGeneration ||
+              this.activeRootAdmissions.get(request.sessionId)?.cancellation !== cancellation
+            )
+              throw new Error('Continuation resume admission is no longer active.')
+            if (resumeOperation) throw new Error('Continuation resume was already requested.')
+            const lease = this.activeRootAdmissions.get(request.sessionId)!
+            const previous = this.sessionResumeOperations.get(request.sessionId)
+            const admissionCurrent = (): boolean =>
+              !cancellation.cancelled &&
+              generation === this.initializationGeneration &&
+              this.activeRootAdmissions.get(request.sessionId) === lease
+            resumeOperation = (async () => {
+              // An older external resume must settle; a resume waiting on our lease must not.
+              if (previous && previous.admittedRoot !== lease) {
+                await previous.operation.catch(() => undefined)
+              }
+              cancellation.throwIfCancelled()
+              return this.performSessionResume(resumeRequest, undefined, admissionCurrent)
+            })()
+            lease.resumeOperation = resumeOperation
+            void resumeOperation
+              .finally(() => {
+                if (lease.resumeOperation === resumeOperation) lease.resumeOperation = undefined
+              })
+              .catch(() => undefined)
+            return resumeOperation
+          }),
+          cancellation.promise
+        ])
       } catch (error) {
         if (error instanceof DelegateMessageParkedError) throw error
         throw new DelegateMessagePreAcceptanceError(
           error instanceof Error ? error.message : String(error),
           error
         )
+      } finally {
+        validating = false
+        // Keep the root lease until a cancelled provider resume has stopped mutating ownership.
+        await resumeOperation?.catch(() => undefined)
       }
       cancellation.throwIfCancelled()
       await (dispatchAdmitted
@@ -1406,7 +1716,15 @@ class AcpRuntimeCoordinator {
     delegatedMessageId?: string,
     cancellation?: RootAdmissionCancellation
   ): ReturnType<AcpRuntime['sendPrompt']> {
-    if (this.promptAdmissionClosedForQuit) return this.rejectPromptForQuit()
+    if (this.admissionClosedReason()) return this.rejectPromptForQuit()
+    const resume = this.sessionResumeOperations.get(request.sessionId)
+    const admittedBeforeResume =
+      cancellation &&
+      resume?.admittedRoot?.cancellation === cancellation &&
+      this.activeRootAdmissions.get(request.sessionId) === resume.admittedRoot
+    if (this.pendingSessionAdoptions.has(request.sessionId) || (resume && !admittedBeforeResume)) {
+      return Promise.reject(new Error('ACP session must finish resuming before sending a prompt'))
+    }
     const origin =
       operation === 'sendAppContinuation' && request.provenanceContext?.promptMessageId
         ? this.getLatestUserPrompt(request.sessionId, request.provenanceContext.promptMessageId)
@@ -1420,6 +1738,7 @@ class AcpRuntimeCoordinator {
     }
 
     const runtime = this.claimRuntimeAdmission(owner ?? this.getActiveRuntime())
+    const admission = this.runtimeAdmissions.get(runtime)
     const attempt: PendingPromptStart = {
       id: `prompt-attempt-${++this.promptAttemptSequence}`,
       runtime,
@@ -1460,76 +1779,80 @@ class AcpRuntimeCoordinator {
         })
         .catch(() => undefined)
     }
-    const settlementStart = originatingPromptId
-      ? this.delegatedWork
-          ?.rootTurnStarted?.({
-            sessionId: request.sessionId,
-            originatingPromptId
-          })
-          .catch(() => undefined)
-      : undefined
-    const admitPrompt = onPromptAdmitted
-      ? async (): Promise<AcpPromptRequest['provenanceContext']> => {
-          const provenanceContext = await onPromptAdmitted()
-          if (provenanceContext) taskRequest.provenanceContext = provenanceContext
-          return provenanceContext
-        }
-      : undefined
-    const prompt = Promise.resolve(settlementStart).then((leaseId) => {
-      settlementLeaseId = leaseId
-      cancellation?.throwIfCancelled()
-      if (
-        attempt.globalCancellationGeneration !== this.globalCancellationGeneration ||
-        attempt.cancelled ||
-        this.activePromptRequests.get(request.sessionId) !== activePrompt
-      ) {
-        throw new DelegateMessagePreAcceptanceError(
-          'ACP prompt start was superseded before provider dispatch'
-        )
-      }
-      if (operation === 'sendApplicationPrompt') {
-        return runtime.sendApplicationPrompt(taskRequest, attribution!, {
-          promptAttemptId: attempt.id,
-          onPromptAdmitted: admitPrompt
-        })
-      }
-      if (operation === 'sendPrompt') {
-        if (runtimeReviewOwner === 'task') {
-          return runtime.sendPrompt(taskRequest, attempt.id, admitPrompt, runtimeReviewOwner)
-        }
-        return admitPrompt
-          ? runtime.sendPrompt(taskRequest, attempt.id, admitPrompt)
-          : runtime.sendPrompt(taskRequest, attempt.id)
-      }
-      return delegatedMessageId
-        ? runtime.sendAppContinuation(taskRequest, attempt.id, undefined, delegatedMessageId)
-        : runtime.sendAppContinuation(taskRequest, attempt.id)
-    })
-    onApplicationPromptAdmitted?.(prompt)
-    return prompt
-      .then(async (response) => {
-        await endRootTurn(response?.stopReason !== 'cancelled')
-        return response
-      })
-      .catch(async (error: unknown) => {
-        await endRootTurn(false)
+    // Admission includes delegate settlement before Runtime acquires its prompt lease.
+    return runtime.withPromptAdmission(() => {
+      const settlementStart = originatingPromptId
+        ? this.delegatedWork
+            ?.rootTurnStarted?.({
+              sessionId: request.sessionId,
+              originatingPromptId
+            })
+            .catch(() => undefined)
+        : undefined
+      const admitPrompt = onPromptAdmitted
+        ? async (): Promise<AcpPromptRequest['provenanceContext']> => {
+            const provenanceContext = await onPromptAdmitted()
+            if (provenanceContext) taskRequest.provenanceContext = provenanceContext
+            return provenanceContext
+          }
+        : undefined
+      const prompt = Promise.resolve(settlementStart).then((leaseId) => {
+        settlementLeaseId = leaseId
+        cancellation?.throwIfCancelled()
         if (
-          operation === 'sendPrompt' &&
-          this.promptAdmissionClosedForQuit &&
-          this.providerShutdownStartedForQuit &&
-          this.durableQuitDetachedSessionIds.has(request.sessionId)
+          attempt.globalCancellationGeneration !== this.globalCancellationGeneration ||
+          attempt.cancelled ||
+          this.activePromptRequests.get(request.sessionId) !== activePrompt
         ) {
-          return { stopReason: 'cancelled' as const }
+          throw new DelegateMessagePreAcceptanceError(
+            'ACP prompt start was superseded before provider dispatch'
+          )
         }
-        throw error
-      })
-      .finally(() => {
-        this.durableQuitDetachedSessionIds.delete(request.sessionId)
-        this.removePendingPromptStart(request.sessionId, attempt)
-        if (this.activePromptRequests.get(request.sessionId) === activePrompt) {
-          this.activePromptRequests.delete(request.sessionId)
+        if (operation === 'sendApplicationPrompt') {
+          return runtime.sendApplicationPrompt(taskRequest, attribution!, {
+            promptAttemptId: attempt.id,
+            onPromptAdmitted: admitPrompt
+          })
         }
+        if (operation === 'sendPrompt') {
+          if (runtimeReviewOwner === 'task') {
+            return runtime.sendPrompt(taskRequest, attempt.id, admitPrompt, runtimeReviewOwner)
+          }
+          return admitPrompt
+            ? runtime.sendPrompt(taskRequest, attempt.id, admitPrompt)
+            : runtime.sendPrompt(taskRequest, attempt.id)
+        }
+        return delegatedMessageId
+          ? runtime.sendAppContinuation(taskRequest, attempt.id, undefined, delegatedMessageId)
+          : runtime.sendAppContinuation(taskRequest, attempt.id)
       })
+      onApplicationPromptAdmitted?.(prompt)
+      return prompt
+        .then(async (response) => {
+          await endRootTurn(response?.stopReason !== 'cancelled')
+          return response
+        })
+        .catch(async (error: unknown) => {
+          await endRootTurn(false)
+          if (
+            operation === 'sendPrompt' &&
+            this.promptAdmissionClosedForQuit &&
+            this.providerShutdownStartedForQuit &&
+            this.durableQuitDetachedSessionIds.has(request.sessionId)
+          ) {
+            return { stopReason: 'cancelled' as const }
+          }
+          throw error
+        })
+        .finally(() => {
+          this.durableQuitDetachedSessionIds.delete(request.sessionId)
+          this.removePendingPromptStart(request.sessionId, attempt)
+          if (this.activePromptRequests.get(request.sessionId) === activePrompt) {
+            this.activePromptRequests.delete(request.sessionId)
+          }
+          if (this.runtimeAdmissions.get(runtime) === admission) runtime.requestIdleRelease()
+        })
+    })
   }
 
   async steerFollowUp(request: AcpSteerFollowUpRequest): Promise<AcpSteerFollowUpResult> {
@@ -1628,6 +1951,9 @@ class AcpRuntimeCoordinator {
   }
 
   async deleteSession(request: AcpDeleteSessionRequest): Promise<AcpRuntimeState> {
+    this.preparedElicitationContinuations.delete(request.sessionId)
+    const queuedResume = this.sessionResumeOperations.get(request.sessionId)
+    if (queuedResume) queuedResume.invalidated = true
     this.invalidateSessionTurn(request.sessionId)
     this.cancelRootAdmissions(request.sessionId)
     this.teardownCallbacks.onSessionDeleteStarted?.(request.sessionId)
@@ -1639,6 +1965,7 @@ class AcpRuntimeCoordinator {
       await this.delegatedWork?.deleteSession(request.sessionId)
       await this.teardownCallbacks.beforeSessionDelete?.(request.sessionId)
       await runtime.deleteSession(request)
+      this.sessionWriterTransfers.delete(request.sessionId)
     } catch (error) {
       this.teardownCallbacks.afterSessionDelete?.(request.sessionId, true)
       throw error
@@ -1650,7 +1977,7 @@ class AcpRuntimeCoordinator {
     // concurrent resume may have transferred the same app session to a new generation while the old
     // agent delete was in flight; preserve that new owner and its connection status in full.
     if (ownerAfterDelete === runtime || (!ownerAfterDelete && !ownedBeforeDelete)) {
-      this.sessionRuntimes.delete(request.sessionId)
+      this.setSessionRuntime(request.sessionId, undefined)
       this.sessionConnectionStatuses.delete(request.sessionId)
       this.latestPromptRequests.delete(request.sessionId)
       this.clearApplicationSessionEvents(request.sessionId)
@@ -1683,6 +2010,12 @@ class AcpRuntimeCoordinator {
   }
 
   async respondToElicitation(response: ElicitationResponse): Promise<AcpRuntimeState> {
+    const sessionId = response.request?.sessionId
+    const continuePrepared =
+      !!sessionId &&
+      !response.prepareContinuation &&
+      this.preparedElicitationContinuations.get(sessionId) === response.requestId
+    if (continuePrepared) this.preparedElicitationContinuations.delete(sessionId!)
     const runtime =
       Array.from(this.runtimes).find((candidate) =>
         candidate
@@ -1691,7 +2024,10 @@ class AcpRuntimeCoordinator {
       ) ??
       (response.request ? this.findRuntimeForSession(response.request.sessionId) : undefined) ??
       this.getActiveRuntime()
-    await runtime.respondToElicitation(response)
+    await runtime.respondToElicitation(response, continuePrepared)
+    if (response.prepareContinuation && sessionId) {
+      this.preparedElicitationContinuations.set(sessionId, response.requestId)
+    }
     return this.getState()
   }
 
@@ -1719,6 +2055,45 @@ class AcpRuntimeCoordinator {
 
   async requestAppPermission(input: AppPermissionRequest): Promise<string | undefined> {
     return this.runtimeForSession(input.sessionId).requestAppPermission(input)
+  }
+
+  hasFullAccess(sessionId: string): boolean {
+    return this.findRuntimeForSession(sessionId)?.hasFullAccess(sessionId) ?? false
+  }
+
+  subscribeFullAccess(sessionId: string, listener: (allowed: boolean) => void): () => void {
+    let previous = this.hasFullAccess(sessionId)
+    let owner: AcpRuntime | undefined
+    let unsubscribeRuntime: (() => void) | undefined
+    let active = true
+    const notify = (): void => {
+      if (!active) return
+      const allowed = this.sessionRuntimes.get(sessionId)?.hasFullAccess(sessionId) ?? false
+      if (allowed === previous) return
+      previous = allowed
+      listener(allowed)
+    }
+    const rebind = (): void => {
+      const next = this.sessionRuntimes.get(sessionId)
+      if (!active || owner === next) return
+      unsubscribeRuntime?.()
+      owner = next
+      unsubscribeRuntime = next?.subscribeFullAccess(sessionId, () => {
+        if (owner === next && this.sessionRuntimes.get(sessionId) === next) notify()
+      })
+      notify()
+    }
+    const subscriptions = this.fullAccessSubscriptions.get(sessionId) ?? new Set()
+    subscriptions.add(rebind)
+    this.fullAccessSubscriptions.set(sessionId, subscriptions)
+    rebind()
+    return () => {
+      if (!active) return
+      active = false
+      unsubscribeRuntime?.()
+      subscriptions.delete(rebind)
+      if (!subscriptions.size) this.fullAccessSubscriptions.delete(sessionId)
+    }
   }
 
   async setPermissionProfile(request: AcpSetPermissionProfileRequest): Promise<AcpRuntimeState> {
@@ -1902,12 +2277,11 @@ class AcpRuntimeCoordinator {
             : {}),
           ...(session.agentTarget ? { agentTarget: session.agentTarget } : {})
         }
-        resumeInFlight = runtime.resumeSession(resumeRequest).then(async (response) => {
-          this.bindSessionRuntime(response.sessionId, runtime)
-          this.lastRuntime = runtime
-          await this.sessionResumeObserver?.(resumeRequest, response)
-          return Boolean(response.contextReset)
-        })
+        // Background work remains pinned to its admitted generation, but writer release,
+        // adoption, retry identity, and persistence observation belong to the coordinator.
+        resumeInFlight = this.resumeSessionOnRuntime(resumeRequest, runtime).then((response) =>
+          Boolean(response.contextReset)
+        )
       }
 
       return resumeInFlight
@@ -1999,7 +2373,7 @@ class AcpRuntimeCoordinator {
   ): ReturnType<AcpRuntime['buildReviewerSession']> {
     this.assertPromptAdmissionOpen()
     const built = await runtime.buildReviewerSession(request)
-    if (this.promptAdmissionClosedForQuit) {
+    if (this.admissionClosedReason()) {
       try {
         runtime.disposeReviewerSession(built.session)
       } finally {
@@ -2020,20 +2394,42 @@ class AcpRuntimeCoordinator {
 
   private supersedeInitializationRequests(): void {
     this.initializationGeneration += 1
+    for (const queue of this.sessionResumeOperations.values()) queue.invalidated = true
+    this.sessionResumeOperations.clear()
+  }
+
+  // A committed quit latches admission closed; a live (non-abandoned) teardown only pauses it.
+  private admissionClosedReason(): 'quit' | 'settling' | undefined {
+    if (this.promptAdmissionClosedForQuit || this.updateAdmissionHolds > 0) return 'quit'
+    return hasPendingLifecycleSettlement() ? 'settling' : undefined
+  }
+
+  private admissionClosedError(reason: 'quit' | 'settling'): Error {
+    return new Error(
+      reason === 'quit'
+        ? 'Open-Science is quitting, so new messages cannot be sent.'
+        : 'Open-Science is finishing a background cleanup. Try sending again in a moment.'
+    )
   }
 
   private assertPromptAdmissionOpen(): void {
-    if (this.promptAdmissionClosedForQuit) {
-      throw new Error('ACP prompt admission is closed because the app is quitting.')
-    }
+    const reason = this.admissionClosedReason()
+    if (reason) throw this.admissionClosedError(reason)
   }
 
   private rejectPromptForQuit(): Promise<never> {
-    return Promise.reject(new Error('ACP prompt admission is closed because the app is quitting.'))
+    return Promise.reject(this.admissionClosedError(this.admissionClosedReason() ?? 'quit'))
   }
 
   private invalidateSessionTurn(sessionId: string, notifyCancellation = true): void {
     if (notifyCancellation) this.handoffOutcomeGenerations.delete(sessionId)
+    const admission = this.activeRootAdmissions.get(sessionId)
+    if (admission?.resumeOperation) {
+      admission.cancellation.cancelled = true
+      admission.cancellation.reject?.(
+        new DelegateMessagePreAcceptanceError('Continuation resume was cancelled before dispatch')
+      )
+    }
     for (const attempt of this.pendingPromptStarts.get(sessionId) ?? []) {
       attempt.cancelled = true
       attempt.startAdmission?.reject(
@@ -2119,11 +2515,13 @@ class AcpRuntimeCoordinator {
     const owned = this.sessionRuntimes.get(sessionId)
     if (owned) return owned
 
-    const discovered = Array.from(this.runtimes).find((runtime) =>
-      runtime.getSnapshot().sessionIds.includes(sessionId)
+    const discovered = Array.from(this.runtimes).find(
+      (runtime) =>
+        runtime !== this.pendingSessionAdoptions.get(sessionId)?.runtime &&
+        runtime.getSnapshot().sessionIds.includes(sessionId)
     )
     if (discovered) {
-      this.sessionRuntimes.set(sessionId, discovered)
+      this.setSessionRuntime(sessionId, discovered)
       return discovered
     }
 
@@ -2143,8 +2541,16 @@ class AcpRuntimeCoordinator {
     ])
   }
 
+  private setSessionRuntime(sessionId: string, runtime: AcpRuntime | undefined): void {
+    if (this.sessionRuntimes.get(sessionId) === runtime) return
+    if (runtime) this.sessionRuntimes.set(sessionId, runtime)
+    else this.sessionRuntimes.delete(sessionId)
+    for (const rebind of this.fullAccessSubscriptions.get(sessionId) ?? []) rebind()
+  }
+
   private bindSessionRuntime(sessionId: string, runtime: AcpRuntime): void {
-    this.sessionRuntimes.set(sessionId, runtime)
+    this.sessionWriterTransfers.delete(sessionId)
+    this.setSessionRuntime(sessionId, runtime)
     if (!this.isolatedRuntimes.has(runtime)) return
     // Creation starts before the provider assigns an id. Replace its provisional scope so future
     // resumes and background continuations select this same process, never a sibling's process.
@@ -2267,6 +2673,9 @@ class AcpRuntimeCoordinator {
           this.notifyInteractionRelease(sessionId)
           this.teardownCallbacks.onSessionTurnEnded?.(sessionId, turnToken)
           this.callbacks.onPromptEnded?.(sessionId, turnToken)
+          // Internal question, permission and Plan continuations bypass coordinator dispatch.
+          // Their own activity lease keeps teardown deferred through continuation settlement.
+          runtime.requestIdleRelease()
         },
         onSkillImportAttachmentEligible: (sessionId, turnToken, attachmentUri) => {
           this.teardownCallbacks.onSkillImportAttachmentEligible?.(
@@ -2357,7 +2766,7 @@ class AcpRuntimeCoordinator {
         owner === runtime ||
         (this.retiredRuntimes.has(owner) && !this.retiredRuntimes.has(runtime))
       ) {
-        this.sessionRuntimes.set(sessionId, runtime)
+        this.setSessionRuntime(sessionId, runtime)
         this.sessionConnectionStatuses.set(sessionId, state.status)
       }
     }
@@ -2369,8 +2778,12 @@ class AcpRuntimeCoordinator {
     const attached = new Set(state.sessionIds)
     for (const [sessionId, owner] of this.sessionRuntimes) {
       if (owner !== runtime || attached.has(sessionId)) continue
+      // The old writer is detached before the incoming one resumes. Sibling updates during that
+      // interval must retain ownership and terminal events until adoption commits or fails.
+      const adoption = this.pendingSessionAdoptions.get(sessionId)
+      if (adoption && adoption.runtime !== runtime) continue
 
-      this.sessionRuntimes.delete(sessionId)
+      this.setSessionRuntime(sessionId, undefined)
       this.pendingResumeReconciliations.delete(sessionId)
       if (state.status === 'closed' || state.status === 'error') {
         this.sessionConnectionStatuses.set(sessionId, state.status)
@@ -2398,7 +2811,7 @@ class AcpRuntimeCoordinator {
     this.retiredRuntimes.delete(runtime)
     for (const [sessionId, owner] of this.sessionRuntimes) {
       if (owner !== runtime) continue
-      this.sessionRuntimes.delete(sessionId)
+      this.setSessionRuntime(sessionId, undefined)
       if (retiredStatus === 'closed' || retiredStatus === 'error') {
         this.sessionConnectionStatuses.set(sessionId, retiredStatus)
       } else {
@@ -2578,9 +2991,12 @@ class AcpRuntimeCoordinator {
       }
     }
     this.runtimes.clear()
+    this.sessionWriterTransfers.clear()
     this.retiredRuntimes.clear()
     this.targetedRuntimes.clear()
-    this.sessionRuntimes.clear()
+    for (const sessionId of [...this.sessionRuntimes.keys()]) {
+      this.setSessionRuntime(sessionId, undefined)
+    }
     this.pendingSessionCreations.clear()
     this.pendingSessionAdoptions.clear()
     this.pendingResumeReconciliations.clear()
@@ -2588,6 +3004,7 @@ class AcpRuntimeCoordinator {
     this.pendingSessionDrains.clear()
     this.sessionConnectionStatuses.clear()
     this.permissionRuntimes.clear()
+    this.preparedElicitationContinuations.clear()
     this.pendingPromptStarts.clear()
     this.latestPromptRequests.clear()
     this.activePromptRequests.clear()

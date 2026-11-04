@@ -471,6 +471,14 @@ describe('ConnectorAddForm copy', () => {
     const t = i18next.getFixedT('en')
     const fallback = 'runtime fallback'
     const connectorCases = [
+      ['europepmc', 'Independent Europe PMC core literature search and abstracts.'],
+      [
+        'research-datasets',
+        'Official research-data access requirements and public file discovery.'
+      ],
+      ['chea3', 'Transcription-factor enrichment rankings and official GMT library links.'],
+      ['biodbnet', 'Identifier discovery, conversion, recognition, orthology and pathways.'],
+      ['ctd', 'Official CTD public report entry points and access terms.'],
       [
         'cellosaurus',
         'Cell line identity, origin, diseases, quality records and database mappings from Cellosaurus.'
@@ -746,7 +754,7 @@ describe('ConnectorAddForm copy', () => {
 
 describe('PDC settings translations', () => {
   it.each(['de', 'es', 'fr', 'ja', 'ko', 'ru', 'zh-Hans', 'zh-Hant'] as const)(
-    'translates the connector and all four tool summaries in %s',
+    'translates the connector and all five tool summaries in %s',
     async (locale) => {
       await prepareI18nLocale(locale)
       initI18n(locale)
@@ -758,6 +766,7 @@ describe('PDC settings translations', () => {
         ['pdc_search_studies', 'Search PDC studies and versions by name or identifier.'],
         ['pdc_get_study', 'Retrieve PDC study metadata and available versions.'],
         ['pdc_list_biospecimens', 'Map PDC aliquots to samples, cases and external references.'],
+        ['pdc_list_clinical', 'Retrieve PDC case demographics, diagnoses and sample references.'],
         [
           'pdc_list_files',
           'Discover PDC study files and quantitative reports without downloading files.'

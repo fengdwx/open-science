@@ -5,7 +5,7 @@ import { test } from './fixtures/electron-app'
 import {
   openSettingsPage,
   selectLanguage,
-  openGeneralSettings,
+  openAppearanceSettings,
   setTheme
 } from './fixtures/settings-preferences'
 import { createProjectViaUi } from './fixtures/project'
@@ -50,7 +50,7 @@ test('persists the selected theme after closing settings and relaunching', async
   page = await app.restart()
   await expect(page.locator('html')).toHaveClass(/dark/)
   await expect(page.getByRole('button', { name: /^Theme:/ })).toHaveCount(0)
-  const settings = await openGeneralSettings(page)
+  const settings = await openAppearanceSettings(page)
   await expect(
     settings.getByRole('radiogroup', { name: 'Theme' }).getByRole('radio', { name: 'Dark' })
   ).toBeChecked()
@@ -308,7 +308,8 @@ test('persists Russian into the built main-process native quit dialog', async ({
     .poll(() => app.capturePersistedLocaleNativeQuitDialog())
     .toEqual({
       buttons: ['Отмена', 'Выйти'],
-      detail: 'Выполнение ещё не завершено. При выходе работа будет прервана.',
+      detail:
+        'При выходе незавершённые задачи будут прерваны. Сохранённые диалоги и файлы останутся.',
       includesRendererCatalog: false,
       message: 'Выйти из Open-Science?'
     })
@@ -325,7 +326,8 @@ test('persists Russian into the built main-process native quit dialog', async ({
     .poll(() => app.capturePersistedLocaleNativeQuitDialog())
     .toEqual({
       buttons: ['Отмена', 'Выйти'],
-      detail: 'Выполнение ещё не завершено. При выходе работа будет прервана.',
+      detail:
+        'При выходе незавершённые задачи будут прерваны. Сохранённые диалоги и файлы останутся.',
       includesRendererCatalog: false,
       message: 'Выйти из Open-Science?'
     })
@@ -339,7 +341,8 @@ test('persists German into the built main-process native quit dialog', async ({ 
 
   const expectedDialog = {
     buttons: ['Abbrechen', 'Beenden'],
-    detail: 'Die Arbeit läuft noch und wird beim Beenden unterbrochen.',
+    detail:
+      'Beim Beenden werden nicht abgeschlossene Aufgaben unterbrochen. Ihre gespeicherten Konversationen und Dateien bleiben erhalten.',
     includesRendererCatalog: false,
     message: 'Open-Science beenden?'
   }

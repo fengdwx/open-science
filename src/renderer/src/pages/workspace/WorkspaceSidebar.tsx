@@ -17,10 +17,11 @@ import {
   Plus,
   Search,
   Settings,
+  Store,
   Toolbox,
   X
 } from 'lucide-react'
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   DropdownMenu,
@@ -38,8 +39,12 @@ import { GitHubStarBadge } from '@/components/GitHubStarBadge'
 import { NetworkStatusIndicator } from '@/components/NetworkStatusIndicator'
 import { UpdateCapsule } from '@/components/UpdateCapsule'
 import { sessionWaitReasonLabelKeys } from '@/lib/session-wait-reason-labels'
-import type { ChatSession, SessionStatus } from '@/stores/session-store'
+import type { ChatSession, SessionStatus } from '@/stores/session-store-contract'
 import { NotificationBell } from '@/components/NotificationBell'
+import {
+  useSessionPendingInteractions,
+  type SessionPendingInteractionFacts
+} from '@/hooks/useSessionPendingInteractions'
 import {
   ActionMenuItems,
   ActionMenuProvider,
@@ -84,6 +89,8 @@ type WorkspaceSidebarProps = {
   onOpenFiles: () => void
   isLibraryOpen?: boolean
   onOpenLiterature?: () => void
+  isMarketplaceOpen?: boolean
+  onOpenMarketplace?: () => void
   isComputeOpen?: boolean
   onOpenCompute?: () => void
   onOpenSession: (sessionId: string) => void
@@ -131,6 +138,7 @@ type WorkspaceSidebarProps = {
 }
 
 type WorkspaceSidebarViewProps = WorkspaceSidebarProps & {
+  pendingInteractionFactsBySession?: ReadonlyMap<string, SessionPendingInteractionFacts>
   onViewReplay?: (session: ChatSession) => void
   onDiscussSession?: (session: ChatSession) => Promise<void>
   rowActions?: SessionRowCallbacks
@@ -149,7 +157,6 @@ type WorkspaceSidebarViewProps = WorkspaceSidebarProps & {
 
 type SessionRowCallbacks = Pick<
   WorkspaceSidebarViewProps,
-  | 'onOpenSession'
   | 'onPreviewSession'
   | 'onRenameSession'
   | 'onRenameSessionTitle'
@@ -166,7 +173,10 @@ type SessionRowCallbacks = Pick<
   | 'onArchiveSession'
   | 'onDeleteSession'
   | 'onSessionActionsOpenChange'
->
+> & {
+  onOpenSession: (sessionId: string, clickDetail?: number) => void
+  onSessionContextMenu?: () => void
+}
 
 const sessionRowCallbacks = ({
   onOpenSession,
@@ -227,6 +237,7 @@ const sessionStatusLabelKeys = {
 
 const ACTIVE_SESSION_GRACE_MS = 15 * 60_000
 const EMPTY_CREDENTIAL_SESSION_IDS = new Set<string>()
+const EMPTY_PENDING_INTERACTION_FACTS = new Map<string, SessionPendingInteractionFacts>()
 const INITIAL_PROJECT_MENU_LIMIT = 5
 const FIRST_PROJECT_MENU_DESTINATION_SELECTOR = '[data-project-id], [data-project-new]'
 const OPEN_DIALOG_SELECTOR =
@@ -234,10 +245,14 @@ const OPEN_DIALOG_SELECTOR =
 
 const getPresentedSessionStatus = (
   session: ChatSession,
-  credentialPendingSessionIds: ReadonlySet<string>
+  credentialPendingSessionIds: ReadonlySet<string>,
+  pendingInteractionFactsBySession: ReadonlyMap<string, SessionPendingInteractionFacts>
 ): SessionStatus => {
   const projection = projectPresentedSessionActionability(session, {
-    credentialPending: credentialPendingSessionIds.has(session.id)
+    ...pendingInteractionFactsBySession.get(session.id),
+    credentialPending:
+      credentialPendingSessionIds.has(session.id) ||
+      pendingInteractionFactsBySession.get(session.id)?.credentialPending === true
   })
   return projection.activity === 'inactive' && projection.attention
     ? 'error'
@@ -246,10 +261,14 @@ const getPresentedSessionStatus = (
 
 const isLiveSession = (
   session: ChatSession,
-  credentialPendingSessionIds: ReadonlySet<string>
+  credentialPendingSessionIds: ReadonlySet<string>,
+  pendingInteractionFactsBySession: ReadonlyMap<string, SessionPendingInteractionFacts>
 ): boolean => {
   const activity = projectPresentedSessionActionability(session, {
-    credentialPending: credentialPendingSessionIds.has(session.id)
+    ...pendingInteractionFactsBySession.get(session.id),
+    credentialPending:
+      credentialPendingSessionIds.has(session.id) ||
+      pendingInteractionFactsBySession.get(session.id)?.credentialPending === true
   }).activity
   return activity === 'running' || activity === 'waiting'
 }
@@ -271,7 +290,8 @@ const startOfLocalDay = (timestamp: number): number => {
 const getSessionSections = (
   sessions: ChatSession[],
   now: number,
-  credentialPendingSessionIds: ReadonlySet<string>
+  credentialPendingSessionIds: ReadonlySet<string>,
+  pendingInteractionFactsBySession: ReadonlyMap<string, SessionPendingInteractionFacts>
 ): SidebarSessionSection[] => {
   const todayStartedAt = startOfLocalDay(now)
   const yesterday = new Date(todayStartedAt)
@@ -292,7 +312,7 @@ const getSessionSections = (
     if (session.pinned) {
       pinned.push(session)
     } else if (
-      isLiveSession(session, credentialPendingSessionIds) ||
+      isLiveSession(session, credentialPendingSessionIds, pendingInteractionFactsBySession) ||
       (session.status === 'idle' && now - session.updatedAt < ACTIVE_SESSION_GRACE_MS)
     ) {
       active.push(session)
@@ -571,7 +591,10 @@ const SessionRow = memo(function SessionRow({
           .filter(Boolean)
           .join(' ') || undefined
       }
-      onClick={() => actions.onOpenSession(session.id)}
+      onClick={(event) => actions.onOpenSession(session.id, event.detail)}
+      onDoubleClick={() => {
+        if (canMutateConversations) actions.onRenameSession(session)
+      }}
     >
       <span className="inline-flex size-3 shrink-0 items-center justify-center" aria-hidden="true">
         <span
@@ -618,6 +641,7 @@ const SessionRow = memo(function SessionRow({
   const row = (
     <ActionMenuTarget<SessionActionId, SessionActionInvocation>
       targetId={`${SESSION_ACTION_TARGET_PREFIX}${session.id}`}
+      onContextMenu={actions.onSessionContextMenu}
       identityKey={sessionActionIdentityKey}
       catalog={SESSION_ACTION_CATALOG}
       recipe={SESSION_ACTION_RECIPE}
@@ -707,6 +731,7 @@ const WorkspaceSidebarView = (props: WorkspaceSidebarViewProps): React.JSX.Eleme
     onOpenProject,
     sessions,
     credentialPendingSessionIds = EMPTY_CREDENTIAL_SESSION_IDS,
+    pendingInteractionFactsBySession = EMPTY_PENDING_INTERACTION_FACTS,
     activeSessionId,
     canCreateConversation,
     canMutateConversations,
@@ -717,6 +742,8 @@ const WorkspaceSidebarView = (props: WorkspaceSidebarViewProps): React.JSX.Eleme
     onOpenFiles,
     isLibraryOpen = false,
     onOpenLiterature,
+    isMarketplaceOpen = false,
+    onOpenMarketplace,
     isComputeOpen = false,
     onOpenCompute,
     onPreviewSession,
@@ -753,7 +780,12 @@ const WorkspaceSidebarView = (props: WorkspaceSidebarViewProps): React.JSX.Eleme
   } = props
   const { t } = useTranslation()
   const rowActions = props.rowActions ?? sessionRowCallbacks(props)
-  const sections = getSessionSections(sessions, now, credentialPendingSessionIds)
+  const sections = getSessionSections(
+    sessions,
+    now,
+    credentialPendingSessionIds,
+    pendingInteractionFactsBySession
+  )
   const shortcutNumberBySessionId = new Map(
     sections
       .flatMap((section) => section.items)
@@ -1207,6 +1239,24 @@ const WorkspaceSidebarView = (props: WorkspaceSidebarViewProps): React.JSX.Eleme
             </button>
           </div>
 
+          <div className="flex h-9 items-center gap-1 px-1.5">
+            <button
+              type="button"
+              className={cn(
+                'flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md px-2.5 py-1.5 text-left text-sm text-text-000 hover:bg-bg-300 disabled:cursor-not-allowed disabled:opacity-50',
+                isMarketplaceOpen && 'bg-bg-300',
+                sidebarInteractiveTransitionClassName
+              )}
+              aria-controls="right-panel"
+              aria-pressed={isMarketplaceOpen}
+              disabled={!onOpenMarketplace}
+              onClick={onOpenMarketplace}
+            >
+              <Store className="size-3.5 shrink-0" strokeWidth={2} aria-hidden="true" />
+              <span>{t('Sharing marketplace')}</span>
+            </button>
+          </div>
+
           <div className="mx-2 my-1 h-px bg-border-300/15" />
 
           <SessionHoverPreviewProvider>
@@ -1236,7 +1286,8 @@ const WorkspaceSidebarView = (props: WorkspaceSidebarViewProps): React.JSX.Eleme
                     {section.items.map((session) => {
                       const presentedStatus = getPresentedSessionStatus(
                         session,
-                        credentialPendingSessionIds
+                        credentialPendingSessionIds,
+                        pendingInteractionFactsBySession
                       )
                       return (
                         <SessionRow
@@ -1317,6 +1368,15 @@ const WorkspaceSidebarConnectedView = (props: WorkspaceSidebarViewProps): React.
   const { t } = useTranslation()
   const [discussionCapture, setDiscussionCapture] = useState<SessionDiscussionCapture>()
   const mounted = useRef(true)
+  const pendingOpen = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const cancelPendingOpen = useCallback(() => {
+    clearTimeout(pendingOpen.current)
+    pendingOpen.current = undefined
+  }, [])
+  useLayoutEffect(
+    () => cancelPendingOpen,
+    [props.mobileMode, props.isMobileOpen, cancelPendingOpen]
+  )
   useEffect(() => {
     mounted.current = true
     return () => {
@@ -1350,14 +1410,34 @@ const WorkspaceSidebarConnectedView = (props: WorkspaceSidebarViewProps): React.
     }
   }
   const latestCallbacks = useRef(callbacks)
+  const latestProps = useRef(props)
   useLayoutEffect(() => {
     latestCallbacks.current = callbacks
+    latestProps.current = props
   })
   const rowActions = useMemo<SessionRowCallbacks>(
     () => ({
-      onOpenSession: (sessionId) => latestCallbacks.current.onOpenSession(sessionId),
+      onSessionContextMenu: cancelPendingOpen,
+      onOpenSession: (sessionId, clickDetail = 0) => {
+        cancelPendingOpen()
+        if (latestProps.current.mobileMode && clickDetail > 0) {
+          // Opening closes the mobile sidebar and makes it inert. Keep it interactive
+          // briefly so a second pointer click can reach the existing editor action.
+          pendingOpen.current = setTimeout(() => {
+            pendingOpen.current = undefined
+            if (latestProps.current.sessions.some((session) => session.id === sessionId)) {
+              latestCallbacks.current.onOpenSession(sessionId)
+            }
+          }, 300)
+        } else {
+          latestCallbacks.current.onOpenSession(sessionId)
+        }
+      },
       onPreviewSession: (sessionId) => latestCallbacks.current.onPreviewSession?.(sessionId),
-      onRenameSession: (session) => latestCallbacks.current.onRenameSession(session),
+      onRenameSession: (session) => {
+        cancelPendingOpen()
+        latestCallbacks.current.onRenameSession(session)
+      },
       onRenameSessionTitle: (session, title, expectedTitle) =>
         latestCallbacks.current.onRenameSessionTitle?.(session, title, expectedTitle),
       onDownloadArtifacts: (session) => latestCallbacks.current.onDownloadArtifacts(session),
@@ -1378,10 +1458,12 @@ const WorkspaceSidebarConnectedView = (props: WorkspaceSidebarViewProps): React.
       onTogglePin: (session) => latestCallbacks.current.onTogglePin(session),
       onArchiveSession: (session) => latestCallbacks.current.onArchiveSession?.(session),
       onDeleteSession: (session) => latestCallbacks.current.onDeleteSession(session),
-      onSessionActionsOpenChange: (sessionId, open) =>
+      onSessionActionsOpenChange: (sessionId, open) => {
+        if (open) cancelPendingOpen()
         latestCallbacks.current.onSessionActionsOpenChange?.(sessionId, open)
+      }
     }),
-    []
+    [cancelPendingOpen]
   )
   return (
     <>
@@ -1397,6 +1479,7 @@ const WorkspaceSidebarConnectedView = (props: WorkspaceSidebarViewProps): React.
 }
 
 const WorkspaceSidebar = (props: WorkspaceSidebarProps): React.JSX.Element => {
+  const pendingInteractionFactsBySession = useSessionPendingInteractions()
   const packageBusy = usePackageOperationStore((state) => packageOperationActive(state.operation))
   const {
     credentialPendingSessionIds = EMPTY_CREDENTIAL_SESSION_IDS,
@@ -1457,7 +1540,12 @@ const WorkspaceSidebar = (props: WorkspaceSidebarProps): React.JSX.Element => {
       const shortcutNumber = Number(event.key)
       if (!Number.isInteger(shortcutNumber) || shortcutNumber < 1 || shortcutNumber > 9) return
 
-      const session = getSessionSections(sessions, now, credentialPendingSessionIds)
+      const session = getSessionSections(
+        sessions,
+        now,
+        credentialPendingSessionIds,
+        pendingInteractionFactsBySession
+      )
         .flatMap((section) => section.items)
         .at(shortcutNumber - 1)
       if (!session) return
@@ -1480,11 +1568,19 @@ const WorkspaceSidebar = (props: WorkspaceSidebarProps): React.JSX.Element => {
       window.removeEventListener('keyup', handleKeyUp)
       window.removeEventListener('blur', hideSessionShortcuts)
     }
-  }, [credentialPendingSessionIds, isMac, now, onOpenSession, sessions])
+  }, [
+    credentialPendingSessionIds,
+    isMac,
+    now,
+    onOpenSession,
+    pendingInteractionFactsBySession,
+    sessions
+  ])
 
   return (
     <WorkspaceSidebarConnectedView
       {...props}
+      pendingInteractionFactsBySession={pendingInteractionFactsBySession}
       packageBusy={packageBusy}
       now={now}
       showSessionShortcuts={showSessionShortcuts}

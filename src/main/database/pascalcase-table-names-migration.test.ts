@@ -77,7 +77,7 @@ it('initializes only canonical table names and reopens without another migration
   client = createProjectDbClient(root)
   expect(await migrateApplicationDatabase(client)).toMatchObject({
     applied: [],
-    to: '0051_session_history'
+    to: '0055_session_history'
   })
   await expect(verifyCurrentApplicationSchema(client)).resolves.toBeUndefined()
 })
@@ -99,7 +99,15 @@ it('preserves every value, ID, relationship, receipt and unrelated trigger acros
       }
     })
   ).toMatchObject({
-    applied: ['0049_pascalcase_table_names', '0050_literature_translation', '0051_session_history']
+    applied: [
+      '0049_pascalcase_table_names',
+      '0050_literature_translation',
+      '0051_literature_reading_status',
+      '0052_literature_personal_note_search',
+      '0053_literature_doi_identity',
+      '0054_slurm_job_reliability',
+      '0055_session_history'
+    ]
   })
   for (const [index, [, table]] of names.entries())
     expect(await client.$queryRawUnsafe(`SELECT * FROM "${table}" ORDER BY id`)).toEqual(
@@ -160,7 +168,15 @@ it('rolls back names, records and the ledger on failure and restores FK enforcem
   ).toEqual([])
   expect(await client.$queryRawUnsafe('PRAGMA foreign_key_check')).toEqual([])
   expect(await migrateApplicationDatabase(client)).toMatchObject({
-    applied: ['0049_pascalcase_table_names', '0050_literature_translation', '0051_session_history']
+    applied: [
+      '0049_pascalcase_table_names',
+      '0050_literature_translation',
+      '0051_literature_reading_status',
+      '0052_literature_personal_note_search',
+      '0053_literature_doi_identity',
+      '0054_slurm_job_reliability',
+      '0055_session_history'
+    ]
   })
 })
 

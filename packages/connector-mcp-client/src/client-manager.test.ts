@@ -1,5 +1,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest'
-import { delimiter } from 'node:path'
+import { delimiter, join } from 'node:path'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import type { Writable } from 'node:stream'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -14,7 +16,7 @@ import {
   McpToolCallError,
   buildTransport as createTransport
 } from './client-manager'
-import type { CustomMcpServerConfig } from './client-manager'
+import type { CustomMcpServerConfig, McpStdioLaunch } from './client-manager'
 import { OAuthCallbackServer, PersistentOAuthClientProvider } from './oauth-client'
 const EXTRA_PATH_DIRS = ['/fixture/bin']
 
@@ -76,6 +78,45 @@ const config: CustomMcpServerConfig = {
 }
 
 describe('McpClientManager', () => {
+  it('prepares stdio launches after environment preparation without mutating configuration', () => {
+    const original = {
+      ...config,
+      command: 'npx',
+      args: ['--yes', 'fixture'],
+      env: { TOKEN: 'value' }
+    }
+    const prepareStdioLaunch = vi.fn((launch: McpStdioLaunch) => ({
+      command: '/bundled/node',
+      args: ['/bundled/npx-cli.js', ...launch.args],
+      env: { ...launch.env, PREPARED: 'yes' }
+    }))
+    const transport = buildTransport(original, undefined, { prepareStdioLaunch }) as unknown as {
+      _serverParams: { command: string; args: string[]; env: Record<string, string> }
+    }
+    expect(prepareStdioLaunch).toHaveBeenCalledWith({
+      command: 'npx',
+      args: ['--yes', 'fixture'],
+      env: expect.objectContaining({
+        TOKEN: 'value',
+        PATH: expect.stringContaining('/fixture/bin')
+      })
+    })
+    expect(transport._serverParams).toMatchObject({
+      command: '/bundled/node',
+      args: ['/bundled/npx-cli.js', '--yes', 'fixture'],
+      env: { TOKEN: 'value', PREPARED: 'yes' }
+    })
+    expect(original.command).toBe('npx')
+    expect(original.args).toEqual(['--yes', 'fixture'])
+    expect(original.env).toEqual({ TOKEN: 'value' })
+    buildTransport(
+      { ...config, transport: 'streamable_http', url: 'https://example.test/mcp' },
+      undefined,
+      { prepareStdioLaunch }
+    )
+    expect(prepareStdioLaunch).toHaveBeenCalledTimes(1)
+  })
+
   it('lists tools registered on the server', async () => {
     const { createClient } = makeTestServer()
     const manager = new McpClientManager({ createClient: () => createClient() })
@@ -155,6 +196,76 @@ describe('McpClientManager', () => {
     await vi.waitFor(() => expect(firstClient.close).toHaveBeenCalledOnce())
     await manager.closeAll()
   })
+
+  it.each(['cancel', 'shutdown', 'invalid-handshake'] as const)(
+    'closes a real stdio process before closeAll returns after %s',
+    async (mode) => {
+      const directory = await mkdtemp(join(tmpdir(), 'mcp-client-cleanup-'))
+      const pidFile = join(directory, 'server.pid')
+      const manager = new McpClientManager()
+      const controller = new AbortController()
+      const pending = manager
+        .listTools(
+          {
+            ...config,
+            command: process.execPath,
+            args: [
+              '-e',
+              `
+          require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+          if (${JSON.stringify(mode)} === 'invalid-handshake') {
+            require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
+              const request = JSON.parse(line);
+              if (request.method === 'initialize') process.stdout.write(JSON.stringify({
+                jsonrpc: '2.0', id: request.id,
+                result: { protocolVersion: 'invalid', capabilities: {}, serverInfo: { name: 'fixture', version: '1' } }
+              }) + '\\n');
+            });
+          }
+          setInterval(() => {}, 1000);
+        `
+            ]
+          },
+          controller.signal
+        )
+        .then(
+          () => undefined,
+          (error) => error
+        )
+      let pid: number | undefined
+      const alive = (): boolean => {
+        try {
+          process.kill(pid!, 0)
+          return true
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false
+          throw error
+        }
+      }
+      try {
+        await vi.waitFor(
+          async () => {
+            pid = Number(await readFile(pidFile, 'utf8'))
+            expect(pid).toBeGreaterThan(0)
+          },
+          { timeout: 5_000 }
+        )
+        if (mode === 'cancel') controller.abort()
+        if (mode !== 'shutdown') expect(await pending).toBeInstanceOf(Error)
+        await manager.closeAll()
+        expect(await pending).toBeInstanceOf(Error)
+        expect(alive()).toBe(false)
+      } finally {
+        controller.abort()
+        await pending
+        await manager.closeAll()
+        // Keep failures visible while preventing the regression fixture itself from leaking.
+        if (pid && alive()) process.kill(pid, 'SIGKILL')
+        await rm(directory, { recursive: true, force: true })
+      }
+    },
+    15_000
+  )
 
   it('keeps a shared initial connection alive while another caller is still waiting', async () => {
     let resolveConnection!: (client: Client) => void

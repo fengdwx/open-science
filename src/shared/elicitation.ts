@@ -28,9 +28,22 @@ export type AgentUserChoiceQuestion = {
   customField: ElicitationField
 }
 
-export type ElicitationAnswer = {
-  fieldId: string
-  value: ElicitationValue
+export type ElicitationAnswer = { fieldId: string } & (
+  { status?: 'answered'; value: ElicitationValue } | { status: 'skipped'; value?: never }
+)
+
+// Only untagged legacy custom answers used this sentinel. Explicit answers retain literal text.
+export const normalizeAgentUserChoiceAnswers = (
+  fields: ElicitationField[],
+  answers: ElicitationAnswer[]
+): ElicitationAnswer[] => {
+  const questions = resolveAgentUserChoiceQuestions(fields)
+  return answers.map((answer) => {
+    const question = questions?.find((item) => item.customField.id === answer.fieldId)
+    return question && answer.status === undefined && answer.value === 'User skipped'
+      ? { fieldId: question.choiceField.id, status: 'skipped' }
+      : answer
+  })
 }
 
 export type AgentTurnProvenanceContext = {
@@ -61,9 +74,11 @@ export type ElicitationProjection = {
   draftAnswers?: ElicitationAnswer[]
   answers?: ElicitationAnswer[]
   respondedAt?: number
-  // Retain the decision until the provider acknowledges its continuation. Process loss or
-  // failed admission re-presents the question with its saved answer for an explicit retry.
+  // Retain the decision until the provider acknowledges its continuation.
   continuationPending?: true
+  // Recovery belongs to this question, not the Session's latest operation error. Main alone
+  // grants retry permission after checking both the cause and delivery acceptance.
+  continuationRecovery?: { error: string; retryable?: true }
 }
 
 export type PendingElicitationRequest = {
@@ -88,6 +103,14 @@ export type ElicitationResponse = {
   // Re-answering a durable question rewinds the active conversation Branch before Main schedules
   // the replacement hidden continuation. This flag is renderer intent, never persisted.
   replacePreviousAnswer?: boolean
+  // Retry the saved decision only when Main has granted recovery permission.
+  retryContinuation?: boolean
+  // Commit a cold-session decision before attaching its execution runtime. Main retains a
+  // single-use, process-local preparation; a restart never authorizes automatic continuation.
+  prepareContinuation?: boolean
+  // A failed runtime attachment must still commit the human's decision. This never grants retry
+  // permission; Main validates the canonical question before retaining the bounded diagnostic.
+  continuationFailure?: string
   // Durable choices echo their bounded projection so Main can rehydrate it after a restart.
   request?: PendingElicitationRequest
 }
@@ -101,6 +124,7 @@ export type AgentUserChoicePrompt = {
   question: string
   header?: string
   options: AgentUserChoiceOption[]
+  kind?: Extract<ElicitationField['kind'], 'single-select' | 'multi-select'>
 }
 
 export type AgentUserChoiceRequest = {
@@ -136,7 +160,7 @@ export const MAX_ELICITATION_OPTIONS_PER_FIELD = 64
 export const MAX_ELICITATION_ANSWERS = 16
 export const MAX_ELICITATION_MULTI_SELECT_VALUES = 64
 export const MIN_AGENT_USER_CHOICE_OPTIONS = 2
-export const MAX_AGENT_USER_CHOICE_OPTIONS = 4
+export const MAX_AGENT_USER_CHOICE_OPTIONS = 16
 export const MAX_AGENT_USER_CHOICE_QUESTIONS = 3
 export const MAX_AGENT_TURN_PROVENANCE_ANCESTRY = 256
 
@@ -199,7 +223,8 @@ export const isValidElicitationValue = (
   }
   if (field.kind === 'boolean') return typeof value === 'boolean'
   if (!Array.isArray(value) || !value.every((item) => typeof item === 'string')) return false
-  if (value.length > MAX_ELICITATION_MULTI_SELECT_VALUES) return false
+  if (value.length > MAX_ELICITATION_MULTI_SELECT_VALUES || new Set(value).size !== value.length)
+    return false
   if (field.minItems !== undefined && value.length < field.minItems) return false
   if (field.maxItems !== undefined && value.length > field.maxItems) return false
   const allowed = new Set(field.options?.map((option) => option.value) ?? [])
@@ -278,6 +303,11 @@ const boundedString = (value: unknown, max: number): string | undefined => {
   return text && value.length <= max ? text : undefined
 }
 
+// Model-facing contract repeated in rejection errors so a provider can self-correct instead of
+// retrying the same malformed call. Unique option labels stay unexpressible in JSON Schema.
+export const AGENT_USER_CHOICE_REQUEST_CONTRACT =
+  'sessionId plus 1-3 questions, each with a non-blank question, 2-16 options with unique non-blank labels, and optional non-blank header or kind "single-select" or "multi-select"'
+
 export const sanitizeAgentUserChoiceRequest = (
   value: unknown
 ): AgentUserChoiceRequest | undefined => {
@@ -300,6 +330,12 @@ export const sanitizeAgentUserChoiceRequest = (
         ? undefined
         : boundedString(candidate.header, MAX_ELICITATION_LABEL_CHARS)
     if (!question || (candidate.header !== undefined && !header)) return []
+    if (
+      candidate.kind !== undefined &&
+      candidate.kind !== 'single-select' &&
+      candidate.kind !== 'multi-select'
+    )
+      return []
     if (
       !Array.isArray(candidate.options) ||
       candidate.options.length < MIN_AGENT_USER_CHOICE_OPTIONS ||
@@ -325,10 +361,40 @@ export const sanitizeAgentUserChoiceRequest = (
       return []
     }
 
-    return [{ question, ...(header ? { header } : {}), options }]
+    return [
+      {
+        question,
+        ...(header ? { header } : {}),
+        options,
+        ...(candidate.kind !== undefined ? { kind: candidate.kind } : {})
+      }
+    ]
   })
 
   return questions.length === candidates.length ? { sessionId, questions } : undefined
+}
+
+// Delegated questions store custom text and selected options in the same answer slot.
+export const sanitizeAgentUserChoiceAnswer = (
+  question: AgentUserChoicePrompt,
+  value: unknown
+): string | string[] | undefined => {
+  if (typeof value === 'string') return boundedString(value, MAX_ELICITATION_MESSAGE_CHARS)
+  if (
+    question.kind !== 'multi-select' ||
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > question.options.length ||
+    new Set(value).size !== value.length ||
+    !value.every(
+      (item) => typeof item === 'string' && question.options.some((option) => option.label === item)
+    )
+  ) {
+    return undefined
+  }
+  return question.options
+    .filter((option) => value.includes(option.label))
+    .map((option) => option.label)
 }
 
 const sanitizeOption = (value: unknown): ElicitationOption | undefined => {
@@ -531,8 +597,19 @@ const sanitizeAnswerValue = (value: unknown): ElicitationValue | undefined => {
 const sanitizeAnswer = (value: unknown): ElicitationAnswer | undefined => {
   if (!isRecord(value)) return undefined
   const fieldId = cappedDataString(value.fieldId, MAX_ELICITATION_LABEL_CHARS)
+  if (!fieldId) return undefined
+  if (value.status === 'skipped') {
+    return value.value === undefined ? { fieldId, status: 'skipped' } : undefined
+  }
+  if (value.status !== undefined && value.status !== 'answered') return undefined
   const answerValue = sanitizeAnswerValue(value.value)
-  return fieldId && answerValue !== undefined ? { fieldId, value: answerValue } : undefined
+  return answerValue !== undefined
+    ? {
+        fieldId,
+        value: answerValue,
+        ...(value.status === 'answered' ? { status: 'answered' } : {})
+      }
+    : undefined
 }
 
 const sanitizeProvenanceAncestry = (value: unknown): string[] | undefined => {
@@ -678,19 +755,37 @@ export const sanitizeElicitationProjection = (
       ? value.respondedAt
       : undefined
   const durable = sanitizeDurableElicitation(value.durable)
+  const recoveryError = isRecord(value.continuationRecovery)
+    ? cappedString(value.continuationRecovery.error, MAX_ELICITATION_MESSAGE_CHARS)
+    : undefined
 
   return {
     message,
     fields,
     state,
     ...(durable ? { durable } : {}),
-    ...(state === 'pending' && draftAnswers && draftAnswers.length > 0 ? { draftAnswers } : {}),
-    ...(answers && answers.length > 0 ? { answers } : {}),
+    ...(state === 'pending' && draftAnswers && draftAnswers.length > 0
+      ? { draftAnswers: normalizeAgentUserChoiceAnswers(fields, draftAnswers) }
+      : {}),
+    ...(answers && answers.length > 0
+      ? { answers: normalizeAgentUserChoiceAnswers(fields, answers) }
+      : {}),
     ...(respondedAt !== undefined ? { respondedAt } : {}),
     ...(durable &&
     value.continuationPending === true &&
     (state === 'answered' || state === 'declined')
       ? { continuationPending: true as const }
+      : {}),
+    ...(durable && recoveryError && state !== 'cancelled'
+      ? {
+          continuationRecovery: {
+            error: recoveryError,
+            ...(isRecord(value.continuationRecovery) &&
+            value.continuationRecovery.retryable === true
+              ? { retryable: true as const }
+              : {})
+          }
+        }
       : {})
   }
 }

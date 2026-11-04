@@ -14,6 +14,8 @@ import type { ContextWindowTurnHandle } from './context-usage-tracker'
 import type { ImageInputCompatibilityOwner } from './image-input-compatibility-owner'
 import { AcpPromptPreparationOwner, type PreparedPromptHandle } from './prompt-preparation-owner'
 import { AcpSessionPresentationPolicy } from './session-presentation-policy'
+import { AcpTurnSkillOwner } from './turn-skill-owner'
+import * as sandbox from '@aipoch/notebook-network-sandbox'
 
 type Mock = ReturnType<typeof vi.fn>
 type TestContextTurn = ContextWindowTurnHandle & {
@@ -25,6 +27,7 @@ type Fixture = {
   owner: AcpPromptPreparationOwner
   prepare: (overrides?: Record<string, unknown>) => Promise<PreparedPromptHandle>
   promptContent: { prepare: Mock }
+  classificationImages: { load: Mock }
   contextUsage: { beginTurn: Mock; replacePromptSkillDocuments: Mock }
   turn: TestContextTurn
   turnSkill: { prepareProvider: Mock }
@@ -77,6 +80,7 @@ const setup = (
       }
     )
   }
+  const classificationImages = { load: vi.fn(async () => []) }
   const contextUsage = {
     beginSession: vi.fn(),
     beginTurn: vi.fn(() => turn),
@@ -92,6 +96,7 @@ const setup = (
   const registerTurnInputs = vi.fn(async () => undefined)
   const owner = new AcpPromptPreparationOwner({
     promptContent,
+    classificationImages,
     imageInputCompatibility,
     presentation: new AcpSessionPresentationPolicy(),
     contextUsage,
@@ -167,6 +172,7 @@ const setup = (
     owner,
     prepare,
     promptContent,
+    classificationImages,
     contextUsage,
     turn,
     turnSkill,
@@ -819,8 +825,63 @@ describe('AcpPromptPreparationOwner', () => {
     expect(handle.promptPrefix).not.toContain('ssh:cedar-gpu')
   })
 
+  it('cancels preparation when WSL resource mapping is aborted', async () => {
+    const controller = new AbortController()
+    const started = Promise.withResolvers<void>()
+    const mapping = vi.spyOn(sandbox, 'mapWsl2Path').mockImplementation(
+      (_target, _path, signal) =>
+        new Promise((_resolve, reject) => {
+          signal!.addEventListener('abort', () => reject(signal!.reason), { once: true })
+          started.resolve()
+        })
+    )
+    const fixture = setup(undefined, undefined, undefined, {
+      shellRuntimeBindingFor: () => ({
+        kind: 'wsl2-bash',
+        profileId: 'profile',
+        distro: 'Ubuntu',
+        user: 'researcher'
+      })
+    })
+    const skills = new AcpTurnSkillOwner({
+      skills: { needForceLoad: async () => [], namesForIds: async () => ['paper-review'] },
+      requestSkillsReload: vi.fn()
+    })
+    try {
+      const preparing = fixture.prepare({
+        signal: controller.signal,
+        turnSkill: await skills.authorize({ selectedSkillIds: ['paper-review'] }),
+        backend: {
+          framework: codeBuddyFramework,
+          session: {
+            modelRequired: false,
+            options: { [OPEN_SCIENCE_SKILL_RUNTIME_SESSION_OPTION]: { root: 'C:\\skills' } }
+          },
+          prompt: { systemPromptAppends: [] },
+          context: { supportsImageInput: false },
+          adapter: { nativeMcpEnabled: true, bridgeMcpAliasesEnabled: false }
+        }
+      })
+      await started.promise
+      controller.abort(new DOMException('Stopped by user', 'AbortError'))
+      await expect(preparing).resolves.toMatchObject({ status: 'cancelled' })
+      expect(fixture.promptContent.prepare).not.toHaveBeenCalled()
+      expect(fixture.contextUsage.beginTurn).not.toHaveBeenCalled()
+    } finally {
+      controller.abort()
+      mapping.mockRestore()
+    }
+  })
+
   it('carries preloaded CodeBuddy Skill activity without attaching Codex-only metadata', async () => {
-    const fixture = setup()
+    const shellRuntime = {
+      kind: 'wsl2-bash' as const,
+      profileId: 'profile',
+      distro: 'Ubuntu',
+      user: 'researcher'
+    }
+    const shellRuntimeBindingFor = vi.fn(() => shellRuntime)
+    const fixture = setup(undefined, undefined, undefined, { shellRuntimeBindingFor })
     fixture.turnSkill.prepareProvider.mockImplementationOnce(async (input) => {
       input.codebuddy?.observeUsage?.({
         sourceInvocationId: 'selector-call-1',
@@ -868,6 +929,7 @@ describe('AcpPromptPreparationOwner', () => {
         frameworkId: 'codebuddy',
         codebuddy: {
           root: '/app-data/codebuddy/skill-runtime',
+          shellRuntime,
           selectorAvailable: true,
           selectSkills: expect.any(Function),
           signal: expect.any(AbortSignal),
@@ -875,6 +937,7 @@ describe('AcpPromptPreparationOwner', () => {
         }
       })
     )
+    expect(shellRuntimeBindingFor).toHaveBeenCalledWith('session-1')
     expect(handle).toMatchObject({
       status: 'ready',
       skillRuntimeAllowlist: [],
@@ -1002,6 +1065,44 @@ describe('AcpPromptPreparationOwner', () => {
 
 describe('optional main-prompt classification', () => {
   const catalog = [{ name: 'Research', description: 'Research', path: '/allowed/SKILL.md' }]
+  it('loads only current-turn images for Jev capability selection', async () => {
+    const classifySkills = vi.fn(async (input) => {
+      await input.loadImages(input.signal)
+      return [{ name: 'Research', path: '/allowed/SKILL.md' }]
+    })
+    const fixture = setup(undefined, undefined, undefined, { classifySkills })
+    const currentImage = { mimeType: 'image/png' as const, data: 'aA==', byteLength: 1 }
+    const attachment = {
+      id: 'upload-1',
+      sessionId: 'session-1',
+      name: 'image.png',
+      originalName: 'image.png',
+      path: '/managed/image.png',
+      mimeType: 'image/png',
+      size: 1
+    }
+    fixture.turnSkill.prepareProvider.mockImplementationOnce(async (input) => {
+      await input.codex.selectSkills(
+        input.selectionText,
+        catalog,
+        input.codex.signal,
+        input.codex.observeUsage
+      )
+      return { text: 'prepared task', codexSkillInputs: [], skillRuntimeAllowlist: [] }
+    })
+
+    await fixture.prepare({
+      request: request({ currentImages: [currentImage], attachments: [attachment] })
+    })
+
+    expect(fixture.classificationImages.load).toHaveBeenCalledWith({
+      appSessionId: 'session-1',
+      projectId: 'project-1',
+      currentImages: [currentImage],
+      currentUploads: [attachment],
+      signal: expect.any(AbortSignal)
+    })
+  })
   it.each(['selected', 'fallback', 'error', 'stale', 'reviewer', 'task'] as const)(
     'handles %s without misattributing usage or applying stale results',
     async (mode) => {

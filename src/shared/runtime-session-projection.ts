@@ -26,8 +26,8 @@ import {
   type PersistedMessageBranch,
   type PersistedMessageNode
 } from './conversation-graph'
-import { isClaudeApiResponseInterruption, isExpectedRunFailure } from './run-error-classification'
 import { createRuntimeAgentMessageId } from './runtime-message-identity'
+import { resolveRuntimeToolActivityId } from './runtime-tool-identity'
 import {
   isInLatestTurn,
   legacySessionStateForOutcome,
@@ -112,7 +112,7 @@ const cloneRuntimeSessionScope = (
         createRuntimeAgentMessageId(input.id, event.messageId ?? event.id, scope.promptMessageId)
       )
     } else if ((event.kind === 'tool' || event.kind === 'compaction') && event.toolCallId) {
-      activityIds.add(event.toolCallId)
+      activityIds.add(resolveRuntimeToolActivityId(event.toolCallId, scope, graph.activities))
     }
   }
   // Projection mutates only this prompt's responses, activities and groups, plus existing IDs
@@ -266,7 +266,7 @@ const terminalize = (
   const connectionLost =
     event.kind === 'error' &&
     (event.interruptionCause === 'connection-lost' ||
-      (event.providerError === true && isClaudeApiResponseInterruption(event.text)))
+      event.failure?.reason === 'service/response-interrupted')
   const interrupted =
     connectionLost ||
     event.interruptionCause === 'app-restart' ||
@@ -357,7 +357,7 @@ const terminalize = (
             settledAt: event.timestamp,
             cause: event.interruptionCause ?? 'connection-lost',
             error: event.text || event.title,
-            errorReportable: false,
+            failure: event.failure,
             recovery: 'resume'
           }
         : failed
@@ -365,9 +365,7 @@ const terminalize = (
               kind: 'failed',
               settledAt: event.timestamp,
               error: event.text || event.title,
-              errorReportable:
-                event.errorReportable ??
-                (!event.providerError && !isExpectedRunFailure(event.text || event.title)),
+              failure: event.failure,
               ...(event.artifactFailure &&
               responses.some((response) =>
                 response.artifactIds?.some((id) => {
@@ -393,7 +391,7 @@ const terminalize = (
           ? 'waiting-for-user'
           : 'waiting-plan-approval'
       session.error = undefined
-      session.errorReportable = undefined
+      session.failure = undefined
       session.resumeRecovery = undefined
     } else {
       Object.assign(session, legacySessionStateForOutcome(outcome, scope.promptMessageId))
@@ -619,18 +617,19 @@ const applyRuntimeSessionEventsWithCollector = (
       changes?.messages.set(message.id, message)
       changes?.branches.set(branch.id, branch)
     } else if ((event.kind === 'tool' || event.kind === 'compaction') && event.toolCallId) {
+      const toolCallId = resolveRuntimeToolActivityId(event.toolCallId, scope, graph.activities)
       if (event.kind === 'compaction')
         completeGroups(graph.activityGroups, scope, event.timestamp, changes)
       if (
         event.kind === 'tool' &&
-        (isActivityGroupToolEvent(event) || groupControls.has(event.toolCallId))
+        (isActivityGroupToolEvent(event) || groupControls.has(toolCallId))
       ) {
-        groupControls.add(event.toolCallId)
+        groupControls.add(toolCallId)
         const title = getActivityGroupTitleFromToolEvent(event)
-        if (title && !graph.activityGroups.some(({ id }) => id === event.toolCallId)) {
+        if (title && !graph.activityGroups.some(({ id }) => id === toolCallId)) {
           completeGroups(graph.activityGroups, scope, event.timestamp, changes)
           const group: PersistedBranchActivityGroup = {
-            id: event.toolCallId,
+            id: toolCallId,
             title,
             sortIndex: event.timestamp,
             activityIds: [],
@@ -647,7 +646,7 @@ const applyRuntimeSessionEventsWithCollector = (
       }
       let activity = graph.activities.find(
         ({ id, agentFrameId, messageBranchId }) =>
-          id === event.toolCallId &&
+          id === toolCallId &&
           agentFrameId === scope.agentFrameId &&
           messageBranchId === scope.messageBranchId
       )
@@ -662,7 +661,7 @@ const applyRuntimeSessionEventsWithCollector = (
             candidate.completedAt === undefined
         )
         activity = {
-          id: event.toolCallId,
+          id: toolCallId,
           kind: 'tool',
           title:
             event.title?.trim() ||

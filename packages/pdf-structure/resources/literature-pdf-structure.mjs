@@ -4,26 +4,33 @@
 // Usage: node resources/pdf-structure/literature-pdf-structure.mjs input.pdf output-directory [render-pages]
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { mkdir, open, readFile, stat, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { createCanvas } from '@napi-rs/canvas'
 import {
   captionKind,
+  nativeConditionalFigureReferenceStarts,
   excludePdfLineNumbers,
-  joinPdfSmallCapsLine,
-  startsDetachedTableCaption,
-  startsDetachedTextColumn
+  projectPdfTextLines
 } from './literature-pdf-caption-group.mjs'
 import { collectGraphicsBounds } from './literature-pdf-graphics.mjs'
-import { recordPaintedOperationBounds } from './literature-pdf-render-bounds.mjs'
+import {
+  recordPaintedOperationBounds,
+  captureNativeFigureRenderContext,
+  attachNativeCaptionLaneRaster,
+  attachNativeDualApiEvidence,
+  nativeLigatureDualApiCaptureRequired,
+  attachNativeCompositingResources
+} from './literature-pdf-render-bounds.mjs'
 import { getDocument, OPS, version } from 'pdfjs-dist/legacy/build/pdf.mjs'
 import { repairPdfSymbolText } from './literature-pdf-symbol-text.mjs'
 import { readingRotation } from './literature-pdf-orientation.mjs'
 import { normalizePageLineOrder } from './literature-pdf-reading-order.mjs'
 
-const [inputPath, outputDirectory, renderPageList, adjacent, mode] = process.argv.slice(2)
+const [inputPath, outputDirectory, renderPageList, adjacent, mode, optionalEvidence] =
+  process.argv.slice(2)
 assert(inputPath && outputDirectory, 'Supply a local PDF and an output directory.')
 const renderPages = renderPageList?.split(',').map(Number)
 if (renderPages)
@@ -32,18 +39,25 @@ if (renderPages)
     'Supply at most five positive render page numbers.'
   )
 assert((await stat(inputPath)).size <= 50 * 1024 * 1024, 'Probe input exceeds 50 MiB.')
-const bytes = await readFile(inputPath)
+let bytes = await readFile(inputPath)
+const sourceSha256 = createHash('sha256').update(bytes).digest('hex')
+// Requested-page evidence survives only until the extractor consumes this batch.
+// The existing renderPages contract, not a second truncation, bounds the batch.
+export const nativeFigureRenderContexts = new Map()
+export const nativePageRasterFiles = new Set()
 const assetRoot = dirname(createRequire(import.meta.url).resolve('pdfjs-dist/package.json'))
 const task = getDocument({
   data: new Uint8Array(bytes),
   standardFontDataUrl: `${join(assetRoot, 'standard_fonts')}/`,
   cMapUrl: `${join(assetRoot, 'cmaps')}/`,
+  wasmUrl: `${join(assetRoot, 'wasm')}/`,
   cMapPacked: true,
   isEvalSupported: false,
   fontExtraProperties: true,
   useSystemFonts: false,
   verbosity: 0
 })
+bytes = undefined
 const started = performance.now()
 const document = await task.promise
 const pages = []
@@ -81,70 +95,7 @@ try {
         node?.children?.forEach(visit)
       }
       visit(structure)
-      const lines = []
-      let pending = []
-      const flush = () => {
-        if (!pending.length) return
-        const text = joinPdfSmallCapsLine(pending)
-        if (text) {
-          // PDF.js synthetic spacing items can have zero height and oversized widths.
-          // Preserve their text above, but do not treat invisible whitespace as painted bounds.
-          const rects = pending
-            .filter((item) => item.str.trim())
-            .map((item) => {
-              const [a, b, c, d, x, y] = item.transform
-              const horizontal = Math.hypot(a, b)
-              const vertical = Math.hypot(c, d)
-              assert(horizontal > 0 && vertical > 0, 'Degenerate text transform.')
-              // Retain each item's orientation, including chart-axis labels. These are advance
-              // boxes, not exact glyph ink bounds; line grouping below remains stream-order based.
-              const points = [
-                [0, 0],
-                [1, 0],
-                [0, 1],
-                [1, 1]
-              ].map(([u, v]) =>
-                viewport.convertToViewportPoint(
-                  x + (u * item.width * a) / horizontal + (v * item.height * c) / vertical,
-                  y + (u * item.width * b) / horizontal + (v * item.height * d) / vertical
-                )
-              )
-              return {
-                x: Math.min(...points.map((point) => point[0])),
-                y: Math.min(...points.map((point) => point[1])),
-                right: Math.max(...points.map((point) => point[0])),
-                bottom: Math.max(...points.map((point) => point[1]))
-              }
-            })
-          const x = Math.min(...rects.map((rect) => rect.x))
-          const y = Math.min(...rects.map((rect) => rect.y))
-          lines.push({
-            text,
-            fontSize: Math.max(...pending.map((item) => item.height)),
-            x,
-            y,
-            width: Math.max(...rects.map((rect) => rect.right)) - x,
-            height: Math.max(...rects.map((rect) => rect.bottom)) - y
-          })
-        }
-        pending = []
-      }
-      for (const item of content.items) {
-        if (!('str' in item)) continue
-        if (startsDetachedTableCaption(pending, item) || startsDetachedTextColumn(pending, item))
-          flush()
-        if (
-          pending.length &&
-          Math.abs(
-            viewport.convertToViewportPoint(...pending.at(-1).transform.slice(4))[1] -
-              viewport.convertToViewportPoint(...item.transform.slice(4))[1]
-          ) > 2
-        )
-          flush()
-        pending.push(item)
-        if (item.hasEOL) flush()
-      }
-      flush()
+      const lines = projectPdfTextLines(content, viewport)
       // PDF text streams may paint the right column before the left column.
       // Normalize only pages with clear two-column evidence; ambiguous pages
       // retain their source order for downstream spatial ownership checks.
@@ -193,6 +144,58 @@ try {
         recordPaintedOperationBounds(rendering)
         await rendering.promise
         Object.assign(pages.at(-1), collectGraphicsBounds(rendering, page.recordedBBoxes))
+        const conditionalReferences = nativeConditionalFigureReferenceStarts(pages.at(-1))
+        pages.at(-1).captionStarts = captionStarts.filter(
+          (line) => !conditionalReferences.has(line)
+        )
+        if (mode === 'production' && renderPages?.includes(pageNumber)) {
+          const defaultContent = await page.getTextContent()
+          const proof = captureNativeFigureRenderContext(
+            rendering,
+            pageNumber,
+            defaultContent,
+            viewport,
+            pages.at(-1).graphicsBounds,
+            sourceSha256,
+            page.commonObjs
+          )
+          if (proof) {
+            let encodedCaptionBytes = 0
+            let evidence =
+              defaultContent.items.some((item) => item.str === 'μ') ||
+              nativeLigatureDualApiCaptureRequired(proof)
+                ? attachNativeDualApiEvidence(
+                    proof,
+                    defaultContent,
+                    await page.getTextContent({ disableNormalization: true })
+                  )
+                : proof
+            if (optionalEvidence === 'caption-raster') {
+              try {
+                const png = await canvas.encode('png'),
+                  path = resolve(outputDirectory, `page-${pageNumber}.png`),
+                  withRaster = attachNativeCaptionLaneRaster(evidence, rendering, png, path)
+                if (withRaster) {
+                  const file = await open(path, 'wx')
+                  nativePageRasterFiles.add(path)
+                  try {
+                    await file.writeFile(png)
+                  } finally {
+                    await file.close()
+                  }
+                  evidence = withRaster
+                  encodedCaptionBytes = png.byteLength
+                }
+              } catch (error) {
+                // Optional evidence may abstain; an existing path still violates
+                // the extractor's fresh-output ownership contract.
+                if (error?.code === 'EEXIST') throw error
+              }
+            }
+            evidence = attachNativeCompositingResources(evidence, rendering, encodedCaptionBytes)
+            nativeFigureRenderContexts.set(pageNumber, evidence)
+          }
+        }
         if (mode !== 'production') {
           await writeFile(
             join(outputDirectory, `page-${pageNumber}.png`),
@@ -221,7 +224,7 @@ try {
   }
   const summary = {
     pdfjsVersion: version,
-    checksum: createHash('sha256').update(bytes).digest('hex'),
+    checksum: sourceSha256,
     pageCount: document.numPages,
     nativeOutlineRoots: outline?.length ?? 0,
     taggedPages: pages.filter((page) => Object.keys(page.structureRoles).length).length,
@@ -234,6 +237,13 @@ try {
     JSON.stringify({ summary, outline, pages }, null, 2) + '\n'
   )
   console.log(JSON.stringify(summary, null, 2))
+  pages.length = 0
+} catch (error) {
+  nativeFigureRenderContexts.clear()
+  throw error
 } finally {
-  await task.destroy()
+  await task.destroy().catch((error) => {
+    nativeFigureRenderContexts.clear()
+    throw error
+  })
 }

@@ -3,9 +3,9 @@ import {
   isSessionWaitReason,
   projectSessionActionability,
   type SessionActionabilityProjection,
-  type SessionActionabilityFacts,
-  type SessionWaitReason as StoreSessionWaitReason
-} from '@/stores/session-store'
+  type SessionActionabilityFacts
+} from '@/stores/session-actionability'
+import type { SessionWaitReason as StoreSessionWaitReason } from '../../../../shared/session-persistence'
 import { hasCurrentRunningDelegatedAttempt } from '../../../../shared/delegated-work-projection'
 
 import { hasAnswerableDelegatedQuestion } from './subagent-release-projection'
@@ -16,7 +16,7 @@ export { isSessionWaitReason }
 
 export const projectPresentedSessionActionability = (
   session: PersistedChatSession,
-  facts: Pick<SessionActionabilityFacts, 'credentialPending'> = {}
+  facts: Pick<SessionActionabilityFacts, 'credentialPending' | 'rootPermissionPending'> = {}
 ): SessionActionabilityProjection =>
   projectSessionActionability(session, {
     presentedWaitReason:

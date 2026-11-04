@@ -99,6 +99,26 @@ describe('OfficePreviewRenderer', () => {
     })
   }
 
+  it('opens a literature DOCX without requiring a workspace project identity', async () => {
+    await renderPreview(
+      createItem({
+        source: 'literature',
+        projectId: undefined,
+        managedFileId: undefined,
+        path: 'literature-attachment-version:version'
+      })
+    )
+    expect(open).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'literature',
+        path: 'literature-attachment-version:version',
+        extension: 'docx'
+      })
+    )
+    expect(container.querySelector('iframe')).not.toBeNull()
+    expect(container.textContent).not.toContain("This file type isn't supported")
+  })
+
   beforeEach(() => {
     previewActionSpies.currentOpenContextMenu = previewActionSpies.openContextMenu
     previewActionSpies.openContextMenu.mockClear()
@@ -614,6 +634,33 @@ describe('OfficePreviewRenderer', () => {
 
     await act(async () => root.unmount())
 
+    expect(close).toHaveBeenCalledWith('office-session-1')
+    expect(removeStateListener).toHaveBeenCalledOnce()
+    root = createRoot(container)
+  })
+
+  it('settles a rejected close acknowledgement when the renderer unmounts during shutdown', async () => {
+    await renderPreview()
+    close.mockRejectedValueOnce(new Error("No handler registered for 'office-preview:close'"))
+    await act(async () => {
+      root.unmount()
+      await flushMicrotasks()
+    })
+    expect(close).toHaveBeenCalledWith('office-session-1')
+    expect(removeStateListener).toHaveBeenCalledOnce()
+    root = createRoot(container)
+  })
+
+  it('releases a late open after unmount even when the close acknowledgement rejects', async () => {
+    let resolveOpen!: (value: ReturnType<typeof startedResult>) => void
+    open.mockReturnValueOnce(new Promise((resolve) => (resolveOpen = resolve)))
+    await renderPreview()
+    await act(async () => root.unmount())
+    close.mockRejectedValueOnce(new Error('Desktop connection closed'))
+    await act(async () => {
+      resolveOpen(startedResult())
+      await flushMicrotasks()
+    })
     expect(close).toHaveBeenCalledWith('office-session-1')
     expect(removeStateListener).toHaveBeenCalledOnce()
     root = createRoot(container)

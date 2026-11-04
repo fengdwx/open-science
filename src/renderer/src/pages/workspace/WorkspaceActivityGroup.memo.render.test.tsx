@@ -8,13 +8,13 @@ import type { ToolActivity } from '@/stores/session-store'
 import { WorkspaceActivityGroup } from './WorkspaceActivityGroup'
 import * as details from './workspace-tool-activity-details'
 
-const { scrollToMessage, renderDetails } = vi.hoisted(() => ({
-  scrollToMessage: vi.fn(),
+const { stopAutoScroll, renderDetails } = vi.hoisted(() => ({
+  stopAutoScroll: vi.fn(),
   renderDetails: vi.fn()
 }))
 vi.mock('@/components/ui/message-scroller', () => ({
   MessageScrollerItem: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  useMessageScroller: () => ({ scrollToMessage })
+  useMessageScroller: () => ({ stopAutoScroll })
 }))
 vi.mock('./WorkspaceToolDetailsRow', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./WorkspaceToolDetailsRow')>()
@@ -82,7 +82,7 @@ it('skips unchanged tool details across fresh group wrappers and only updates th
   expect(screen.getByText('first result')).toBeTruthy()
   fireEvent.click(screen.getAllByTestId('tool-chip')[0])
   expect(onToggleRow).toHaveBeenCalledWith('first', false)
-  expect(scrollToMessage).toHaveBeenCalledWith('group', { align: 'nearest', behavior: 'auto' })
+  expect(stopAutoScroll).toHaveBeenCalledOnce()
 
   // A real receipt replaces records. Even an unchanged timestamp must not hide changed output.
   const changed = { ...first, rawOutput: 'new authoritative result' }

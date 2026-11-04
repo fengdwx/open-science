@@ -11,18 +11,14 @@ import {
 } from './workspace-operation-error'
 import type { AcpRuntimeEvent, AcpSessionAgentTarget } from '../../../../shared/acp'
 import { reportHandledRendererFailure } from '../handled-failure-diagnostics'
+import { scheduleCommittedRuntimeTranscriptAutoReview } from './workspace-events'
 import { i18next } from '../../i18n'
 import { DEFAULT_PERMISSION_PROFILE } from '../../../../shared/permission-profiles'
 import { isHiddenControlMessage } from '../../../../shared/session-persistence'
 import { toRuntimeUploadedAttachment } from '../../../../shared/uploads'
-import { isMediaOverflowError } from '../../../../shared/media-overflow'
-import { RESUME_WORKSPACE_MISSING_MESSAGE } from '../../../../shared/run-error-classification'
-import {
-  toPersistedSession,
-  useSessionStore,
-  type ChatMessage,
-  type ChatSession
-} from '../../stores/session-store'
+import { RESUME_WORKSPACE_MISSING_MESSAGE } from '../../../../shared/failure/messages'
+import { toPersistedSession, useSessionStore } from '../../stores/session-store'
+import type { ChatMessage, ChatSession } from '../../stores/session-store-contract'
 import {
   confirmPendingDelegationPolicyAuthority,
   flushSessionPersistence,
@@ -33,6 +29,7 @@ import { ensureSessionContentLoaded } from '../session-persistence/session-histo
 import { resolveHistoryReplayTarget, type HistoryReplayDescriptor } from './history-preamble'
 import { getResumeFailureMessage } from './workspace-runtime-prompt-preparation-owner'
 import {
+  cancelPreparingWorkspacePrompt,
   sendWorkspaceMessage,
   type SendWorkspaceMessageIntent
 } from './workspace-runtime-command-owner'
@@ -47,7 +44,7 @@ type ResumeInterruptedWorkspaceSessionOptions = {
   historyReplayDescriptor?: HistoryReplayDescriptor
   supportsImageInput?: boolean
   agentTarget?: AcpSessionAgentTarget
-  flushPersistence?: () => Promise<void>
+  flushPersistence?: (target?: string) => Promise<void>
 }
 
 type WorkspaceMessageRuntime = Pick<
@@ -194,7 +191,7 @@ const continueInterruptedWorkspaceTurn = async (
 
     // Persist the recovery marker, original prompt, and any fresh Runtime Segment before Main reads
     // them. If the app exits before provider acceptance, the same recovery remains retryable.
-    await (options?.flushPersistence ?? flushSessionPersistence)()
+    await (options?.flushPersistence ?? flushSessionPersistence)(`session:${sessionId}`)
     if (!runtime.continueInterruptedTurn) {
       throw new Error('Interrupted turn continuation is not available.')
     }
@@ -222,12 +219,17 @@ const continueInterruptedWorkspaceTurn = async (
     // Main admitted the continuation. A failed refresh is display lag, never a Resume failure.
     try {
       const authority = await loadPersistedSession({ projectId: session.projectId, sessionId })
-      if (authority)
+      if (authority) {
+        const previous = workspaceSession(sessionId)
         useSessionStore.getState().applyDurableSessionProjection({
           source: session,
           session: authority,
           mode: 'runtime-transcript-authority'
         })
+        // The refresh can precede the terminal lifecycle event. Both paths must offer the
+        // completed turn to the same review gate before its projection becomes the baseline.
+        scheduleCommittedRuntimeTranscriptAutoReview(previous, authority)
+      }
     } catch (error) {
       reportHandledRendererFailure(
         'Session refresh after an admitted Resume failed',
@@ -296,7 +298,10 @@ const resumeInterruptedWorkspaceSession = async (
         { projectId: source.projectId, sessionId },
         {
           loadOne: async (request) => {
-            const authority = await loadPersistedSession(request)
+            // Recovery needs a fresh authority read even when a cached revision matches.
+            const authority = await loadPersistedSession(request, window.api.sessions, {
+              bypassCache: true
+            })
             return !invalidated &&
               currentRecoverySource() &&
               authority?.createdAt === source.createdAt
@@ -370,6 +375,20 @@ const resumeInterruptedWorkspaceSession = async (
     return removedPromptSettled ? { ...current, resumeRecovery: undefined } : current
   }
 
+  // Commit pending preferences before attachment/preparation returns an authoritative snapshot.
+  // Otherwise that snapshot can restore an older auto-review setting before continuation.
+  try {
+    await (options?.flushPersistence ?? flushSessionPersistence)(`session:${sessionId}`)
+    if (!currentRecoverySession()) return
+  } catch (error) {
+    reportWorkspaceOperationError(sessionId, resumeOperationMessage(error), {
+      operation: 'resume',
+      rawError: error,
+      providerTarget: options?.agentTarget ?? session.agentConfiguration
+    })
+    return
+  }
+
   if (runtimeAlreadyAttached) {
     try {
       await drainRuntimeEvents?.(sessionId)
@@ -392,7 +411,11 @@ const resumeInterruptedWorkspaceSession = async (
         useSessionStore.getState().markResumed(sessionId)
       }
     } catch (error) {
-      reportWorkspaceOperationError(sessionId, resumeOperationMessage(error))
+      reportWorkspaceOperationError(sessionId, resumeOperationMessage(error), {
+        operation: 'resume',
+        rawError: error,
+        providerTarget: options?.agentTarget ?? session.agentConfiguration
+      })
     }
     return
   }
@@ -469,7 +492,11 @@ const resumeInterruptedWorkspaceSession = async (
       )
     }
   } catch (error) {
-    reportWorkspaceOperationError(sessionId, resumeOperationMessage(error))
+    reportWorkspaceOperationError(sessionId, resumeOperationMessage(error), {
+      operation: 'resume',
+      rawError: error,
+      providerTarget: options?.agentTarget ?? session.agentConfiguration
+    })
   }
 }
 
@@ -760,6 +787,7 @@ const cancelWorkspaceRun = async (
   cancelledSessionIds?: Set<string>
 ): Promise<void> => {
   clearWorkspaceOperationError(sessionId)
+  if (cancelPreparingWorkspacePrompt(sessionId)) return
   // A run that only exists because a failed rollback kept its preparation was never admitted, so
   // there is nothing for the provider to cancel; releasing the exact preparation is the stop.
   if (hasPendingWorkspacePromptRollback(sessionId)) {
@@ -814,12 +842,9 @@ const processContextOverflowRecovery = (
     if (handledEventIds.has(event.id)) continue
     if (event.kind !== 'error' || !event.sessionId) continue
 
-    // Prefer the runtime's explicit marker; fall back to matching the message so an unmarked overflow
-    // (older event, or a path that didn't tag it) is still recovered.
+    // Accept the runtime's recovery marker or its classified overflow reason.
     const isOverflow =
-      event.recoverable === 'context-overflow' ||
-      isMediaOverflowError(event.text) ||
-      isMediaOverflowError(event.title)
+      event.recoverable === 'context-overflow' || event.failure?.reason === 'input/context-overflow'
     const isSessionLost = event.recoverable === 'session-lost'
 
     if (!isOverflow && !isSessionLost) continue

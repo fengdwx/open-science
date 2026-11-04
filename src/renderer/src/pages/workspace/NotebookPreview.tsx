@@ -18,6 +18,7 @@ import {
 import { useTranslation } from 'react-i18next'
 
 import { ErrorNotice } from '@/components/error-notice'
+import { ConfirmActionDialog } from '@/components/ui/confirm-action-dialog'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import {
   Select,
@@ -29,7 +30,8 @@ import {
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { useNotebookEnvStore } from '@/stores/notebook-env-store'
-import { usePreviewWorkbenchStore, type PreviewToolItem } from '@/stores/preview-workbench-store'
+import { usePreviewWorkbenchStore } from '@/stores/preview-workbench-store'
+import type { PreviewToolItem } from '@/stores/preview-workbench-contract'
 import { useSessionStore } from '@/stores/session-store'
 import { useSettingsStore } from '@/stores/settings-store'
 
@@ -529,8 +531,11 @@ const NotebookPreview = ({ item }: NotebookPreviewProps): React.JSX.Element => {
   const [actionError, setActionError] = useState<string | null>(null)
   const [isAbortingWrite, setIsAbortingWrite] = useState(false)
   const [isRestarting, setIsRestarting] = useState(false)
+  const [restartConfirmation, setRestartConfirmation] = useState<string>()
+  const restartTrigger = useRef<HTMLButtonElement>(null)
   const [activeKind, setActiveKind] = useState<NotebookKernelKind>('python')
   const [frameFilter, setFrameFilter] = useState<NotebookFrameFilterValue>()
+  const viewSelectionVersion = useRef(0)
   const [showVariables, setShowVariables] = useState(false)
   const [showPrivateVariables, setShowPrivateVariables] = useState(false)
   const [namespaceFilter, setNamespaceFilter] = useState('')
@@ -566,11 +571,16 @@ const NotebookPreview = ({ item }: NotebookPreviewProps): React.JSX.Element => {
   const stateLoadInFlight = useRef<Promise<boolean> | undefined>(undefined)
   const stateReloadQueued = useRef(false)
   const lastFocusedRunRequest = useRef<string | undefined>(undefined)
+  const lastRevealedRunRequest = useRef<string | undefined>(undefined)
   const notebookRequest = createNotebookRequest(item.notebook)
   const notebookRequestKey = JSON.stringify(notebookRequest)
   const latestNotebookRequest = useRef({ request: notebookRequest, key: notebookRequestKey })
 
   useEffect(() => {
+    if (latestNotebookRequest.current.key !== notebookRequestKey) {
+      lastRevealedRunRequest.current = undefined
+      viewSelectionVersion.current += 1
+    }
     latestNotebookRequest.current = { request: notebookRequest, key: notebookRequestKey }
   }, [notebookRequest, notebookRequestKey])
 
@@ -797,13 +807,18 @@ const NotebookPreview = ({ item }: NotebookPreviewProps): React.JSX.Element => {
 
   useEffect(() => {
     if (!focusedRun?.agentFrameId) return
+    const requestKey = JSON.stringify([focusedRun.runId, item.notebookRunFocusRequest ?? 0])
+    // A fresh state snapshot is not a new request to reveal the original Run.
+    if (lastRevealedRunRequest.current === requestKey) return
     const timer = window.setTimeout(() => {
+      lastRevealedRunRequest.current = requestKey
+      viewSelectionVersion.current += 1
       setFrameFilter(`frame:${focusedRun.agentFrameId}`)
       setActiveKind(resolveRunKernelKind(focusedRun))
       setActiveEnv(resolveRunEnvironment(focusedRun))
     }, 0)
     return () => window.clearTimeout(timer)
-  }, [focusedRun, item.notebookRunFocusRequest])
+  }, [focusedRun, item.notebookRunFocusRequest, notebookRequestKey])
 
   useEffect(() => {
     if (!item.notebookRunId || !visibleRuns.some((run) => run.runId === item.notebookRunId)) return
@@ -840,6 +855,12 @@ const NotebookPreview = ({ item }: NotebookPreviewProps): React.JSX.Element => {
 
   // R-only restart prompt: an R install/uninstall flags the active R env until its kernel restarts.
   const activeEnvName = effectiveActiveEnv
+  const restartOwner = `${item.notebook.sessionId}:${activeEnvName ?? ''}`
+  const [restartConfirmationOwner, setRestartConfirmationOwner] = useState(restartOwner)
+  if (restartConfirmationOwner !== restartOwner) {
+    setRestartConfirmationOwner(restartOwner)
+    setRestartConfirmation(undefined)
+  }
   const restartRecommended =
     activeDataLanguage === 'r' &&
     (notebookState?.environments.find((entry) => {
@@ -1077,6 +1098,7 @@ const NotebookPreview = ({ item }: NotebookPreviewProps): React.JSX.Element => {
     }
 
     const target = `${activeDataLanguage}:${activeEnvName}`
+    const submittedViewVersion = viewSelectionVersion.current
     setSubmittingTarget(target)
     setActionError(null)
 
@@ -1096,6 +1118,16 @@ const NotebookPreview = ({ item }: NotebookPreviewProps): React.JSX.Element => {
         language: activeDataLanguage
       })
 
+      // Manual commands produce root-lane history. Reveal the result only if this view still owns
+      // the submission; failed admission and later navigation retain their original context.
+      if (
+        getDesktopRuntimeEpoch() === epoch &&
+        viewSelectionVersion.current === submittedViewVersion
+      ) {
+        const rootFrameId = session?.conversationGraph?.rootFrameId
+        if (rootFrameId) setFrameFilter(`frame:${rootFrameId}`)
+        setActiveKind(activeDataLanguage)
+      }
       await loadNotebookState()
     } catch (error) {
       setTerminalCode(code)
@@ -1382,11 +1414,6 @@ const NotebookPreview = ({ item }: NotebookPreviewProps): React.JSX.Element => {
           className="min-h-0 overflow-hidden"
         >
           <div className="flex h-full min-h-0 flex-col bg-bg-000" data-testid="kernel-terminal">
-            {actionError ? (
-              <InlineNotice tone="red" role="alert" className="m-2 font-mono text-xs">
-                {actionError}
-              </InlineNotice>
-            ) : null}
             <TerminalScrollback
               runs={visibleRuns}
               language={activeDataLanguage}
@@ -1432,7 +1459,10 @@ const NotebookPreview = ({ item }: NotebookPreviewProps): React.JSX.Element => {
             </label>
             <Select
               value={effectiveFrameFilter ?? ''}
-              onValueChange={(value) => setFrameFilter(value as NotebookFrameFilterValue)}
+              onValueChange={(value) => {
+                viewSelectionVersion.current += 1
+                setFrameFilter(value as NotebookFrameFilterValue)
+              }}
             >
               <SelectTrigger
                 id={`notebook-preview-frame-filter-${item.notebook.sessionId}`}
@@ -1472,6 +1502,7 @@ const NotebookPreview = ({ item }: NotebookPreviewProps): React.JSX.Element => {
                   type="button"
                   data-testid="kernel-switcher-r"
                   onClick={() => {
+                    viewSelectionVersion.current += 1
                     setActiveKind('r')
                     onSelectLanguage('r')
                   }}
@@ -1490,6 +1521,7 @@ const NotebookPreview = ({ item }: NotebookPreviewProps): React.JSX.Element => {
                   type="button"
                   data-testid={`kernel-switcher-${kind}`}
                   onClick={() => {
+                    viewSelectionVersion.current += 1
                     setShowVariables(false)
                     setActiveKind(kind)
                   }}
@@ -1591,7 +1623,10 @@ const NotebookPreview = ({ item }: NotebookPreviewProps): React.JSX.Element => {
                 key={envName}
                 type="button"
                 data-testid={`env-option-${envName}`}
-                onClick={() => setActiveEnv(envName)}
+                onClick={() => {
+                  viewSelectionVersion.current += 1
+                  setActiveEnv(envName)
+                }}
                 className={cn(
                   'flex shrink-0 items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] transition-colors focus-visible:keyboard-focus focus-visible:-outline-offset-2',
                   effectiveActiveEnv === envName
@@ -1635,14 +1670,50 @@ const NotebookPreview = ({ item }: NotebookPreviewProps): React.JSX.Element => {
             <button
               type="button"
               disabled={isRestarting}
-              onClick={() => void handleRestart()}
+              onClick={() => setRestartConfirmation(activeEnvName)}
               className="shrink-0 rounded-md border border-border-200 px-2 py-0.5 font-medium text-text-100 transition-colors hover:bg-bg-200 disabled:opacity-50"
               data-testid="r-restart-button"
+              ref={restartTrigger}
             >
               {isRestarting ? t('Restarting…') : t('Restart R kernel')}
             </button>
           </div>
         ) : null}
+
+        {actionError && !initialStateError ? (
+          <ErrorNotice
+            inline
+            role="alert"
+            tone="red"
+            className="max-h-32 shrink-0 overflow-auto px-3 py-2"
+            description={actionError}
+            data-testid="notebook-action-error"
+          />
+        ) : null}
+
+        <ConfirmActionDialog
+          open={Boolean(
+            restartConfirmation && restartConfirmation === activeEnvName && restartRecommended
+          )}
+          title={t('Restart R kernel?')}
+          description={t(
+            'Restarting {{environment}} clears its live variables and loaded packages after current execution finishes. Saved files and Notebook history are kept.',
+            { environment: environmentLabel(restartConfirmation ?? '') }
+          )}
+          cancelLabel={t('Cancel')}
+          confirmLabel={t('Restart R kernel')}
+          onCancel={() => setRestartConfirmation(undefined)}
+          onConfirm={() => {
+            setRestartConfirmation(undefined)
+            void handleRestart()
+          }}
+          onCloseAutoFocus={(event) => {
+            if (restartTrigger.current && !restartTrigger.current.disabled) {
+              event.preventDefault()
+              restartTrigger.current.focus()
+            }
+          }}
+        />
 
         {initialStateError ? (
           <div

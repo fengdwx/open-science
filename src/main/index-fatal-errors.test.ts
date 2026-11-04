@@ -1,6 +1,6 @@
 vi.mock('./runtime-ownership', async (original) => ({
   ...(await original<typeof import('./runtime-ownership')>()),
-  acquireRuntimeDirectorySync: () => ({ release: vi.fn() }),
+  acquireCredentialBootstrapLease: () => ({ release: vi.fn() }),
   RuntimeDirectoryOwnership: class {
     acquireSync = vi.fn()
   },
@@ -82,7 +82,10 @@ vi.mock('electron', () => ({
 vi.mock('./desktop-native-electron', () => ({ createDesktopNativeHandler: vi.fn() }))
 vi.mock('./desktop-runtime-launcher', () => ({
   startOrAttachDesktopBackend: vi.fn(),
-  desktopBackendPaths: vi.fn()
+  desktopBackendPaths: vi.fn(() => ({
+    command: '/isolated-test/node',
+    entry: '/isolated-test/application/backend.cjs'
+  }))
 }))
 vi.mock('./credential-identity/node-cipher', () => ({ initializeNodeWindowsProfileKey: vi.fn() }))
 
@@ -121,6 +124,7 @@ vi.mock('@aipoch/diagnostics/node', async (importOriginal) => ({
   errorLogFields: (await importOriginal<typeof import('@aipoch/diagnostics/node')>())
     .errorLogFields,
   createLogger: vi.fn(() => mocks.log),
+  initLogger: vi.fn(),
   diagnosticErrorFields: vi.fn((error: unknown) => ({ error })),
   flushLogs: vi.fn(async () => undefined),
   writeFatalLogSync: mocks.writeFatalLogSync

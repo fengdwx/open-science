@@ -4,8 +4,17 @@ import { readPdfTranslationCases } from '../fixtures/read-cases'
 import { describe, expect, it, vi } from 'vitest'
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist'
 import { extractPdfTranslationSource } from '../../src/reader/extraction.js'
+import { applyPdfContentFirstPolicy } from '../../src/reader/content-policy.js'
 import { bindPdfTranslation } from '../../src/reader/source.js'
-import { groupPdfTranslationPages } from '../../src/reader/layout.js'
+import { pdfTranslationLayoutFragments } from '../../src/reader/fragments.js'
+import { groupPdfTranslationPages, type PdfLayoutPage } from '../../src/reader/layout.js'
+import { OPS } from 'pdfjs-dist/legacy/build/pdf.mjs'
+import { pdfTranslationLayoutSnapshotSchema } from '../../src/snapshot.js'
+import {
+  rememberPdfTranslationExtraction,
+  getPdfTranslationLayoutSnapshot,
+  restorePdfTranslationExtraction
+} from '../../src/reader/snapshot.js'
 
 const text = (str: string, x = 40, y = 100) => ({
   str,
@@ -16,6 +25,12 @@ const text = (str: string, x = 40, y = 100) => ({
   fontName: 'body',
   hasEOL: true
 })
+const nativeGlyphs = (str: string) =>
+  [...str].map((unicode) => ({
+    unicode,
+    originalCharCode: unicode === '\u00a5' ? 165 : 2000 + unicode.codePointAt(0)!,
+    isInFont: true
+  }))
 const setup = (items = [text('An intact source paragraph.')]) => {
   const page = {
     rotate: 0,
@@ -39,6 +54,911 @@ const setup = (items = [text('An intact source paragraph.')]) => {
 }
 
 describe('extractPdfTranslationSource', () => {
+  it('rejects stripped native clip provenance after restore while preserving the existing page-edge tolerance', async () => {
+    for (const overflow of [0, 1e-7]) {
+      const item = { ...text('A complete native sentence.', 590, 40), width: 10 + overflow * 600 }
+      const fixture = setup([item])
+      fixture.page.getTextContent.mockResolvedValue({
+        items: [item],
+        styles: { body: { vertical: false, ascent: 0.8, descent: -0.2 } }
+      })
+      const extraction = await extractPdfTranslationSource(fixture.context)
+      const unit = extraction.source.units[0]
+      expect(unit.sourceOnly).toBeUndefined()
+      expect(
+        await bindPdfTranslation(
+          extraction.source,
+          {
+            source: extraction.source,
+            units: [{ id: unit.id, translationSource: unit.source, translation: 'Translated' }]
+          },
+          fixture.context.document,
+          'current',
+          fixture.controller.signal
+        )
+      ).not.toBeNull()
+    }
+    const items = [
+      { ...text('Native prefix', 590, 40), width: 30 },
+      text('An intact ordinary sentence.', 40, 100)
+    ]
+    const fixture = setup(items)
+    fixture.page.getTextContent.mockResolvedValue({
+      items,
+      styles: { body: { vertical: false, ascent: 0.8, descent: -0.2 } }
+    })
+    const original = await extractPdfTranslationSource(fixture.context)
+    const extraction = { ...original, source: applyPdfContentFirstPolicy(original.source) }
+    rememberPdfTranslationExtraction(extraction)
+    const snapshot = getPdfTranslationLayoutSnapshot(extraction.source)!
+    const restored = restorePdfTranslationExtraction(
+      pdfTranslationLayoutSnapshotSchema.parse(snapshot),
+      'current'
+    )
+    const ordinary = restored.source.units.find((u) => !u.sourceOnly)!
+    expect(
+      await bindPdfTranslation(
+        restored.source,
+        {
+          source: restored.source,
+          units: [
+            { id: ordinary.id, translationSource: ordinary.source, translation: 'Translated' }
+          ]
+        },
+        fixture.context.document,
+        'current',
+        fixture.controller.signal
+      )
+    ).not.toBeNull()
+    for (const rename of [false, true]) {
+      const stripped = structuredClone(snapshot)
+      const unit = stripped.units.find((u) => u.fragments.some((f) => f.unclippedRect))!
+      stripped.coverage.warnings = stripped.coverage.warnings.filter((w) => w.unitId !== unit.id)
+      delete unit.fragments[0].unclippedRect
+      delete unit.sourceOnly
+      if (rename) unit.id = 'ordinary-restored-owner'
+      const candidate = restorePdfTranslationExtraction(
+        pdfTranslationLayoutSnapshotSchema.parse(stripped),
+        'current'
+      )
+      expect(
+        await bindPdfTranslation(
+          candidate.source,
+          {
+            source: candidate.source,
+            units: [{ id: unit.id, translationSource: unit.source, translation: 'Translated' }]
+          },
+          fixture.context.document,
+          'current',
+          fixture.controller.signal
+        )
+      ).toBeNull()
+    }
+  })
+  it.each(['complete', 'missing-font', 'nonuniform', 'sheared', 'no-intersection'])(
+    'retains only proved partial native navigation and its complete provenance: %s',
+    async (proof) => {
+      const item = { ...text('Native prefix', 590, 40), width: 30 }
+      if (proof === 'missing-font') item.fontName = ''
+      if (proof === 'nonuniform') item.transform[0] = 20
+      if (proof === 'sheared') item.transform[2] = 1
+      if (proof === 'no-intersection') item.transform[4] = 610
+      const fixture = setup([item])
+      fixture.page.getTextContent.mockResolvedValue({
+        items: [item],
+        styles: { body: { vertical: false, ascent: 0.8, descent: -0.2 } }
+      })
+      const extraction = await extractPdfTranslationSource(fixture.context)
+      if (proof !== 'complete') {
+        expect(extraction.source.units).toEqual([])
+        expect(extraction.coverage.excludedItemCount).toBe(1)
+        return
+      }
+      expect(extraction.source.units).toEqual([
+        {
+          id: 'clipped-p1-i0',
+          source: item.str,
+          sourceOnly: true,
+          fragments: [
+            {
+              pageNumber: 1,
+              rect: {
+                x: 590 / 600,
+                y: 32 / 800,
+                width: 1 - 590 / 600,
+                height: 32 / 800 + 10 / 800 - 32 / 800
+              },
+              unclippedRect: { x: 590 / 600, y: 32 / 800, width: 30 / 600, height: 10 / 800 },
+              items: [{ index: 0, text: item.str }]
+            }
+          ]
+        }
+      ])
+      expect(extraction.coverage.warnings).toContainEqual({
+        unitId: 'clipped-p1-i0',
+        reasons: ['partially-outside-page']
+      })
+      const prepared = { ...extraction, source: applyPdfContentFirstPolicy(extraction.source) }
+      expect(prepared.source.units).toEqual(extraction.source.units)
+      expect(prepared.source.originalRegions).toEqual([])
+      rememberPdfTranslationExtraction(prepared)
+      const snapshot = getPdfTranslationLayoutSnapshot(prepared.source)!
+      expect(pdfTranslationLayoutSnapshotSchema.safeParse(snapshot).success).toBe(true)
+      const restored = restorePdfTranslationExtraction(snapshot, 'current')!
+      expect(restored.source.units).toEqual(extraction.source.units)
+      expect(pdfTranslationLayoutFragments(restored.source.units[0], restored.source)).toEqual(
+        restored.source.units[0].fragments
+      )
+      for (const mutate of [
+        (s: typeof snapshot) => {
+          delete s.units[0].sourceOnly
+        },
+        (s: typeof snapshot) => {
+          s.coverage.warnings = []
+        },
+        (s: typeof snapshot) => {
+          s.units[0].fragments[0].rect.width /= 2
+        }
+      ]) {
+        const invalid = structuredClone(snapshot)
+        mutate(invalid)
+        expect(pdfTranslationLayoutSnapshotSchema.safeParse(invalid).success).toBe(false)
+      }
+    }
+  )
+  it.each(['inside', 'missing-font', 'invalid-geometry', 'outside'])(
+    'keeps only a proved page-in peer from an excluded group: %s',
+    async (proof) => {
+      const items = [
+        { ...text('Label', 10, 40), width: 30, hasEOL: false },
+        { ...text('Peer', 45, 40), width: 570, hasEOL: false }
+      ]
+      items[1].transform[0] = 20
+      if (proof === 'missing-font') items[0].fontName = ''
+      if (proof === 'invalid-geometry') items[0].width = Number.NaN
+      if (proof === 'outside') {
+        items[0].transform[4] = -1
+        items[0].transform[0] = 20
+      }
+      const fixture = setup(items)
+      fixture.page.getTextContent.mockResolvedValue({
+        items,
+        styles: { body: { vertical: false, ascent: 0.8, descent: -0.2 } }
+      })
+      const { source, coverage } = await extractPdfTranslationSource(fixture.context)
+      expect(source.units).toEqual(
+        proof === 'inside'
+          ? [
+              {
+                id: 'inpage-p1-i0',
+                source: 'Label',
+                sourceOnly: true,
+                fragments: [
+                  {
+                    pageNumber: 1,
+                    rect: { x: 10 / 600, y: 32 / 800, width: 30 / 600, height: 10 / 800 },
+                    items: [{ index: 0, text: 'Label' }]
+                  }
+                ]
+              }
+            ]
+          : []
+      )
+      expect(coverage.exclusions.flatMap((entry) => entry.items)).toEqual(
+        items.flatMap((item, index) =>
+          proof === 'inside' && index === 0 ? [] : [{ pageNumber: 1, index, text: item.str }]
+        )
+      )
+      expect(coverage.includedItemCount + coverage.excludedItemCount).toBe(2)
+    }
+  )
+  const simpleControl = (str = '\u0001') => {
+    const items = [text(str)]
+    const fixture = setup(items)
+    const font = {
+      name: 'EmbeddedMath',
+      composite: false,
+      missingFile: false,
+      vertical: false,
+      isType3Font: false,
+      toUnicode: { _map: {} as Record<number, string | undefined> }
+    }
+    const glyph = { unicode: str, originalCharCode: str.charCodeAt(0), isInFont: true }
+    const operators = {
+      fnArray: [OPS.setFont, OPS.showText],
+      argsArray: [['body', 10], [[glyph]]]
+    }
+    Object.assign(fixture.page, {
+      commonObjs: { has: () => true, get: () => font },
+      getOperatorList: vi.fn().mockResolvedValue(operators)
+    })
+    return { ...fixture, items, font, glyph, operators }
+  }
+
+  it('marks an owned missing simple-font control without changing text or eligibility', async () => {
+    const fixture = simpleControl()
+    const before = await extractPdfTranslationSource(setup(fixture.items).context)
+    const actual = await extractPdfTranslationSource(fixture.context)
+    expect(actual.source).toEqual(before.source)
+    expect(actual.coverage).toEqual({
+      ...before.coverage,
+      warnings: before.coverage.warnings.map((warning) => ({
+        ...warning,
+        reasons: [...warning.reasons, 'unreliable-font-unicode']
+      }))
+    })
+    expect(actual.coverage.warnings.flatMap((warning) => warning.reasons)).toContain(
+      'unreliable-font-unicode'
+    )
+  })
+
+  const missingControl = (str: string, mapped = false, width = 150) => {
+    const fixture = setup([{ ...text(str), width }])
+    const glyphs = [...str].map((unicode) => ({
+      unicode,
+      originalCharCode: unicode.charCodeAt(0),
+      isInFont: true
+    }))
+    const map = Object.fromEntries(
+      glyphs
+        .filter((glyph) => mapped || glyph.originalCharCode >= 32)
+        .map((glyph) => [glyph.originalCharCode, glyph.unicode])
+    )
+    Object.assign(fixture.page, {
+      commonObjs: { has: () => true, get: () => ({ composite: true, toUnicode: { _map: map } }) },
+      getOperatorList: vi.fn().mockResolvedValue({
+        fnArray: [OPS.setFont, OPS.showText],
+        argsArray: [['body', 10], [glyphs]]
+      })
+    })
+    return fixture
+  }
+
+  it('retains a proven missing-Unicode small owner only as original', async () => {
+    const str = '\u0012 X',
+      fixture = missingControl(str)
+    const before = await extractPdfTranslationSource(setup([text(str)]).context)
+    const actual = await extractPdfTranslationSource(fixture.context)
+    expect(actual.coverage).toEqual({
+      ...before.coverage,
+      warnings: [{ unitId: before.source.units[0].id, reasons: ['unreliable-font-unicode'] }]
+    })
+    expect(before.source.units).toHaveLength(1)
+    expect(before.source.units[0].sourceOnly).toBeUndefined()
+    expect(actual.source.units).toEqual([{ ...before.source.units[0], sourceOnly: true }])
+    expect(applyPdfContentFirstPolicy(actual.source).units).toEqual(actual.source.units)
+  })
+
+  it.each([
+    'An ordinary unchanged \u0001 sentence retains translation eligibility.',
+    '\u0003 oi',
+    '\t X',
+    '\n X',
+    '\r X'
+  ])('keeps ordinary, mixed-word and legal-whitespace admission unchanged (%s)', async (str) => {
+    const fixture = missingControl(str)
+    const before = await extractPdfTranslationSource(setup([text(str)]).context)
+    const actual = await extractPdfTranslationSource(fixture.context)
+    expect(actual.source).toEqual(before.source)
+    expect(actual.coverage.excludedItemCount).toBe(before.coverage.excludedItemCount)
+  })
+
+  it.each(['mapped', 'unavailable', 'zero advance'])(
+    'does not infer missing-Unicode small-owner admission from %s',
+    async (variant) => {
+      const str = '\u0012 X',
+        width = variant === 'zero advance' ? 0 : 150
+      const fixture =
+        variant === 'unavailable'
+          ? setup([text(str)])
+          : missingControl(str, variant === 'mapped', width)
+      const before = await extractPdfTranslationSource(setup([{ ...text(str), width }]).context)
+      const actual = await extractPdfTranslationSource(fixture.context)
+      expect(actual.source).toEqual(before.source)
+      if (variant !== 'zero advance')
+        expect(actual.coverage.warnings).toEqual(before.coverage.warnings)
+    }
+  )
+
+  const symbolicFallback = () => {
+    const fixture = simpleControl('&')
+    const font = Object.assign(fixture.font, {
+      type: 'TrueType',
+      isSymbolicFont: true,
+      toFontChar: { 38: 0xe004 } as Record<number, number | undefined>
+    })
+    const glyph = Object.assign(fixture.glyph, { fontChar: '\ue004' })
+    return { ...fixture, font, glyph }
+  }
+
+  it.each([
+    'native',
+    'named-glyph',
+    'inherited-name',
+    'mapped',
+    'different-slot',
+    'incomplete-stream'
+  ])('warns only for a complete unmapped numeric Type1 glyph name: %s', async (variant) => {
+    const fixture = symbolicFallback()
+    fixture.font.type = 'Type1'
+    const font = Object.assign(fixture.font, {
+      differences: Object.assign([] as string[], { 38: 'gid00017' })
+    })
+    if (variant === 'named-glyph') font.differences[38] = 'ampersand'
+    if (variant === 'inherited-name') font.differences = Object.create(font.differences)
+    if (variant === 'mapped') font.toUnicode._map[38] = '&'
+    if (variant === 'different-slot') fixture.glyph.fontChar = '\ue005'
+    if (variant === 'incomplete-stream') fixture.items[0].str += 'A'
+    const indexes: number[] = []
+    const actual = await getPdfTranslationTextContent(
+      fixture.page as unknown as PDFPageProxy,
+      (flagged) => indexes.push(...flagged)
+    )
+    expect(indexes).toEqual(variant === 'native' ? [0] : [])
+    expect(actual.items).toEqual(fixture.items)
+  })
+
+  it('marks an embedded symbolic render slot with no Unicode mapping while retaining its native source', async () => {
+    const fixture = symbolicFallback()
+    const before = await extractPdfTranslationSource(setup(fixture.items).context)
+    const actual = await extractPdfTranslationSource(fixture.context)
+    expect(actual.source).toEqual(before.source)
+    expect(actual.coverage.warnings.flatMap((warning) => warning.reasons)).toContain(
+      'unreliable-font-unicode'
+    )
+    const indexes: number[] = []
+    const native = await getPdfTranslationTextContent(
+      fixture.page as unknown as PDFPageProxy,
+      (flagged) => indexes.push(...flagged)
+    )
+    expect(indexes).toEqual([0])
+    expect(native.items).toEqual(fixture.items)
+  })
+
+  it('distinguishes equal printable Unicode from an unmapped slot in the same font stream', async () => {
+    const fixture = symbolicFallback()
+    fixture.items.push(text('&', 200, 100))
+    fixture.font.toUnicode._map[99] = '&'
+    fixture.font.toFontChar[99] = 0xe005
+    Object.assign(fixture.operators, {
+      fnArray: [OPS.setFont, OPS.showText, OPS.showText],
+      argsArray: [
+        ['body', 10],
+        [[fixture.glyph]],
+        [[{ unicode: '&', originalCharCode: 99, fontChar: '\ue005', isInFont: true }]]
+      ]
+    })
+    const indexes: number[] = []
+    const actual = await getPdfTranslationTextContent(
+      fixture.page as unknown as PDFPageProxy,
+      (flagged) => indexes.push(...flagged)
+    )
+    expect(indexes).toEqual([0])
+    expect(actual.items).toEqual(fixture.items)
+  })
+
+  it.each([
+    'ordinary font',
+    'unknown symbolic status',
+    'different font type',
+    'missing embedded font',
+    'known Unicode mapping',
+    'own undefined mapping',
+    'unavailable Unicode map',
+    'ordinary render slot',
+    'different render slot',
+    'inherited render slot',
+    'multicharacter render slot',
+    'unavailable render map',
+    'different source code',
+    'incomplete native stream'
+  ])('does not flag a printable simple-font fallback from %s', async (variant) => {
+    const fixture = symbolicFallback()
+    if (variant === 'ordinary font') fixture.font.isSymbolicFont = false
+    if (variant === 'unknown symbolic status')
+      Reflect.deleteProperty(fixture.font, 'isSymbolicFont')
+    if (variant === 'different font type') fixture.font.type = 'Type1'
+    if (variant === 'missing embedded font') fixture.font.missingFile = true
+    if (variant === 'known Unicode mapping') fixture.font.toUnicode._map[38] = '&'
+    if (variant === 'own undefined mapping') fixture.font.toUnicode._map[38] = undefined
+    if (variant === 'unavailable Unicode map') Reflect.deleteProperty(fixture.font, 'toUnicode')
+    if (variant === 'ordinary render slot') {
+      fixture.font.toFontChar[38] = 38
+      fixture.glyph.fontChar = '&'
+    }
+    if (variant === 'different render slot') fixture.glyph.fontChar = '\ue005'
+    if (variant === 'inherited render slot') fixture.font.toFontChar = Object.create({ 38: 0xe004 })
+    if (variant === 'multicharacter render slot') fixture.glyph.fontChar += 'A'
+    if (variant === 'unavailable render map') Reflect.deleteProperty(fixture.font, 'toFontChar')
+    if (variant === 'different source code') fixture.glyph.originalCharCode = 39
+    if (variant === 'incomplete native stream') fixture.items[0].str += 'A'
+    const indexes: number[] = []
+    const actual = await getPdfTranslationTextContent(
+      fixture.page as unknown as PDFPageProxy,
+      (flagged) => indexes.push(...flagged)
+    )
+    expect(indexes).toEqual([])
+    expect(actual.items).toEqual(fixture.items)
+  })
+
+  it.each([
+    'mapped',
+    'own undefined map entry',
+    'missing font',
+    'unavailable font',
+    'vertical',
+    'Type3',
+    'accent',
+    'space glyph',
+    'unknown loading',
+    'not in font',
+    'different code',
+    'incomplete stream',
+    'tab',
+    'line feed',
+    'carriage return',
+    'form feed',
+    'ordinary character'
+  ])('does not infer a simple-font decoding failure from %s', async (variant) => {
+    const str =
+      (
+        {
+          tab: '\t',
+          'line feed': '\n',
+          'carriage return': '\r',
+          'form feed': '\f',
+          'ordinary character': 'A'
+        } as Record<string, string>
+      )[variant] ?? '\u0001'
+    const fixture = simpleControl(str)
+    if (variant === 'mapped') fixture.font.toUnicode._map[1] = '\u0001'
+    if (variant === 'own undefined map entry') fixture.font.toUnicode._map[1] = undefined
+    if (variant === 'missing font') fixture.font.missingFile = true
+    if (variant === 'unavailable font')
+      Object.assign(fixture.page, { commonObjs: { has: () => false } })
+    if (variant === 'vertical') fixture.font.vertical = true
+    if (variant === 'Type3') fixture.font.isType3Font = true
+    if (variant === 'accent') Object.assign(fixture.glyph, { accent: { fontChar: 'x' } })
+    if (variant === 'space glyph') Object.assign(fixture.glyph, { isSpace: true })
+    if (variant === 'unknown loading') Reflect.deleteProperty(fixture.font, 'missingFile')
+    if (variant === 'not in font') fixture.glyph.isInFont = false
+    if (variant === 'different code') fixture.glyph.originalCharCode = 2
+    if (variant === 'incomplete stream') fixture.glyph.unicode += 'A'
+    const flagged: number[] = []
+    const result = await getPdfTranslationTextContent(
+      fixture.page as unknown as PDFPageProxy,
+      (indexes) => flagged.push(...indexes)
+    )
+    expect(flagged).toEqual([])
+    expect(result.items).toEqual(fixture.items)
+  })
+
+  it.each([true, false])(
+    'suppresses only an actually repaired native multiplication slot (repair=%s)',
+    async (repair) => {
+      const fixture = simpleControl('\u0002')
+      fixture.font.name = 'txsys'
+      fixture.items[0].width = repair ? 6.36 : 7
+      const flagged: number[] = []
+      const result = await getPdfTranslationTextContent(
+        fixture.page as unknown as PDFPageProxy,
+        (indexes) => flagged.push(...indexes)
+      )
+      expect(flagged).toEqual(repair ? [] : [0])
+      expect(result.items).toEqual([{ ...fixture.items[0], str: repair ? '×' : '\u0002' }])
+    }
+  )
+
+  const unownedGlyph = () => {
+    const fixture = setup()
+    const font = {
+      missingFile: false,
+      vertical: false,
+      loadedName: 'unrepresented',
+      toUnicode: { _map: {} as Record<number, string> }
+    }
+    const outline = { path: [0, 0.05, -0.08, 1, 0.72, -0.08, 1, 0.72, 0.58, 4] }
+    const glyph = { unicode: '\f', originalCharCode: 12, fontChar: '\ue00c', isInFont: true }
+    const operators = {
+      fnArray: [OPS.beginText, OPS.setFont, OPS.moveText, OPS.showText, OPS.endText],
+      argsArray: [[], ['unrepresented', 10], [200, 400], [[glyph]], []] as unknown[][]
+    }
+    Object.assign(fixture.page, {
+      view: [0, 0, 600, 800],
+      commonObjs: {
+        has: () => true,
+        get: (key: string) => (key.includes('_path_') ? outline : font)
+      },
+      getOperatorList: vi.fn().mockResolvedValue(operators)
+    })
+    return { ...fixture, font, glyph, operators, outline }
+  }
+
+  it('reports an unowned painted glyph at page scope without changing source or eligibility', async () => {
+    const fixture = unownedGlyph()
+    const previous = await extractPdfTranslationSource(setup().context)
+    const actual = await extractPdfTranslationSource(fixture.context)
+    expect(actual.source).toEqual(previous.source)
+    expect(actual.coverage).toEqual({
+      ...previous.coverage,
+      pageDiagnostics: [{ pageNumber: 1, reason: 'unreliable-font-unicode' }]
+    })
+  })
+
+  it.each([
+    'mapped',
+    'missing font',
+    'empty outline',
+    'zero-area outline',
+    'unknown outline command',
+    'truncated outline',
+    'native owner',
+    'invisible',
+    'transparent',
+    'clip',
+    'soft mask',
+    'unknown state',
+    'outside page',
+    'nonfirst glyph'
+  ])('does not invent an unowned page diagnostic for %s', async (variant) => {
+    const fixture = unownedGlyph()
+    if (variant === 'mapped') fixture.font.toUnicode._map[12] = 'symbol'
+    if (variant === 'missing font') fixture.font.missingFile = true
+    if (variant === 'empty outline') fixture.outline.path = [0, 0, 0]
+    if (variant === 'zero-area outline') fixture.outline.path = [0, 0, 0, 1, 1, 1, 4]
+    if (variant === 'unknown outline command') fixture.outline.path.push(99)
+    if (variant === 'truncated outline') fixture.outline.path.push(2, 1)
+    if (variant === 'native owner')
+      fixture.page.getTextContent.mockResolvedValue({
+        items: [{ ...text('known'), fontName: 'unrepresented' }]
+      })
+    if (variant === 'outside page') fixture.operators.argsArray[2] = [-100, 400]
+    if (variant === 'nonfirst glyph') {
+      fixture.operators.fnArray.splice(3, 0, OPS.showText)
+      fixture.operators.argsArray.splice(3, 0, [[{ ...fixture.glyph, unicode: 'a' }]])
+    }
+    const state: Record<string, [number, unknown[]]> = {
+      invisible: [OPS.setTextRenderingMode, [3]],
+      transparent: [OPS.setGState, [[['ca', 0]]]],
+      clip: [OPS.clip, []],
+      'soft mask': [OPS.setGState, [[['SMask', {}]]]],
+      'unknown state': [OPS.setGState, [[['Unknown', 1]]]]
+    }
+    if (state[variant]) {
+      fixture.operators.fnArray.splice(3, 0, state[variant][0])
+      fixture.operators.argsArray.splice(3, 0, state[variant][1])
+    }
+    expect(
+      (await extractPdfTranslationSource(fixture.context)).coverage.pageDiagnostics
+    ).toBeUndefined()
+  })
+
+  it.each(['contained', 'clipped', 'unknown clip', 'restored state'])(
+    'requires a proved Form clip and restores saved paint state: %s',
+    async (variant) => {
+      const f = unownedGlyph()
+      f.operators.fnArray.unshift(OPS.paintFormXObjectBegin)
+      f.operators.argsArray.unshift([
+        null,
+        variant === 'clipped'
+          ? [0, 0, 50, 50]
+          : variant === 'unknown clip'
+            ? null
+            : [0, 0, 500, 700]
+      ])
+      f.operators.fnArray.push(OPS.paintFormXObjectEnd)
+      f.operators.argsArray.push([])
+      if (variant === 'restored state') {
+        f.operators.fnArray.splice(1, 0, OPS.save, OPS.setGState, OPS.clip, OPS.restore)
+        f.operators.argsArray.splice(
+          1,
+          0,
+          [],
+          [
+            [
+              ['ca', 0],
+              ['SMask', {}],
+              ['Font', ['other', 9]]
+            ]
+          ],
+          [],
+          []
+        )
+      }
+      const actual = await extractPdfTranslationSource(f.context)
+      expect(actual.coverage.pageDiagnostics).toEqual(
+        ['contained', 'restored state'].includes(variant)
+          ? [{ pageNumber: 1, reason: 'unreliable-font-unicode' }]
+          : undefined
+      )
+    }
+  )
+
+  it('deduplicates page evidence and preserves it through a saved snapshot roundtrip', async () => {
+    const f = unownedGlyph()
+    f.operators.fnArray.push(...f.operators.fnArray)
+    f.operators.argsArray.push(...f.operators.argsArray)
+    const actual = await extractPdfTranslationSource(f.context)
+    expect(actual.coverage.pageDiagnostics).toHaveLength(1)
+    rememberPdfTranslationExtraction(actual)
+    const stored = pdfTranslationLayoutSnapshotSchema.parse(
+      JSON.parse(JSON.stringify(getPdfTranslationLayoutSnapshot(actual.source)))
+    )
+    const restored = restorePdfTranslationExtraction(stored, 'current')
+    expect(restored).toEqual(actual)
+  })
+
+  it('validates optional page diagnostics while retaining the old snapshot shape', async () => {
+    const actual = await extractPdfTranslationSource(setup().context)
+    const snapshot = {
+      version: 1,
+      parserVersion: 'test',
+      fingerprint: 'source',
+      pages: actual.source.pages,
+      units: actual.source.units,
+      coverage: actual.coverage
+    }
+    expect(pdfTranslationLayoutSnapshotSchema.parse(snapshot)).toEqual(snapshot)
+    const withDiagnostics = (diagnostics: unknown) => ({
+      ...snapshot,
+      coverage: { ...snapshot.coverage, pageDiagnostics: diagnostics }
+    })
+    const diagnostic = { pageNumber: 1, reason: 'unreliable-font-unicode' }
+    expect(pdfTranslationLayoutSnapshotSchema.parse(withDiagnostics([diagnostic]))).toEqual(
+      withDiagnostics([diagnostic])
+    )
+    for (const invalid of [
+      [{ ...diagnostic, pageNumber: 2 }],
+      [diagnostic, diagnostic],
+      [{ ...diagnostic, reason: 'guessed' }],
+      [{ ...diagnostic, unitId: 'unrelated' }]
+    ])
+      expect(pdfTranslationLayoutSnapshotSchema.safeParse(withDiagnostics(invalid)).success).toBe(
+        false
+      )
+  })
+
+  it.each([
+    'different text',
+    'extra glyph',
+    'missing glyph',
+    'normalized ligature',
+    'unknown glyph'
+  ])(
+    'does not assign Unicode occurrences from an incomplete font stream with %s',
+    async (variant) => {
+      const fixture = setup([text('\u00a5A')])
+      const glyphs: unknown[] = nativeGlyphs('\u00a5A')
+      if (variant === 'different text') glyphs[1] = nativeGlyphs('B')[0]
+      if (variant === 'extra glyph') glyphs.push(...nativeGlyphs('B'))
+      if (variant === 'missing glyph') glyphs.pop()
+      if (variant === 'normalized ligature') {
+        fixture.page.getTextContent.mockResolvedValue({ items: [text('\u00a5fi')] })
+        glyphs[1] = nativeGlyphs('\ufb01')[0]
+      }
+      if (variant === 'unknown glyph') glyphs.push({ originalCharCode: 999 })
+      Object.assign(fixture.page, {
+        commonObjs: { has: () => true, get: () => ({ composite: true, toUnicode: { _map: {} } }) },
+        getOperatorList: vi.fn().mockResolvedValue({
+          fnArray: [OPS.setFont, OPS.showText],
+          argsArray: [['body', 10], [glyphs]]
+        })
+      })
+      const { coverage } = await extractPdfTranslationSource(fixture.context)
+      expect(coverage.warnings.flatMap((warning) => warning.reasons)).not.toContain(
+        'unreliable-font-unicode'
+      )
+    }
+  )
+
+  it('aligns literal UTF16 offsets after whitespace without confusing a repeated mapped character', async () => {
+    const items = [text(' 😀 \u00a5 ', 40, 100), text('\u00a5', 40, 300)]
+    const fixture = setup(items)
+    Object.assign(fixture.page, {
+      commonObjs: {
+        has: () => true,
+        get: () => ({ composite: true, toUnicode: { _map: { 999: '\u00a5' } } })
+      },
+      getOperatorList: vi.fn().mockResolvedValue({
+        fnArray: [OPS.setFont, OPS.showText],
+        argsArray: [
+          ['body', 10],
+          [
+            [
+              ...nativeGlyphs('😀\t\u00a5\n'),
+              { originalCharCode: 999, unicode: '\u00a5', isInFont: true }
+            ]
+          ]
+        ]
+      })
+    })
+    const flagged: number[] = []
+    const content = await getPdfTranslationTextContent(
+      fixture.page as unknown as PDFPageProxy,
+      (indexes) => flagged.push(...indexes)
+    )
+    expect(flagged).toEqual([0])
+    expect(content.items).toEqual(items)
+  })
+
+  it.each([
+    [OPS.save, OPS.restore],
+    [OPS.paintFormXObjectBegin, OPS.paintFormXObjectEnd],
+    [OPS.beginGroup, OPS.endGroup]
+  ])('restores font ownership around native graphics scope %i/%i', async (begin, end) => {
+    const fixture = setup([
+      text('\u00a5', 40, 100),
+      { ...text('A', 40, 200), fontName: 'mapped' },
+      text('\u00a5', 40, 300)
+    ])
+    Object.assign(fixture.page, {
+      commonObjs: { has: () => true, get: () => ({ composite: true, toUnicode: { _map: {} } }) },
+      getOperatorList: vi.fn().mockResolvedValue({
+        fnArray: [OPS.setFont, OPS.showText, begin, OPS.setGState, OPS.showText, end, OPS.showText],
+        argsArray: [
+          ['body', 10],
+          [nativeGlyphs('\u00a5')],
+          [],
+          [[['Font', ['mapped', 10]]]],
+          [nativeGlyphs('A')],
+          [],
+          [nativeGlyphs('\u00a5')]
+        ]
+      })
+    })
+    const flagged: number[] = []
+    await getPdfTranslationTextContent(fixture.page as unknown as PDFPageProxy, (indexes) =>
+      flagged.push(...indexes)
+    )
+    expect(flagged).toEqual([0, 2])
+  })
+
+  it('warns only the unmapped CID occurrence when the same font maps another CID to the same Unicode', async () => {
+    const fixture = setup([text('\u00a5', 40, 100), text('\u00a5', 40, 300)])
+    Object.assign(fixture.page, {
+      commonObjs: {
+        has: () => true,
+        get: () => ({ composite: true, toUnicode: { _map: { 999: '\u00a5' } } })
+      },
+      getOperatorList: vi.fn().mockResolvedValue({
+        fnArray: [OPS.setFont, OPS.showText, OPS.showText],
+        argsArray: [
+          ['body', 10],
+          [[{ originalCharCode: 165, unicode: '\u00a5', isInFont: true }]],
+          [[{ originalCharCode: 999, unicode: '\u00a5', isInFont: true }]]
+        ]
+      })
+    })
+    const { source, coverage } = await extractPdfTranslationSource(fixture.context)
+    const warnings = coverage.warnings.filter((warning) =>
+      warning.reasons.includes('unreliable-font-unicode')
+    )
+    expect(warnings).toHaveLength(1)
+    expect(source.units.find((unit) => unit.id === warnings[0].unitId)?.fragments[0].items).toEqual(
+      [{ index: 0, text: '\u00a5' }]
+    )
+    expect(
+      source.units.flatMap((unit) => unit.fragments.flatMap((fragment) => fragment.items))
+    ).toEqual([
+      { index: 0, text: '\u00a5' },
+      { index: 1, text: '\u00a5' }
+    ])
+  })
+
+  it('retains the Unicode warning on an independently recovered rotated source unit', async () => {
+    const fixture = setup([{ ...text('\u00a5'), transform: [0, 10, -10, 0, 200, 200] }])
+    Object.assign(fixture.page, {
+      commonObjs: { has: () => true, get: () => ({ composite: true, toUnicode: { _map: {} } }) },
+      getOperatorList: vi.fn().mockResolvedValue({
+        fnArray: [OPS.setFont, OPS.showText],
+        argsArray: [['body', 10], [[{ originalCharCode: 165, unicode: '\u00a5', isInFont: true }]]]
+      })
+    })
+    const { source, coverage } = await extractPdfTranslationSource(fixture.context)
+    expect(source.units[0]).toMatchObject({ id: 'rot-p1-i0', source: '\u00a5', sourceOnly: true })
+    expect(coverage.warnings).toContainEqual({
+      unitId: 'rot-p1-i0',
+      reasons: ['unreliable-font-unicode']
+    })
+  })
+
+  it.each([
+    ['mapped currency', { composite: true, toUnicode: { _map: { 165: '\u00a5' } } }, true],
+    ['simple font', { composite: false, toUnicode: { _map: {} } }, true],
+    ['absent metadata', { composite: true }, true],
+    [
+      'identity Unicode map',
+      { composite: true, toUnicode: { firstChar: 0, lastChar: 65535 } },
+      true
+    ],
+    [
+      'missing embedded font',
+      { composite: true, missingFile: true, toUnicode: { _map: {} } },
+      true
+    ],
+    ['unpainted missing glyph', { composite: true, toUnicode: { _map: {} } }, false]
+  ])('does not infer decoding failure from %s', async (_name, font, isInFont) => {
+    const fixture = setup([text('\u00a5')])
+    Object.assign(fixture.page, {
+      commonObjs: { has: () => true, get: () => font },
+      getOperatorList: vi.fn().mockResolvedValue({
+        fnArray: [OPS.setFont, OPS.showText],
+        argsArray: [['body', 10], [[{ originalCharCode: 165, unicode: '\u00a5', isInFont }]]]
+      })
+    })
+    const { coverage } = await extractPdfTranslationSource(fixture.context)
+    expect(coverage.warnings.flatMap((warning) => warning.reasons)).not.toContain(
+      'unreliable-font-unicode'
+    )
+  })
+
+  it('tracks font changes through graphics state without warning unrelated fonts', async () => {
+    const fixture = setup([
+      text('An unchanged \u00a5 label.'),
+      { ...text('Another \u00a5 label.', 40, 200), fontName: 'mapped' }
+    ])
+    Object.assign(fixture.page, {
+      commonObjs: {
+        has: () => true,
+        get: (name: string) => ({
+          composite: true,
+          toUnicode: { _map: name === 'body' ? {} : { 165: '\u00a5' } }
+        })
+      },
+      getOperatorList: vi.fn().mockResolvedValue({
+        fnArray: [OPS.setFont, OPS.save, OPS.setGState, OPS.showText, OPS.restore, OPS.showText],
+        argsArray: [
+          ['body', 10],
+          [],
+          [[['Font', ['mapped', 10]]]],
+          [nativeGlyphs('Another \u00a5 label.')],
+          [],
+          [nativeGlyphs('An unchanged \u00a5 label.')]
+        ]
+      })
+    })
+    const { source, coverage } = await extractPdfTranslationSource(fixture.context)
+    const warned = coverage.warnings.filter((warning) =>
+      warning.reasons.includes('unreliable-font-unicode')
+    )
+    expect(warned).toHaveLength(1)
+    expect(source.units.find((unit) => unit.id === warned[0].unitId)?.source).toBe(
+      'An unchanged \u00a5 label.'
+    )
+  })
+
+  it('preserves extraction when optional font diagnostics are unavailable', async () => {
+    const fixture = setup()
+    Object.assign(fixture.page, {
+      commonObjs: { has: () => true },
+      getOperatorList: vi.fn().mockRejectedValue(new Error('Unavailable operator metadata'))
+    })
+    const { source, coverage } = await extractPdfTranslationSource(fixture.context)
+    expect(source.units[0].source).toBe('An intact source paragraph.')
+    expect(coverage.excludedItemCount).toBe(0)
+    expect(coverage.warnings).toEqual([])
+  })
+
+  it('retains text and flags units using a painted CID with no Unicode mapping', async () => {
+    const fixture = setup([text('An unchanged \u00a5 label.')])
+    const font = { composite: true, toUnicode: { _map: { 65: 'A' } } }
+    Object.assign(fixture.page, {
+      commonObjs: { has: () => true, get: () => font },
+      getOperatorList: vi.fn().mockResolvedValue({
+        fnArray: [OPS.setFont, OPS.showText],
+        argsArray: [['body', 10], [nativeGlyphs('An unchanged \u00a5 label.')]]
+      })
+    })
+    const { source, coverage } = await extractPdfTranslationSource(fixture.context)
+    expect(source.units[0].source).toBe('An unchanged \u00a5 label.')
+    expect(source.units[0].sourceOnly).toBeUndefined()
+    expect(coverage.excludedItemCount).toBe(0)
+    expect(coverage.warnings).toContainEqual({
+      unitId: source.units[0].id,
+      reasons: ['unreliable-font-unicode']
+    })
+  })
+
   it('uses existing line regions when a merged caption box would enclose a neighboring column', async () => {
     const items = [
       { ...text('Table 1. Characteristics of trial participants', 40, 100), width: 480 },
@@ -103,6 +1023,71 @@ describe('extractPdfTranslationSource', () => {
         fixture.context.signal
       )
     ).toBeNull()
+  })
+  it.each([11, -37, 137])(
+    'retains a proved slanted native label independently at %s degrees',
+    async (angle) => {
+      const radians = (angle * Math.PI) / 180,
+        a = 10 * Math.cos(radians),
+        b = 10 * Math.sin(radians)
+      const items = [
+        text('Original prose.'),
+        { ...text('Graph label'), width: 40, transform: [a, b, -b, a, 300, 400] }
+      ]
+      const fixture = setup(items)
+      fixture.page.getTextContent.mockResolvedValue({
+        items,
+        styles: { body: { vertical: false, ascent: 0.8, descent: -0.2 } }
+      })
+      const { source, coverage } = await extractPdfTranslationSource(fixture.context)
+      expect(coverage).toMatchObject({ includedItemCount: 2, excludedItemCount: 0 })
+      expect(source.units[0].sourceOnly).toBeUndefined()
+      expect(source.units[1]).toMatchObject({
+        id: 'rot-p1-i1',
+        source: 'Graph label',
+        sourceOnly: true
+      })
+      expect(source.units[1].fragments[0].items).toEqual([{ index: 1, text: 'Graph label' }])
+      const r = source.units[1].fragments[0].rect
+      expect([r.x, r.y, r.width, r.height].every(Number.isFinite)).toBe(true)
+      expect(r.x + r.width).toBeLessThan(1)
+      expect(r.y + r.height).toBeLessThan(1)
+    }
+  )
+  it.each([
+    'missing-style',
+    'missing-ascent',
+    'missing-descent',
+    'unknown-vertical',
+    'vertical',
+    'shear',
+    'reflection',
+    'outside-page'
+  ])('does not recover a slanted label without complete navigation evidence: %s', async (fault) => {
+    const items = [{ ...text('Graph label'), width: 40, transform: [8, 6, -6, 8, 300, 400] }]
+    const fixture = setup(items),
+      style: { vertical?: boolean; ascent?: number; descent?: number } = {
+        vertical: false,
+        ascent: 0.8,
+        descent: -0.2
+      }
+    if (fault === 'missing-ascent') delete style.ascent
+    if (fault === 'missing-descent') delete style.descent
+    if (fault === 'unknown-vertical') delete style.vertical
+    if (fault === 'vertical') style.vertical = true
+    if (fault === 'shear') items[0].transform[2] = -5
+    if (fault === 'reflection') {
+      items[0].transform[2] = 6
+      items[0].transform[3] = -8
+    }
+    if (fault === 'outside-page') items[0].transform[4] = 599
+    fixture.page.getTextContent.mockResolvedValue({
+      items,
+      styles: fault === 'missing-style' ? {} : { body: style }
+    })
+    const { source, coverage } = await extractPdfTranslationSource(fixture.context)
+    expect(source.units).toHaveLength(0)
+    expect(coverage.excludedItemCount).toBe(1)
   })
   it('keeps individual table symbols with zero font metrics and does not merge rows', async () => {
     const fixture = setup(
@@ -448,7 +1433,7 @@ it('keeps the synthetic abstract intact after legacy multiplication decoding', a
 it('extracts the native clinical dose paragraph as one checked body region', async () => {
   const { source: expected, page: native } = readPdfTranslationCases<{
     source: string
-    page: import('./pdf-translation-layout').PdfLayoutPage
+    page: PdfLayoutPage
   }>('wrapped-dose-native-body.jsonl')[0]
   const fixture = setup()
   fixture.page.getViewport.mockReturnValue({
@@ -481,7 +1466,7 @@ it('extracts the native clinical dose paragraph as one checked body region', asy
 it.each(
   readPdfTranslationCases<{
     name: string
-    page: import('./pdf-translation-layout').PdfLayoutPage
+    page: PdfLayoutPage
   }>('observed-time-and-numeric-tail.jsonl')
 )('$name extracts one region without changing native ownership', async ({ page: native }) => {
   const fixture = setup()
@@ -512,7 +1497,7 @@ it.each(
 it('keeps the verified reference/model-script paragraph in one region, apart from its footnote', async () => {
   const { source: expected, page: native } = readPdfTranslationCases<{
     source: string
-    page: import('./pdf-translation-layout').PdfLayoutPage
+    page: PdfLayoutPage
   }>('reference-script-native-seam.jsonl')[0]
   const fixture = setup()
   fixture.page.getViewport.mockReturnValue({
@@ -544,7 +1529,7 @@ it('keeps the verified reference/model-script paragraph in one region, apart fro
 
 it('keeps short wrapped prose in separate physical rows outside its protected formula', async () => {
   const { page: native } = readPdfTranslationCases<{
-    page: import('./pdf-translation-layout').PdfLayoutPage
+    page: PdfLayoutPage
   }>('short-formula-prose-native.jsonl')[0]
   const fixture = setup()
   fixture.page.getViewport.mockReturnValue({

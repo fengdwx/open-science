@@ -1,15 +1,20 @@
+import { ApplicationStartup } from '@/components/ApplicationStartup'
 import { DesktopRuntimeRecovery } from '@/components/desktop-runtime-recovery'
+import { saveRuntimeDiagnostics } from '@/components/save-runtime-diagnostics'
 import './assets/main.css'
 
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import { ApplicationErrorBoundary } from '@/components/application-error-boundary'
-import { DatabaseStartupGate } from '@/components/database-startup-gate'
 import { installStreamdown } from '@/components/streamdown/install-streamdown'
 import { initI18n, prepareI18nLocale } from '@/i18n'
 import { applyHtmlLang, resolveInitialLocale } from '@/lib/locale-preference'
-import { applyInterfaceScale, resolveInterfaceScale } from '@/lib/interface-scale'
+import {
+  applyInterfaceScale,
+  isDesktopRenderer,
+  resolveInterfaceScale
+} from '@/lib/interface-scale'
 import { applyTheme, resolveInitialTheme } from '@/lib/theme'
 import { startNetworkMonitor } from '@/stores/network-store'
 import { installRendererFailureDiagnostics } from './renderer-diagnostics'
@@ -18,6 +23,7 @@ import { useSettingsStore } from '@/stores/settings-store'
 import { startLocalePreferenceSync } from '@/stores/locale-store'
 import { useInterfaceScaleStore } from '@/stores/interface-scale-store'
 import { WindowsTitleBar } from '@/components/WindowsTitleBar'
+import { configureComposerDraftStorage } from '@/pages/workspace/composer-draft-storage'
 
 const rendererBootMark = 'open-science:renderer-boot-start'
 performance.mark(rendererBootMark)
@@ -51,6 +57,7 @@ window.addEventListener('drop', (event) => event.preventDefault())
 // Load only the selected language before mounting, retaining a translated first app paint.
 const initialLocale = resolveInitialLocale()
 const startRenderer = (): void => {
+  if (isDesktopRenderer()) configureComposerDraftStorage('desktop-profile', 'profile')
   initI18n(initialLocale)
   applyHtmlLang(initialLocale)
   startLocalePreferenceSync()
@@ -74,10 +81,10 @@ const startRenderer = (): void => {
     <StrictMode>
       <WindowsTitleBar>
         <ApplicationErrorBoundary>
-          <DatabaseStartupGate>
+          <ApplicationStartup>
             <App />
-            <DesktopRuntimeRecovery />
-          </DatabaseStartupGate>
+            <DesktopRuntimeRecovery saveDiagnostics={saveRuntimeDiagnostics} />
+          </ApplicationStartup>
         </ApplicationErrorBoundary>
       </WindowsTitleBar>
     </StrictMode>

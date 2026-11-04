@@ -49,6 +49,8 @@ import {
   flushSessionPersistence,
   loadPersistedSession,
   loadPersistedSessions,
+  resetSessionContentCacheForTests,
+  resetSessionPersistenceWriteFailuresForTests,
   retryPendingArtifactFinalization,
   saveSessionInOrder,
   type SessionPersistenceApi
@@ -187,6 +189,7 @@ const createApi = (overrides: Partial<SessionPersistenceApi> = {}): SessionPersi
 beforeEach(() => {
   useDesktopRuntimeRecoveryStore.setState({ phase: 'connected', epoch: 0, closing: false })
   resetSessionConversationIntentsForTests()
+  resetSessionContentCacheForTests()
   useWorkspaceOperationErrors.setState({ errors: {} })
   useSessionStore.setState(createInitialSessionState())
 })
@@ -602,6 +605,63 @@ describe('renderer session persistence bridge', () => {
       loadPersistedSession({ projectId: selected.projectId, sessionId: selected.id }, { loadAll })
     ).resolves.toEqual(selected)
     expect(loadAll).toHaveBeenCalledOnce()
+  })
+
+  it('bypasses cached content for an authoritative reload', async () => {
+    const cached = materializeSessionConversationGraph(
+      createPersistedSession({ revision: 2, title: 'Cached title' })
+    )
+    const fresh = materializeSessionConversationGraph({
+      ...cached,
+      revision: 3,
+      title: 'Fresh title'
+    })
+    useSessionStore.getState().hydrateSessions([cached])
+    const loadOne = vi.fn().mockResolvedValueOnce(cached).mockResolvedValueOnce(fresh)
+    const api = createApi({ loadOne })
+    const request = { projectId: cached.projectId, sessionId: cached.id }
+
+    await expect(loadPersistedSession(request, api)).resolves.toBe(cached)
+    await expect(loadPersistedSession(request, api)).resolves.toBe(cached)
+    expect(loadOne).toHaveBeenCalledOnce()
+    await expect(loadPersistedSession(request, api, { bypassCache: true })).resolves.toBe(fresh)
+    expect(loadOne).toHaveBeenCalledTimes(2)
+  })
+
+  it('hydrates a newer catalog revision instead of the retained content cache', async () => {
+    const cached = materializeSessionConversationGraph(
+      createPersistedSession({ revision: 2, title: 'Old' })
+    )
+    const fresh = materializeSessionConversationGraph({ ...cached, revision: 3, title: 'New' })
+    useSessionStore.getState().hydrateSessions([cached])
+    const loadOne = vi.fn().mockResolvedValueOnce(cached).mockResolvedValue(fresh)
+    const summary: SessionSummary = {
+      number: 1,
+      id: fresh.id,
+      projectId: fresh.projectId,
+      title: fresh.title,
+      status: 'idle',
+      presentedStatus: 'idle',
+      pinned: false,
+      revision: 3,
+      activeMessageCount: 0,
+      artifactCount: 0,
+      filesRevision: 0,
+      createdAt: fresh.createdAt,
+      updatedAt: fresh.updatedAt,
+      needsStartupRecovery: false
+    }
+    const api = createApi({
+      loadOne,
+      list: vi.fn().mockResolvedValue({
+        sessions: [summary],
+        manifest: { version: SESSION_MANIFEST_VERSION, lastSessionId: fresh.id }
+      })
+    })
+    await loadPersistedSession({ projectId: cached.projectId, sessionId: cached.id }, api)
+    await loadPersistedSessions(api, () => true, { sessionId: cached.id }, true)
+    expect(useSessionStore.getState().sessions[0]).toMatchObject({ revision: 3, title: 'New' })
+    expect(loadOne).toHaveBeenCalledTimes(2)
   })
 
   it('hydrates the store from the per-session load result', async () => {
@@ -5304,6 +5364,18 @@ describe('renderer session persistence bridge', () => {
     await expect(persistence.flush()).resolves.toBeUndefined()
   })
 
+  it('isolates session flush failures while retaining the global shutdown barrier', async () => {
+    const session = createPersistedSession()
+    const failure = new Error('Other Session write failed')
+    const persistence = createOrderedSessionPersistence(
+      createApi({ saveSession: vi.fn().mockRejectedValue(failure) })
+    )
+    await expect(persistence.saveSession(session)).rejects.toBe(failure)
+    await expect(persistence.flush('session:unrelated')).resolves.toBeUndefined()
+    await expect(persistence.flush(`session:${session.id}`)).rejects.toBe(failure)
+    await expect(persistence.flush()).rejects.toBe(failure)
+  })
+
   it('keeps an explicit save revision conflict unresolved until that Session saves successfully', async () => {
     const session = createPersistedSession({ revision: 1 })
     const conflict = new SessionRevisionConflictError(1, 2)
@@ -5321,6 +5393,12 @@ describe('renderer session persistence bridge', () => {
     })
     try {
       await expect(saveSessionInOrder(session)).rejects.toBe(conflict)
+      // The unresolved revision guard survives queue error cleanup and must retain its scope.
+      resetSessionPersistenceWriteFailuresForTests()
+      await expect(flushSessionPersistence('session:unrelated')).resolves.toBeUndefined()
+      await expect(flushSessionPersistence(`session:${session.id}`)).rejects.toMatchObject({
+        code: 'session-revision-conflict'
+      })
       await expect(flushSessionPersistence()).rejects.toMatchObject({
         code: 'session-revision-conflict'
       })

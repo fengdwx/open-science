@@ -1,3 +1,4 @@
+import { useLiteratureHost } from './renderer-host'
 import type { LiteratureChangedEvent } from '@aipoch/literature-library/contracts'
 import { useCallback, useLayoutEffect, useRef } from 'react'
 
@@ -9,6 +10,9 @@ export const isCollectionOnlyChange = (event?: LiteratureChangedEvent): boolean 
 export const useLiteratureChanges = (
   invalidate: (event?: LiteratureChangedEvent) => void
 ): ((collectionId: string) => void) => {
+  const host = useLiteratureHost()
+  const { api: hostApi } = host
+
   const consume = useRef<(collectionId: string) => void>(() => {})
   const consumePendingCollection = useCallback(
     (collectionId: string) => consume.current(collectionId),
@@ -64,11 +68,12 @@ export const useLiteratureChanges = (
     const visible = (): void => {
       if (document.visibilityState === 'visible') refresh()
     }
-    const remove = window.api?.literature?.onChanged?.(changed)
-    const removeProjectDeleted = window.api?.projects?.onDeleted?.(refresh)
-    const removeProjectCleanup = window.api?.projects?.onDeletionCleanupChanged?.(refresh)
+    const remove = hostApi?.literature?.onChanged?.(changed)
+    const removeProjectDeleted = hostApi?.projects?.onDeleted?.(refresh)
+    const removeProjectCleanup = hostApi?.projects?.onDeletionCleanupChanged?.(refresh)
     window.addEventListener('focus', refresh)
     document.addEventListener('visibilitychange', visible)
+    const removeRecovery = host.onRecovered(refresh)
     window.addEventListener('open-science:web-events-open', refresh)
     return () => {
       active = false
@@ -77,10 +82,11 @@ export const useLiteratureChanges = (
       remove?.()
       removeProjectDeleted?.()
       removeProjectCleanup?.()
+      removeRecovery()
       window.removeEventListener('focus', refresh)
       document.removeEventListener('visibilitychange', visible)
       window.removeEventListener('open-science:web-events-open', refresh)
     }
-  }, [])
+  }, [hostApi?.literature, hostApi?.projects, host])
   return consumePendingCollection
 }

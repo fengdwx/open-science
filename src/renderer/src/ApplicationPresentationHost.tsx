@@ -1,3 +1,4 @@
+import { RuntimeUpdateOutcomeNotice } from '@/components/runtime-update-outcome-notice'
 import { SideChatProvider } from './pages/workspace/use-side-chat-controller'
 import { WorkspaceComposerDraftsProvider } from './pages/workspace/workspace-composer-drafts'
 import { lazy, memo, Suspense, useCallback, useRef, useState } from 'react'
@@ -25,6 +26,7 @@ import { useApplicationStartup } from '@/hooks/useApplicationStartup'
 import { WorkspaceAgentRuntimeProvider } from '@/lib/acp/useWorkspaceAgentRuntime'
 import { WorkspaceComputeRecoveryBridge } from '@/lib/compute/WorkspaceComputeRecoveryBridge'
 import { HomePage } from '@/pages/home/HomePage'
+import { SharingMarketplacePage } from '@/pages/marketplace/SharingMarketplacePage'
 import type { SettingsPageHandle } from '@/pages/settings/SettingsPage'
 import { EnvStatusBanner } from '@/pages/workspace/EnvStatusBanner'
 import {
@@ -38,7 +40,7 @@ const WorkspacePage = lazy(() =>
   }))
 )
 const LiteratureLibraryPage = lazy(() =>
-  import('@/pages/literature/LiteratureLibraryPage').then(({ LiteratureLibraryPage }) => ({
+  import('@/pages/literature/public/page').then(({ LiteratureLibraryPage }) => ({
     default: LiteratureLibraryPage
   }))
 )
@@ -320,6 +322,8 @@ const ApplicationPresentationContent = ({
                     catalogRecovery={sessions.catalogRecovery}
                     onOpenGlobalSearch={events.globalSearch.open}
                   />
+                ) : events.navigation.view === 'marketplace' ? (
+                  <SharingMarketplacePage />
                 ) : events.navigation.view === 'library' ? (
                   <StableLiteratureLibraryPage />
                 ) : (
@@ -391,6 +395,7 @@ const ApplicationPresentationContent = ({
                     recovery={sessions.catalogRecovery}
                     onRetry={sessions.retryLoad}
                     onOpenRecoveryFolder={window.api.sessions.openRecoveryFolder}
+                    onDeleteRecoveryFile={window.api.sessions.deleteRecoveryFile}
                   />
                 ) : null}
                 <WorkspaceComputeRecoveryBridge enabled={sessions.isReady} />
@@ -442,6 +447,7 @@ const ApplicationPresentationContent = ({
           />
         )}
       </DeferredPresentationOwner>
+      <RuntimeUpdateOutcomeNotice />
       <DeferredPresentationOwner active={activePresentation === 'update'}>
         {(active) => <UpdateDialog active={active} />}
       </DeferredPresentationOwner>
