@@ -1,0 +1,298 @@
+{
+  "upstreamCommit": "4525352c7b9563345528c12b3e702be38e124509",
+  "forkBeforeMerge": "17b32d1047f9858babb70305a715735b37d32896",
+  "candidate": "The merge commit containing this report, with the unchanged production upstream baseline in an isolated worktree.",
+  "sourceVerification": {
+    "checkedAt": "2026-11-04T23:47:17.611112+08:00",
+    "catalogUrl": "https://statics.aipoch.com/open-science/usecases/manifest.json",
+    "catalogSha256": "c970051d4f78ebc83f2d9d202d60c97b4b553f88e1f2b3d167c0199da99cf97b",
+    "catalogCount": 136,
+    "cases": [
+      {
+        "id": "investment",
+        "slug": "10-000-nvidia-bitcoin-or-both",
+        "title": "$10,000: NVIDIA, BITCOIN, OR BOTH?",
+        "page": "https://aipoch.com/open-science/use-cases/10-000-nvidia-bitcoin-or-both",
+        "url": "https://statics.aipoch.com/open-science/usecases/10-000-nvidia-bitcoin-or-both/%2410%2C000%3A-NVIDIA%2C-BITCOIN%2C-OR-BOTH%3F.science",
+        "bytes": 653867,
+        "sha256": "b260f774af1190f7a4e5dee5495aa8cd55d180bf7a18781c7c5fae995a3fcf8d",
+        "downloadedAt": "2026-11-04T23:47:19.360653+08:00"
+      },
+      {
+        "id": "chirality",
+        "slug": "99-pure-does-molecular-handedness-matter",
+        "title": "99% Pure - Does Molecular Handedness Matter",
+        "page": "https://aipoch.com/open-science/use-cases/99-pure-does-molecular-handedness-matter",
+        "url": "https://statics.aipoch.com/open-science/usecases/99-pure-does-molecular-handedness-matter/99%25-Pure---Does-Molecular-Handedness-Matter.science",
+        "bytes": 725418,
+        "sha256": "32905d517617c013333224e29049e8b7e4212d2061070c37c38a336561af84e9",
+        "downloadedAt": "2026-11-04T23:47:22.632694+08:00"
+      },
+      {
+        "id": "rainfall",
+        "slug": "a-city-s-100-year-rainfall-record",
+        "title": "A City's 100-Year Rainfall Record",
+        "page": "https://aipoch.com/open-science/use-cases/a-city-s-100-year-rainfall-record",
+        "url": "https://statics.aipoch.com/open-science/usecases/a-city-s-100-year-rainfall-record/A-City%27s-100-Year-Rainfall-Record.science",
+        "bytes": 8186696,
+        "sha256": "2817a64e416c0003d790c23c00745f0d4289d0acc48698213eb89f6b062eefc8",
+        "downloadedAt": "2026-11-04T23:47:26.612509+08:00"
+      }
+    ]
+  },
+  "previousSamples": "All three downloaded hashes equal the hashes recorded in 2026-10-14-session-storage-ten-turn-source-verification.json. No previous performance measurements are reused.",
+  "workload": {
+    "syntheticContinuation": true,
+    "replyBytes": 32768,
+    "inputBatches": 192,
+    "batchesPerFlush": 48,
+    "commitsPerCasePerVariant": 7,
+    "timedRepetitions": 1,
+    "scope": "Real RuntimeSessionOwner and SessionRepository, cloned identical seeds, current upstream JSON versus candidate JSONL. Initial JSONL fixture publication excluded from continuation bytes and timing. Both versions separately import and fork the downloaded archives. No model or archive Notebook, script or tool execution.",
+    "limits": "Coarse 24s virtual flush groups bound smoke-test disk writes; not production streaming cadence or an end-to-end latency benchmark. Session file counters exclude SQLite/index writes. OS counters below include measured command descendants."
+  },
+  "cases": [
+    {
+      "case": "investment",
+      "upstreamJson": {
+        "commits": 7,
+        "sessionFileBytesWritten": 2195315,
+        "ownerCommitMsSingleRun": 272.43379200000004,
+        "restoreMsSingleRun": 18.07704100000001,
+        "coldProcessContentVerified": true,
+        "businessSqlVerified": true,
+        "pageCount": 1,
+        "totalItems": 37,
+        "nativePagination": false,
+        "completeDigest": "6da3e1fbef4fc83b909f713040befe5ab7ce41402737ed7379bd5255ddccf001",
+        "sqliteDigest": "b74720a2eb427bd229604d8104204ee876d97015bb70080a2ebce5e3f84d8f9a",
+        "initializationBytesExcluded": 0
+      },
+      "candidateJsonl": {
+        "commits": 7,
+        "sessionFileBytesWritten": 285674,
+        "ownerCommitMsSingleRun": 186.14866600000028,
+        "restoreMsSingleRun": 25.505249999999933,
+        "coldProcessContentVerified": true,
+        "businessSqlVerified": true,
+        "pageCount": 1,
+        "totalItems": 37,
+        "nativePagination": true,
+        "completeDigest": "6da3e1fbef4fc83b909f713040befe5ab7ce41402737ed7379bd5255ddccf001",
+        "sqliteDigest": "b74720a2eb427bd229604d8104204ee876d97015bb70080a2ebce5e3f84d8f9a",
+        "initializationBytesExcluded": 448252
+      },
+      "canonicalAndBusinessSqlEqual": true,
+      "sessionFileWriteReduction": 0.8698710663389992
+    },
+    {
+      "case": "chirality",
+      "upstreamJson": {
+        "commits": 7,
+        "sessionFileBytesWritten": 1203471,
+        "ownerCommitMsSingleRun": 167.40741800000023,
+        "restoreMsSingleRun": 10.047667000000047,
+        "coldProcessContentVerified": true,
+        "businessSqlVerified": true,
+        "pageCount": 1,
+        "totalItems": 17,
+        "nativePagination": false,
+        "completeDigest": "ebbfa3a33459e3642f795c13cd84f757b3abcd0763f45f998d80ddd07497d64d",
+        "sqliteDigest": "20f3b342c13400fc0ee6017b39e6f6537b44f823276f934d599ef21cb80f238b",
+        "initializationBytesExcluded": 0
+      },
+      "candidateJsonl": {
+        "commits": 7,
+        "sessionFileBytesWritten": 242422,
+        "ownerCommitMsSingleRun": 131.00037299999985,
+        "restoreMsSingleRun": 12.937542000000008,
+        "coldProcessContentVerified": true,
+        "businessSqlVerified": true,
+        "pageCount": 1,
+        "totalItems": 17,
+        "nativePagination": true,
+        "completeDigest": "ebbfa3a33459e3642f795c13cd84f757b3abcd0763f45f998d80ddd07497d64d",
+        "sqliteDigest": "20f3b342c13400fc0ee6017b39e6f6537b44f823276f934d599ef21cb80f238b",
+        "initializationBytesExcluded": 283415
+      },
+      "canonicalAndBusinessSqlEqual": true,
+      "sessionFileWriteReduction": 0.7985643193728806
+    },
+    {
+      "case": "rainfall",
+      "upstreamJson": {
+        "commits": 7,
+        "sessionFileBytesWritten": 4487472,
+        "ownerCommitMsSingleRun": 329.2423339999991,
+        "restoreMsSingleRun": 25.727333999999928,
+        "coldProcessContentVerified": true,
+        "businessSqlVerified": true,
+        "pageCount": 3,
+        "totalItems": 161,
+        "nativePagination": false,
+        "completeDigest": "2e56b9a8d7bff2c073e3bf7ed747155d14df63722689efea073988df265bc89f",
+        "sqliteDigest": "74a71a874aa62bf81a40a44b249d8627080bc742188f4b16395351050c21a875",
+        "initializationBytesExcluded": 0
+      },
+      "candidateJsonl": {
+        "commits": 7,
+        "sessionFileBytesWritten": 252237,
+        "ownerCommitMsSingleRun": 259.31091699999934,
+        "restoreMsSingleRun": 32.97000000000003,
+        "coldProcessContentVerified": true,
+        "businessSqlVerified": true,
+        "pageCount": 3,
+        "totalItems": 161,
+        "nativePagination": true,
+        "completeDigest": "2e56b9a8d7bff2c073e3bf7ed747155d14df63722689efea073988df265bc89f",
+        "sqliteDigest": "74a71a874aa62bf81a40a44b249d8627080bc742188f4b16395351050c21a875",
+        "initializationBytesExcluded": 1099571
+      },
+      "canonicalAndBusinessSqlEqual": true,
+      "sessionFileWriteReduction": 0.9437908470515248
+    }
+  ],
+  "integrationUpstreamCommit": "495361a2b1103170a8240ef59d4b8ff93529c17f",
+  "lateUpstreamUpdate": "Windows process identity and installation occupancy update; no session persistence, reducer, paging, package, schema or benchmark helper source changed. Matched measurements used the explicitly pinned 4525352c7 baseline.",
+  "ioMeasurement": {
+    "method": "macOS proc_pid_rusage RUSAGE_INFO_V2 ri_diskio_byteswritten; maximum per PID/start identity sampled every 200 ms for each command and descendants.",
+    "limits": "Lower bound: short-lived processes and writes after the last sample may be missed. Includes failed validation attempts and measured builds. Excludes unmonitored dependency setup/downloads, Git operations, lint/typecheck and SSD firmware write amplification.",
+    "observedDiskBytesWrittenLowerBound": 15657738240,
+    "runs": [
+      {
+        "run": "architecture-final",
+        "startedAtUtc": "2026-11-04T16:05:36.678474+00:00",
+        "durationSeconds": 26.333013625,
+        "exitCode": 1,
+        "observedDiskBytesWrittenLowerBound": 13631488
+      },
+      {
+        "run": "architecture-fix",
+        "startedAtUtc": "2026-11-04T16:01:40.141299+00:00",
+        "durationSeconds": 34.809712874999995,
+        "exitCode": 1,
+        "observedDiskBytesWrittenLowerBound": 13631488
+      },
+      {
+        "run": "architecture",
+        "startedAtUtc": "2026-11-04T15:58:44.414455+00:00",
+        "durationSeconds": 42.839578083,
+        "exitCode": 1,
+        "observedDiskBytesWrittenLowerBound": 7540736
+      },
+      {
+        "run": "architecture-verified",
+        "startedAtUtc": "2026-11-04T16:07:00.341533+00:00",
+        "durationSeconds": 34.388776583,
+        "exitCode": 0,
+        "observedDiskBytesWrittenLowerBound": 7086080
+      },
+      {
+        "run": "build",
+        "startedAtUtc": "2026-11-04T15:52:35.839252+00:00",
+        "durationSeconds": 135.257215291,
+        "exitCode": 1,
+        "observedDiskBytesWrittenLowerBound": 13107200
+      },
+      {
+        "run": "build-resume",
+        "startedAtUtc": "2026-11-04T15:56:49.967971+00:00",
+        "durationSeconds": 36.790681417,
+        "exitCode": 0,
+        "observedDiskBytesWrittenLowerBound": 387944448
+      },
+      {
+        "run": "core",
+        "startedAtUtc": "2026-11-04T15:40:34.738596+00:00",
+        "durationSeconds": 2.2707523330000003,
+        "exitCode": 0,
+        "observedDiskBytesWrittenLowerBound": 11145216
+      },
+      {
+        "run": "database-fixes",
+        "startedAtUtc": "2026-11-04T15:52:07.646338+00:00",
+        "durationSeconds": 15.610419875,
+        "exitCode": 0,
+        "observedDiskBytesWrittenLowerBound": 268128256
+      },
+      {
+        "run": "database",
+        "startedAtUtc": "2026-11-04T15:46:15.186150+00:00",
+        "durationSeconds": 99.8291965,
+        "exitCode": 1,
+        "observedDiskBytesWrittenLowerBound": 3741413376
+      },
+      {
+        "run": "electron",
+        "startedAtUtc": "2026-11-04T15:57:46.607278+00:00",
+        "durationSeconds": 98.432566333,
+        "exitCode": 0,
+        "observedDiskBytesWrittenLowerBound": 246390784
+      },
+      {
+        "run": "fixes",
+        "startedAtUtc": "2026-11-04T15:44:09.999546+00:00",
+        "durationSeconds": 18.466457708,
+        "exitCode": 0,
+        "observedDiskBytesWrittenLowerBound": 93544448
+      },
+      {
+        "run": "integrations",
+        "startedAtUtc": "2026-11-04T15:45:58.631303+00:00",
+        "durationSeconds": 219.626418417,
+        "exitCode": 1,
+        "observedDiskBytesWrittenLowerBound": 5632708608
+      },
+      {
+        "run": "latest-upstream",
+        "startedAtUtc": "2026-11-04T16:08:51.620055+00:00",
+        "durationSeconds": 24.190000792000003,
+        "exitCode": 0,
+        "observedDiskBytesWrittenLowerBound": 14233600
+      },
+      {
+        "run": "official-small",
+        "startedAtUtc": "2026-11-04T15:54:05.525252+00:00",
+        "durationSeconds": 58.362044208,
+        "exitCode": 0,
+        "observedDiskBytesWrittenLowerBound": 1333379072
+      },
+      {
+        "run": "renderer",
+        "startedAtUtc": "2026-11-04T15:42:36.660728+00:00",
+        "durationSeconds": 14.609428166,
+        "exitCode": 1,
+        "observedDiskBytesWrittenLowerBound": 49176576
+      },
+      {
+        "run": "renderer-stores-fix",
+        "startedAtUtc": "2026-11-04T15:58:33.648395+00:00",
+        "durationSeconds": 3.463278291,
+        "exitCode": 0,
+        "observedDiskBytesWrittenLowerBound": 11296768
+      },
+      {
+        "run": "renderer-stores",
+        "startedAtUtc": "2026-11-04T15:57:47.749566+00:00",
+        "durationSeconds": 9.31470475,
+        "exitCode": 1,
+        "observedDiskBytesWrittenLowerBound": 18042880
+      },
+      {
+        "run": "storage",
+        "startedAtUtc": "2026-11-04T15:40:57.531414+00:00",
+        "durationSeconds": 170.25997725,
+        "exitCode": 1,
+        "observedDiskBytesWrittenLowerBound": 3795337216
+      }
+    ]
+  },
+  "validationCompletedAt": "2026-11-05T00:10:58.396909+08:00",
+  "latestUpstreamChecks": {
+    "filesPassed": 5,
+    "testsPassed": 140,
+    "testsSkipped": 8,
+    "nativeComponentsVerified": true,
+    "nodeSandboxRendererTypechecksPassed": true
+  }
+}
